@@ -9,6 +9,8 @@ import { getImportFreshness } from "@/lib/ingestion/freshness";
 import { getDonationOptions } from "@/lib/support/donations";
 import { formatCompactNumber, formatKm } from "@/lib/format";
 
+export const dynamic = "force-dynamic";
+
 export default async function Home() {
   const [data, freshness] = await Promise.all([getAwarenessDashboardData(), getImportFreshness()]);
   const trendSeries = data.monthlySeries.length > 1 ? data.monthlySeries : data.dailySeries;

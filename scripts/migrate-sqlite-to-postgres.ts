@@ -21,6 +21,7 @@ type MigrationOptions = {
   dryRun: boolean;
   batchSize: number;
   sqlitePath: string;
+  onlyTables: TableName[] | null;
 };
 
 const TABLES: TableName[] = [
@@ -34,6 +35,7 @@ const TABLES: TableName[] = [
 ];
 
 const DEFAULT_BATCH_SIZE = 5000;
+const NULL_BYTE = String.fromCharCode(0);
 const DATE_FIELDS: Record<TableName, string[]> = {
   Aircraft: ["createdAt", "updatedAt"],
   EmissionFactor: ["createdAt", "updatedAt"],
@@ -81,6 +83,7 @@ async function main() {
   console.log(`Target: DATABASE_URL`);
   console.log(`Mode: ${options.dryRun ? "dry-run" : "write"}`);
   console.log(`Batch size: ${options.batchSize.toLocaleString()}`);
+  console.log(`Tables: ${(options.onlyTables ?? TABLES).join(", ")}`);
 
   const sourceCounts = await getSourceCounts(options.sqlitePath);
   console.log("\nSource row counts");
@@ -92,31 +95,48 @@ async function main() {
 
   if (options.dryRun) {
     console.log("\nStarting verification scan");
-    await printVerification(options.sqlitePath, sourceCounts, beforeCounts);
+    await printVerification(options.sqlitePath, sourceCounts, beforeCounts, options.onlyTables ?? TABLES);
     console.log("\nDry-run complete. No rows were written.");
     return;
   }
 
-  const aircraftIdMap = await migrateAircraft(options, sourceCounts.Aircraft);
-  await migrateGeneric("EmissionFactor", options, sourceCounts.EmissionFactor);
-  await migrateFlights(options, sourceCounts.Flight, aircraftIdMap);
-  await migrateGeneric("ImportLog", options, sourceCounts.ImportLog);
-  await migrateGeneric("IngestionCursor", options, sourceCounts.IngestionCursor);
-  await migrateGeneric("ProcessedArchiveDate", options, sourceCounts.ProcessedArchiveDate);
-  await migrateGeneric("AggregateRollup", options, sourceCounts.AggregateRollup);
+  const tablesToMigrate = options.onlyTables ?? TABLES;
+  const aircraftIdMap = tablesToMigrate.includes("Aircraft")
+    ? await migrateAircraft(options, sourceCounts.Aircraft)
+    : tablesToMigrate.includes("Flight")
+      ? await buildAircraftIdMap(options)
+      : new Map<string, string>();
+
+  if (tablesToMigrate.includes("EmissionFactor")) await migrateGeneric("EmissionFactor", options, sourceCounts.EmissionFactor);
+  if (tablesToMigrate.includes("Flight")) await migrateFlights(options, sourceCounts.Flight, aircraftIdMap);
+  if (tablesToMigrate.includes("ImportLog")) await migrateGeneric("ImportLog", options, sourceCounts.ImportLog);
+  if (tablesToMigrate.includes("IngestionCursor")) await migrateGeneric("IngestionCursor", options, sourceCounts.IngestionCursor);
+  if (tablesToMigrate.includes("ProcessedArchiveDate")) await migrateGeneric("ProcessedArchiveDate", options, sourceCounts.ProcessedArchiveDate);
+  if (tablesToMigrate.includes("AggregateRollup")) await migrateGeneric("AggregateRollup", options, sourceCounts.AggregateRollup);
 
   const afterCounts = await getTargetCounts();
   console.log("\nTarget row counts after migration");
   printCounts(afterCounts);
-  await printVerification(options.sqlitePath, sourceCounts, afterCounts);
+  await printVerification(options.sqlitePath, sourceCounts, afterCounts, tablesToMigrate);
 }
 
 function parseOptions(args: string[]): MigrationOptions {
   return {
     dryRun: args.includes("--dry-run"),
     batchSize: parsePositiveInt(getFlagValue(args, "--batch-size"), DEFAULT_BATCH_SIZE),
-    sqlitePath: resolve(getFlagValue(args, "--sqlite") ?? "prisma/dev.db")
+    sqlitePath: resolve(getFlagValue(args, "--sqlite") ?? "prisma/dev.db"),
+    onlyTables: parseOnlyTables(getFlagValue(args, "--only"))
   };
+}
+
+function parseOnlyTables(value: string | undefined): TableName[] | null {
+  if (!value) return null;
+  const requested = value.split(",").map((table) => table.trim()).filter(Boolean);
+  const invalid = requested.filter((table) => !TABLES.includes(table as TableName));
+  if (invalid.length) {
+    throw new Error(`Unknown table(s) for --only: ${invalid.join(", ")}. Valid values: ${TABLES.join(", ")}`);
+  }
+  return requested as TableName[];
 }
 
 function getFlagValue(args: string[], flag: string) {
@@ -186,6 +206,37 @@ async function migrateAircraft(options: MigrationOptions, total: number) {
   return sourceToTargetId;
 }
 
+async function buildAircraftIdMap(options: MigrationOptions) {
+  console.log("\nResolving Aircraft ID map");
+  const sourceToTargetId = new Map<string, string>();
+  const sourceCounts = await getSourceCounts(options.sqlitePath);
+  let processed = 0;
+
+  for await (const batch of streamSqliteBatches(options.sqlitePath, "Aircraft", options.batchSize)) {
+    const rows = normalizeRows("Aircraft", batch);
+    const existing = await prisma.aircraft.findMany({
+      where: {
+        icaoHex: {
+          in: rows.map((row) => String(row.icaoHex))
+        }
+      },
+      select: {
+        id: true,
+        icaoHex: true
+      }
+    });
+    const targetByHex = new Map(existing.map((aircraft) => [aircraft.icaoHex, aircraft.id]));
+    for (const row of rows) {
+      const targetId = targetByHex.get(String(row.icaoHex));
+      if (targetId) sourceToTargetId.set(String(row.id), targetId);
+    }
+    processed += rows.length;
+    logProgress("Aircraft", processed, sourceCounts.Aircraft);
+  }
+
+  return sourceToTargetId;
+}
+
 async function migrateFlights(options: MigrationOptions, total: number, aircraftIdMap: Map<string, string>) {
   console.log("\nMigrating Flight");
   let processed = 0;
@@ -236,8 +287,14 @@ function getDelegate(table: Exclude<TableName, "Aircraft" | "Flight">) {
 }
 
 function normalizeRows(table: TableName, rows: JsonRow[]) {
-  return rows.map((row) => {
+  const sanitizedFields = new Map<string, number>();
+  const normalizedRows = rows.map((row) => {
     const normalized: JsonRow = { ...row };
+    for (const [field, value] of Object.entries(normalized)) {
+      if (typeof value === "string") {
+        normalized[field] = sanitizeString(table, field, value, sanitizedFields);
+      }
+    }
     for (const field of DATE_FIELDS[table]) {
       normalized[field] = normalizeDateValue(normalized[field]);
     }
@@ -248,6 +305,22 @@ function normalizeRows(table: TableName, rows: JsonRow[]) {
     }
     return normalized;
   });
+  logSanitization(table, sanitizedFields);
+  return normalizedRows;
+}
+
+function sanitizeString(table: TableName, field: string, value: string, stats: Map<string, number>) {
+  if (!value.includes(NULL_BYTE)) return value;
+  stats.set(field, (stats.get(field) ?? 0) + 1);
+  return value.replaceAll(NULL_BYTE, "");
+}
+
+function logSanitization(table: TableName, stats: Map<string, number>) {
+  if (!stats.size) return;
+  const total = [...stats.values()].reduce((sum, count) => sum + count, 0);
+  const fields = [...stats.entries()].map(([field, count]) => `${field}: ${count}`).join(", ");
+  console.log(`Sanitized ${total.toLocaleString()} null-byte string value(s) in ${table} (${fields}).`);
+  stats.clear();
 }
 
 function normalizeDateValue(value: unknown) {
@@ -338,84 +411,103 @@ async function querySqlite(sqlitePath: string, sql: string) {
   return JSON.parse(stdout || "[]");
 }
 
-async function printVerification(sqlitePath: string, sourceCounts: Record<TableName, number>, targetCounts: Record<TableName, number>) {
+async function printVerification(
+  sqlitePath: string,
+  sourceCounts: Record<TableName, number>,
+  targetCounts: Record<TableName, number>,
+  tables: TableName[]
+) {
   console.log("Checking duplicate groups and missing logical records...");
-  const sourceDuplicates = await getSourceDuplicateCounts(sqlitePath);
+  const sourceDuplicates = await getSourceDuplicateCounts(sqlitePath, tables);
   console.log("Source duplicate groups checked.");
-  const targetDuplicates = await getTargetDuplicateCounts();
+  const targetDuplicates = await getTargetDuplicateCounts(tables);
   console.log("Target duplicate groups checked.");
-  const missingRows = await getMissingRows(sqlitePath);
+  const missingRows = await getMissingRows(sqlitePath, tables);
   console.log("Missing logical records checked.");
 
   console.log("\nVerification");
   console.log("Table                  Source        Target        Missing       Source duplicate groups   Target duplicate groups");
-  for (const table of TABLES) {
+  for (const table of tables) {
     console.log(
       `${table.padEnd(22)}${String(sourceCounts[table]).padStart(10)}  ${String(targetCounts[table]).padStart(12)}  ${String(missingRows[table]).padStart(12)}  ${String(sourceDuplicates[table]).padStart(23)}  ${String(targetDuplicates[table]).padStart(23)}`
     );
   }
 }
 
-async function getMissingRows(sqlitePath: string) {
+async function getMissingRows(sqlitePath: string, tables: TableName[]) {
   const missing = Object.fromEntries(TABLES.map((table) => [table, 0])) as Record<TableName, number>;
-  console.log("Checking missing Aircraft rows...");
-  missing.Aircraft = await countMissingKeys(sqlitePath, "Aircraft", ["icaoHex"], async (batch) => {
-    const existing = await prisma.aircraft.findMany({
-      where: { icaoHex: { in: batch.map((row) => String(row.icaoHex)) } },
-      select: { icaoHex: true }
+  if (tables.includes("Aircraft")) {
+    console.log("Checking missing Aircraft rows...");
+    missing.Aircraft = await countMissingKeys(sqlitePath, "Aircraft", ["icaoHex"], async (batch) => {
+      const existing = await prisma.aircraft.findMany({
+        where: { icaoHex: { in: batch.map((row) => String(row.icaoHex)) } },
+        select: { icaoHex: true }
+      });
+      return new Set(existing.map((row) => row.icaoHex));
     });
-    return new Set(existing.map((row) => row.icaoHex));
-  });
-  console.log("Checking missing EmissionFactor rows...");
-  missing.EmissionFactor = await countMissingKeys(sqlitePath, "EmissionFactor", ["aircraftType"], async (batch) => {
-    const existing = await prisma.emissionFactor.findMany({
-      where: { aircraftType: { in: batch.map((row) => String(row.aircraftType)) } },
-      select: { aircraftType: true }
+  }
+  if (tables.includes("EmissionFactor")) {
+    console.log("Checking missing EmissionFactor rows...");
+    missing.EmissionFactor = await countMissingKeys(sqlitePath, "EmissionFactor", ["aircraftType"], async (batch) => {
+      const existing = await prisma.emissionFactor.findMany({
+        where: { aircraftType: { in: batch.map((row) => String(row.aircraftType)) } },
+        select: { aircraftType: true }
+      });
+      return new Set(existing.map((row) => row.aircraftType));
     });
-    return new Set(existing.map((row) => row.aircraftType));
-  });
-  console.log("Checking missing Flight rows...");
-  missing.Flight = await countMissingFlights(sqlitePath);
-  console.log("Checking missing ImportLog rows...");
-  missing.ImportLog = await countMissingKeys(sqlitePath, "ImportLog", ["id"], async (batch) => {
-    const existing = await prisma.importLog.findMany({
-      where: { id: { in: batch.map((row) => String(row.id)) } },
-      select: { id: true }
+  }
+  if (tables.includes("Flight")) {
+    console.log("Checking missing Flight rows...");
+    missing.Flight = await countMissingFlights(sqlitePath);
+  }
+  if (tables.includes("ImportLog")) {
+    console.log("Checking missing ImportLog rows...");
+    missing.ImportLog = await countMissingKeys(sqlitePath, "ImportLog", ["id"], async (batch) => {
+      const existing = await prisma.importLog.findMany({
+        where: { id: { in: batch.map((row) => String(row.id)) } },
+        select: { id: true }
+      });
+      return new Set(existing.map((row) => row.id));
     });
-    return new Set(existing.map((row) => row.id));
-  });
-  console.log("Checking missing IngestionCursor rows...");
-  missing.IngestionCursor = await countMissingKeys(sqlitePath, "IngestionCursor", ["provider", "mode"], async (batch) => {
-    const conditions = batch.map((row) => ({ provider: String(row.provider), mode: String(row.mode) }));
-    const existing = await prisma.ingestionCursor.findMany({
-      where: { OR: conditions },
-      select: { provider: true, mode: true }
+  }
+  if (tables.includes("IngestionCursor")) {
+    console.log("Checking missing IngestionCursor rows...");
+    missing.IngestionCursor = await countMissingKeys(sqlitePath, "IngestionCursor", ["provider", "mode"], async (batch) => {
+      const conditions = batch.map((row) => ({ provider: String(row.provider), mode: String(row.mode) }));
+      const existing = await prisma.ingestionCursor.findMany({
+        where: { OR: conditions },
+        select: { provider: true, mode: true }
+      });
+      return new Set(existing.map((row) => `${row.provider}\u0000${row.mode}`));
     });
-    return new Set(existing.map((row) => `${row.provider}\u0000${row.mode}`));
-  });
-  console.log("Checking missing ProcessedArchiveDate rows...");
-  missing.ProcessedArchiveDate = await countMissingKeys(sqlitePath, "ProcessedArchiveDate", ["provider", "dateKey"], async (batch) => {
-    const conditions = batch.map((row) => ({ provider: String(row.provider), dateKey: String(row.dateKey) }));
-    const existing = await prisma.processedArchiveDate.findMany({
-      where: { OR: conditions },
-      select: { provider: true, dateKey: true }
+  }
+  if (tables.includes("ProcessedArchiveDate")) {
+    console.log("Checking missing ProcessedArchiveDate rows...");
+    missing.ProcessedArchiveDate = await countMissingKeys(sqlitePath, "ProcessedArchiveDate", ["provider", "dateKey"], async (batch) => {
+      const conditions = batch.map((row) => ({ provider: String(row.provider), dateKey: String(row.dateKey) }));
+      const existing = await prisma.processedArchiveDate.findMany({
+        where: { OR: conditions },
+        select: { provider: true, dateKey: true }
+      });
+      return new Set(existing.map((row) => `${row.provider}\u0000${row.dateKey}`));
     });
-    return new Set(existing.map((row) => `${row.provider}\u0000${row.dateKey}`));
-  });
-  console.log("Checking missing AggregateRollup rows...");
-  missing.AggregateRollup = await countMissingKeys(sqlitePath, "AggregateRollup", ["period", "group", "key", "periodStart"], async (batch) => {
-    const conditions = batch.map((row) => ({
-      period: String(row.period),
-      group: String(row.group),
-      key: String(row.key),
-      periodStart: normalizeDateValue(row.periodStart) as Date
-    }));
-    const existing = await prisma.aggregateRollup.findMany({
-      where: { OR: conditions },
-      select: { period: true, group: true, key: true, periodStart: true }
+  }
+  if (tables.includes("AggregateRollup")) {
+    console.log("Checking missing AggregateRollup rows...");
+    missing.AggregateRollup = await countMissingKeys(sqlitePath, "AggregateRollup", ["period", "group", "key", "periodStart"], async (batch) => {
+      const conditions = batch.map((row) => ({
+        period: String(row.period),
+        group: String(row.group),
+        key: String(row.key),
+        periodStart: normalizeDateValue(row.periodStart) as Date
+      }));
+      const existing = await prisma.aggregateRollup.findMany({
+        where: { OR: conditions },
+        select: { period: true, group: true, key: true, periodStart: true }
+      });
+      return new Set(existing.map((row) => `${row.period}\u0000${row.group}\u0000${row.key}\u0000${row.periodStart.getTime()}`));
     });
-    return new Set(existing.map((row) => `${row.period}\u0000${row.group}\u0000${row.key}\u0000${row.periodStart.getTime()}`));
-  });
+  }
   return missing;
 }
 
@@ -494,30 +586,50 @@ async function countMissingKeys(
   return missing;
 }
 
-async function getSourceDuplicateCounts(sqlitePath: string) {
-  const rows = await querySqlite(sqlitePath, `
-    SELECT 'Aircraft' AS tableName, COUNT(*) AS count FROM (SELECT 1 FROM "Aircraft" GROUP BY "icaoHex" HAVING COUNT(*) > 1)
-    UNION ALL SELECT 'EmissionFactor', COUNT(*) FROM (SELECT 1 FROM "EmissionFactor" GROUP BY "aircraftType" HAVING COUNT(*) > 1)
-    UNION ALL SELECT 'Flight', COUNT(*) FROM (SELECT 1 FROM "Flight" WHERE "sourceRecordId" IS NOT NULL GROUP BY "dataSource", "sourceRecordId" HAVING COUNT(*) > 1)
-    UNION ALL SELECT 'ImportLog', COUNT(*) FROM (SELECT 1 FROM "ImportLog" GROUP BY "id" HAVING COUNT(*) > 1)
-    UNION ALL SELECT 'IngestionCursor', COUNT(*) FROM (SELECT 1 FROM "IngestionCursor" GROUP BY "provider", "mode" HAVING COUNT(*) > 1)
-    UNION ALL SELECT 'ProcessedArchiveDate', COUNT(*) FROM (SELECT 1 FROM "ProcessedArchiveDate" GROUP BY "provider", "dateKey" HAVING COUNT(*) > 1)
-    UNION ALL SELECT 'AggregateRollup', COUNT(*) FROM (SELECT 1 FROM "AggregateRollup" GROUP BY "period", "group", "key", "periodStart" HAVING COUNT(*) > 1)
-  `);
-  return countsFromRows(rows);
+async function getSourceDuplicateCounts(sqlitePath: string, tables: TableName[]) {
+  const counts = Object.fromEntries(TABLES.map((table) => [table, 0])) as Record<TableName, number>;
+  for (const table of tables) {
+    const rows = await querySqlite(sqlitePath, getSourceDuplicateSql(table));
+    counts[table] = Number(rows[0]?.count ?? 0);
+  }
+  return counts;
 }
 
-async function getTargetDuplicateCounts() {
-  const rows = await prisma.$queryRawUnsafe<Array<{ tableName: string; count: bigint }>>(`
-    SELECT 'Aircraft' AS "tableName", COUNT(*) AS count FROM (SELECT 1 FROM "Aircraft" GROUP BY "icaoHex" HAVING COUNT(*) > 1) duplicates
-    UNION ALL SELECT 'EmissionFactor', COUNT(*) FROM (SELECT 1 FROM "EmissionFactor" GROUP BY "aircraftType" HAVING COUNT(*) > 1) duplicates
-    UNION ALL SELECT 'Flight', COUNT(*) FROM (SELECT 1 FROM "Flight" WHERE "sourceRecordId" IS NOT NULL GROUP BY "dataSource", "sourceRecordId" HAVING COUNT(*) > 1) duplicates
-    UNION ALL SELECT 'ImportLog', COUNT(*) FROM (SELECT 1 FROM "ImportLog" GROUP BY "id" HAVING COUNT(*) > 1) duplicates
-    UNION ALL SELECT 'IngestionCursor', COUNT(*) FROM (SELECT 1 FROM "IngestionCursor" GROUP BY "provider", "mode" HAVING COUNT(*) > 1) duplicates
-    UNION ALL SELECT 'ProcessedArchiveDate', COUNT(*) FROM (SELECT 1 FROM "ProcessedArchiveDate" GROUP BY "provider", "dateKey" HAVING COUNT(*) > 1) duplicates
-    UNION ALL SELECT 'AggregateRollup', COUNT(*) FROM (SELECT 1 FROM "AggregateRollup" GROUP BY "period", "group", "key", "periodStart" HAVING COUNT(*) > 1) duplicates
-  `);
-  return countsFromRows(rows.map((row) => ({ tableName: row.tableName, count: Number(row.count) })));
+function getSourceDuplicateSql(table: TableName) {
+  const groupBy = {
+    Aircraft: '"icaoHex"',
+    EmissionFactor: '"aircraftType"',
+    Flight: '"dataSource", "sourceRecordId"',
+    ImportLog: '"id"',
+    IngestionCursor: '"provider", "mode"',
+    ProcessedArchiveDate: '"provider", "dateKey"',
+    AggregateRollup: '"period", "group", "key", "periodStart"'
+  }[table];
+  const where = table === "Flight" ? 'WHERE "sourceRecordId" IS NOT NULL' : "";
+  return `SELECT '${table}' AS tableName, COUNT(*) AS count FROM (SELECT 1 FROM "${table}" ${where} GROUP BY ${groupBy} HAVING COUNT(*) > 1) duplicates`;
+}
+
+async function getTargetDuplicateCounts(tables: TableName[]) {
+  const counts = Object.fromEntries(TABLES.map((table) => [table, 0])) as Record<TableName, number>;
+  for (const table of tables) {
+    const rows = await prisma.$queryRawUnsafe<Array<{ count: bigint }>>(getTargetDuplicateSql(table));
+    counts[table] = Number(rows[0]?.count ?? 0);
+  }
+  return counts;
+}
+
+function getTargetDuplicateSql(table: TableName) {
+  const groupBy = {
+    Aircraft: '"icaoHex"',
+    EmissionFactor: '"aircraftType"',
+    Flight: '"dataSource", "sourceRecordId"',
+    ImportLog: '"id"',
+    IngestionCursor: '"provider", "mode"',
+    ProcessedArchiveDate: '"provider", "dateKey"',
+    AggregateRollup: '"period", "group", "key", "periodStart"'
+  }[table];
+  const where = table === "Flight" ? 'WHERE "sourceRecordId" IS NOT NULL' : "";
+  return `SELECT COUNT(*) AS count FROM (SELECT 1 FROM "${table}" ${where} GROUP BY ${groupBy} HAVING COUNT(*) > 1) duplicates`;
 }
 
 function printCounts(counts: Record<TableName, number>) {
