@@ -1,0 +1,122 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Aircraft {
+  id                   String   @id @default(cuid())
+  icaoHex              String   @unique
+  registration         String?
+  aircraftType         String
+  verifiedPublicEntity String?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+  flights              Flight[]
+
+  @@index([registration])
+  @@index([verifiedPublicEntity])
+}
+
+model Flight {
+  id                String             @id @default(cuid())
+  aircraftId        String
+  originAirport     String
+  destinationAirport String
+  departureAt       DateTime
+  arrivalAt         DateTime?
+  distanceKm        Decimal
+  estimatedCo2Kg    Decimal
+  dataSource        String
+  sourceRecordId    String?
+  sourceAttribution String
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+  aircraft          Aircraft           @relation(fields: [aircraftId], references: [id], onDelete: Cascade)
+
+  @@index([departureAt])
+  @@index([dataSource])
+  @@index([aircraftId, departureAt])
+  @@unique([dataSource, sourceRecordId])
+}
+
+model EmissionFactor {
+  id          String   @id @default(cuid())
+  aircraftType String   @unique
+  kgCo2PerKm  Decimal
+  basis       String   @default("kg_co2_per_km")
+  notes       String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model ImportLog {
+  id                String   @id @default(cuid())
+  provider          String
+  mode              String?
+  timestamp         DateTime @default(now())
+  runStartedAt      DateTime?
+  runEndedAt        DateTime?
+  status            String
+  recordsFetched    Int      @default(0)
+  recordsConsidered Int      @default(0)
+  recordsImported   Int      @default(0)
+  errors            String?
+
+  @@index([provider, mode, timestamp])
+}
+
+model IngestionCursor {
+  id                      String   @id @default(cuid())
+  provider                String
+  mode                    String
+  lastImportedAt          DateTime?
+  lastSuccessfulImportAt  DateTime?
+  lastRunAt               DateTime?
+  lastStatus              String?
+  lastError               String?
+  recordsImported         Int      @default(0)
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
+
+  @@unique([provider, mode])
+  @@index([provider, mode, lastSuccessfulImportAt])
+}
+
+model ProcessedArchiveDate {
+  id                  String   @id @default(cuid())
+  provider            String
+  dateKey             String
+  status              String
+  releaseTag          String?
+  assetNames          String?
+  filesScanned        Int      @default(0)
+  filesMatched        Int      @default(0)
+  recordsParsed       Int      @default(0)
+  privateJetMatches   Int      @default(0)
+  recordsImported     Int      @default(0)
+  error               String?
+  processedAt         DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  @@unique([provider, dateKey])
+  @@index([provider, status])
+}
+
+model AggregateRollup {
+  id              String          @id @default(cuid())
+  period          String
+  group           String
+  key             String          @default("ALL")
+  periodStart     DateTime
+  flights         Int             @default(0)
+  distanceKm      Decimal
+  estimatedCo2Kg  Decimal
+  updatedAt       DateTime        @updatedAt
+
+  @@unique([period, group, key, periodStart])
+  @@index([period, group, periodStart])
+}

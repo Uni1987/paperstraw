@@ -1,0 +1,31 @@
+# Environment files
+.env
+.env.local
+.env.production
+.env.*
+
+# SQLite databases
+*.db
+*.sqlite
+*.sqlite3
+
+# Backups
+backups/
+*.bak
+
+# Node artifacts
+node_modules/
+.next/
+out/
+dist/
+*.tsbuildinfo
+
+# Logs
+*.log
+
+# Vercel
+.vercel/
+
+# OS/editor files
+.DS_Store
+Thumbs.db
