@@ -12,120 +12,39 @@ import {
 } from "./rollupConstants";
 import type { AggregateFlight, AwarenessDashboardData, AwarenessRankPoint, AwarenessSeriesPoint } from "./types";
 
-type FlightPeriodSummary = {
-  flights: number;
-  distanceKm: number;
-  estimatedCo2Kg: number;
-};
-
 export async function getAwarenessDashboardData(now = new Date()): Promise<AwarenessDashboardData> {
   try {
     const yearStart = new Date(now.getFullYear(), 0, 1);
     const nextYearStart = new Date(now.getFullYear() + 1, 0, 1);
-    const todayStart = startOfDay(now);
-    const tomorrowStart = new Date(todayStart);
-    tomorrowStart.setDate(todayStart.getDate() + 1);
+    const rollupWindowStart = new Date(yearStart);
+    rollupWindowStart.setDate(rollupWindowStart.getDate() - 1);
     const aggregateRollup = (prisma as unknown as { aggregateRollup?: { findMany: Function } }).aggregateRollup;
-    const [rollups, yearSummary, todaySummary] = await Promise.all([
-      aggregateRollup
-        ? (aggregateRollup.findMany({
+    const rollups = aggregateRollup
+      ? ((await aggregateRollup.findMany({
           where: {
             periodStart: {
-              gte: yearStart,
+              gte: rollupWindowStart,
               lt: nextYearStart
             }
           },
           orderBy: { periodStart: "asc" }
-        }) as Promise<StoredAggregateRollup[]>)
-        : Promise.resolve([]),
-      getFlightPeriodSummary(yearStart, nextYearStart),
-      getFlightPeriodSummary(todayStart, tomorrowStart)
-    ]);
-    const yearGlobalRollup = rollups.find(
-      (rollup) => rollup.period === AggregatePeriods.YEAR && rollup.group === AggregateGroups.GLOBAL
-    );
+        })) as StoredAggregateRollup[])
+      : [];
+    const yearGlobalRollup = findCurrentYearRollup(rollups, now);
     if (yearGlobalRollup && Number(yearGlobalRollup.flights) > 0) {
-      return applyFlightPeriodSummaries(buildAwarenessDashboardDataFromRollups(rollups, now), yearSummary, todaySummary);
+      return buildAwarenessDashboardDataFromRollups(rollups, now);
     }
 
-    const flights = await prisma.flight.findMany({
-      where: {
-        departureAt: {
-          gte: yearStart,
-          lt: nextYearStart
-        }
-      },
-      include: { aircraft: true },
-      orderBy: { departureAt: "asc" }
-    });
-
-    if (flights.length === 0) return getDemoAwarenessData();
-
-    return applyFlightPeriodSummaries(buildAwarenessDashboardData(
-      flights.map((flight) => ({
-        departureAt: flight.departureAt,
-        originAirport: flight.originAirport,
-        destinationAirport: flight.destinationAirport,
-        distanceKm: Number(flight.distanceKm),
-        estimatedCo2Kg: Number(flight.estimatedCo2Kg),
-        aircraftType: flight.aircraft.aircraftType
-      })),
-      now,
-      false
-    ), yearSummary, todaySummary);
+    return getDemoAwarenessData();
   } catch {
     return getDemoAwarenessData();
   }
 }
 
-async function getFlightPeriodSummary(start: Date, end: Date): Promise<FlightPeriodSummary> {
-  const summary = await prisma.flight.aggregate({
-    where: {
-      departureAt: {
-        gte: start,
-        lt: end
-      }
-    },
-    _count: {
-      _all: true
-    },
-    _sum: {
-      distanceKm: true,
-      estimatedCo2Kg: true
-    }
-  });
-
-  return {
-    flights: summary._count._all,
-    distanceKm: roundToTwo(Number(summary._sum.distanceKm ?? 0)),
-    estimatedCo2Kg: roundToTwo(Number(summary._sum.estimatedCo2Kg ?? 0))
-  };
-}
-
-export function applyFlightPeriodSummaries(
-  dashboard: AwarenessDashboardData,
-  yearSummary: FlightPeriodSummary,
-  todaySummary: FlightPeriodSummary
-): AwarenessDashboardData {
-  if (yearSummary.flights === 0) return dashboard;
-
-  return {
-    ...dashboard,
-    todayFlights: todaySummary.flights,
-    todayDistanceKm: todaySummary.distanceKm,
-    todayCo2Kg: todaySummary.estimatedCo2Kg,
-    yearFlights: yearSummary.flights,
-    yearDistanceKm: yearSummary.distanceKm,
-    yearCo2Kg: yearSummary.estimatedCo2Kg,
-    equivalents: calculateCo2Equivalents(yearSummary.estimatedCo2Kg)
-  };
-}
-
 export function buildAwarenessDashboardDataFromRollups(rollups: StoredAggregateRollup[], now = new Date()): AwarenessDashboardData {
   const today = startOfDay(now);
-  const yearStart = new Date(now.getFullYear(), 0, 1);
   const todayRollup = findRollup(rollups, AggregatePeriods.DAY, AggregateGroups.GLOBAL, "ALL", today);
-  const yearRollup = findRollup(rollups, AggregatePeriods.YEAR, AggregateGroups.GLOBAL, "ALL", yearStart);
+  const yearRollup = findCurrentYearRollup(rollups, now);
   const yearCo2Kg = Number(yearRollup?.estimatedCo2Kg ?? 0);
   const todayCo2Kg = Number(todayRollup?.estimatedCo2Kg ?? 0);
 
@@ -217,6 +136,25 @@ function findRollup(
       rollup.key === key &&
       rollup.periodStart.getTime() === periodStart.getTime()
   );
+}
+
+function findCurrentYearRollup(rollups: StoredAggregateRollup[], now: Date) {
+  const yearStart = new Date(now.getFullYear(), 0, 1);
+  const nextDay = new Date(yearStart);
+  nextDay.setDate(nextDay.getDate() + 1);
+  const previousDay = new Date(yearStart);
+  previousDay.setDate(previousDay.getDate() - 1);
+
+  return rollups
+    .filter(
+      (rollup) =>
+        rollup.period === AggregatePeriods.YEAR &&
+        rollup.group === AggregateGroups.GLOBAL &&
+        rollup.key === "ALL" &&
+        rollup.periodStart >= previousDay &&
+        rollup.periodStart < nextDay
+    )
+    .sort((left, right) => Number(right.estimatedCo2Kg) - Number(left.estimatedCo2Kg))[0];
 }
 
 function buildDailySeries(flights: AggregateFlight[], now: Date): AwarenessSeriesPoint[] {

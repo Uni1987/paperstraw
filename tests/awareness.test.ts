@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyFlightPeriodSummaries, buildAwarenessDashboardData, buildAwarenessDashboardDataFromRollups } from "@/lib/awareness/aggregates";
+import { buildAwarenessDashboardData, buildAwarenessDashboardDataFromRollups } from "@/lib/awareness/aggregates";
 import { buildRollupRows } from "@/lib/awareness/rollups";
 import { AggregateGroups, AggregatePeriods } from "@/lib/awareness/rollupConstants";
 import { calculateCo2Equivalents } from "@/lib/awareness/equivalents";
@@ -99,8 +99,17 @@ describe("stored aggregate rollups", () => {
     expect(rows.some((row) => row.group === AggregateGroups.AIRPORT)).toBe(true);
   });
 
-  it("lets direct flight summaries override stale yearly rollup totals for the homepage hero", () => {
-    const staleRollups = [
+  it("uses the strongest precomputed current-year rollup for the homepage hero", () => {
+    const rollups = [
+      {
+        period: AggregatePeriods.YEAR,
+        group: AggregateGroups.GLOBAL,
+        key: "ALL",
+        periodStart: new Date("2025-12-31T23:00:00.000Z"),
+        flights: 367787,
+        distanceKm: 1000000,
+        estimatedCo2Kg: 6223324000
+      },
       {
         period: AggregatePeriods.YEAR,
         group: AggregateGroups.GLOBAL,
@@ -112,16 +121,10 @@ describe("stored aggregate rollups", () => {
       }
     ];
 
-    const dashboard = buildAwarenessDashboardDataFromRollups(staleRollups, now);
-    const corrected = applyFlightPeriodSummaries(
-      dashboard,
-      { flights: 764629, distanceKm: 1000000, estimatedCo2Kg: 12941868000 },
-      { flights: 44, distanceKm: 1000, estimatedCo2Kg: 745000 }
-    );
+    const dashboard = buildAwarenessDashboardDataFromRollups(rollups, now);
 
-    expect(corrected.yearFlights).toBe(764629);
-    expect(corrected.yearCo2Kg).toBe(12941868000);
-    expect(corrected.todayCo2Kg).toBe(745000);
+    expect(dashboard.yearFlights).toBe(367787);
+    expect(dashboard.yearCo2Kg).toBe(6223324000);
   });
 });
 
