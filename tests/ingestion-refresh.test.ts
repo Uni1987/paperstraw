@@ -23,26 +23,24 @@ function record(sourceRecordId: string, departureAt: Date): NormalizedFlightReco
 
 describe("refresh interval configuration", () => {
   it("defaults and formats supported refresh intervals", () => {
-    expect(parseDataRefreshIntervalMinutes(undefined)).toBe(120);
+    expect(parseDataRefreshIntervalMinutes(undefined)).toBe(1440);
     expect(parseDataRefreshIntervalMinutes("30")).toBe(30);
-    expect(formatRefreshInterval(60)).toBe("Updated throughout the day");
-    expect(formatRefreshInterval(30)).toBe("Updated throughout the day");
+    expect(formatRefreshInterval(1440)).toBe("Updated throughout the day using scheduled and manual data imports.");
+    expect(formatRefreshInterval(30)).toBe("Updated throughout the day using scheduled and manual data imports.");
   });
 
   it("recognizes Vercel cron schedules and matches the default refresh interval", () => {
-    expect(getCronScheduleIntervalMinutes("0 * * * *")).toBe(60);
-    expect(getCronScheduleIntervalMinutes("0 */2 * * *")).toBe(120);
-    expect(getCronScheduleIntervalMinutes("*/30 * * * *")).toBe(30);
-    expect(formatCronScheduleLabel("0 */2 * * *")).toBe("Every 2 hours");
+    expect(getCronScheduleIntervalMinutes("0 1 * * *")).toBe(1440);
+    expect(formatCronScheduleLabel("0 1 * * *")).toBe("Daily");
     expect(
       getCronOperationalStatus({
-        DATA_REFRESH_INTERVAL_MINUTES: "120",
+        DATA_REFRESH_INTERVAL_MINUTES: "1440",
         CRON_SECRET: "not-default"
       } as unknown as NodeJS.ProcessEnv)
     ).toMatchObject({
       endpointPath: "/api/cron/ingest",
-      scheduleIntervalMinutes: 120,
-      scheduleLabel: "Every 2 hours",
+      scheduleIntervalMinutes: 1440,
+      scheduleLabel: "Daily",
       scheduleMatchesRefresh: true,
       cronSecretConfigured: true,
       cronSecretIsDefault: false
@@ -82,12 +80,12 @@ describe("freshness display logic", () => {
           errors: null
         }
       ],
-      60
+      1440
     );
 
     expect(freshness.latestUpdateFailed).toBe(false);
     expect(freshness.latestRecordsImported).toBe(3);
-    expect(freshness.nextExpectedUpdateAt?.toISOString()).toBe("2026-06-23T11:00:00.000Z");
+    expect(freshness.nextExpectedUpdateAt?.toISOString()).toBe("2026-06-24T10:00:00.000Z");
     expect(freshness.publicMessage).toContain("Last successful update:");
   });
 
@@ -121,7 +119,7 @@ describe("freshness display logic", () => {
           errors: null
         }
       ],
-      60
+      1440
     );
 
     expect(freshness.latestUpdateFailed).toBe(true);

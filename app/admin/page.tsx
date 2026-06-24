@@ -50,8 +50,9 @@ export default async function AdminPage({ searchParams }: AdminProps) {
           <div>
             <h2 className="text-lg font-semibold text-ink">Latest real-data import</h2>
             <p className="mt-3 text-sm leading-6 text-ink/65">
-              Runs the scheduled recent-data batch refresh, filters to private/business jet aircraft types, writes aggregate
-              rollups, and refreshes the public pages. Leave the URL blank to use ADSB.lol public aircraft-type snapshots.
+              Runs the same recent-data refresh manually, outside the automatic cron schedule. It filters to
+              private/business jet aircraft types, writes aggregate rollups, and refreshes the public pages. Leave the URL
+              blank to use ADSB.lol public aircraft-type snapshots.
             </p>
           </div>
           <form action={runDailyImportAction} className="grid gap-3">
@@ -74,12 +75,12 @@ export default async function AdminPage({ searchParams }: AdminProps) {
         <h2 className="text-lg font-semibold text-ink">Cron refresh status</h2>
         <p className="mt-2 text-sm leading-6 text-ink/65">
           Vercel Cron should call the protected endpoint on the schedule below. The endpoint runs the same recent-data
-          logic as <code>pnpm ingest:daily</code>.
+          logic as <code>pnpm ingest:daily</code>, while administrators can trigger additional manual refreshes when needed.
         </p>
         <div className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <QualityCard label="Cron endpoint" value={cronStatus.endpointPath} />
-          <QualityCard label="Vercel schedule" value={cronStatus.vercelSchedule} />
-          <QualityCard label="Schedule label" value={cronStatus.scheduleLabel} />
+          <QualityCard label="Cron schedule" value={cronStatus.vercelSchedule} />
+          <QualityCard label="Automatic refresh" value={cronStatus.scheduleLabel} />
           <QualityCard label="Secret configured" value={cronStatus.cronSecretConfigured ? "Yes" : "No"} />
         </div>
         <div className="mt-5 grid gap-4 lg:grid-cols-2">

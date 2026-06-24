@@ -49,7 +49,7 @@ export default async function DataPage() {
         <SectionIntro
           eyebrow="Freshness"
           title="Scheduled data refreshes"
-          description="Recent ingestion uses regular automated updates. It updates aggregate data without displaying live positions or tracking individual aircraft."
+          description="Updates occur through scheduled and manual refreshes. Aggregate data is updated without displaying live positions or tracking individual aircraft."
         />
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <HealthCard label="Last successful update" value={formatDateTime(report.freshness.lastSuccessfulUpdateAt)} />
@@ -58,7 +58,7 @@ export default async function DataPage() {
           <HealthCard label="Latest records imported" value={report.freshness.latestRecordsImported.toLocaleString()} />
         </div>
         <p className="mt-4 rounded-lg border border-white/10 bg-white/[0.035] px-4 py-3 text-sm leading-6 text-white/64">
-          Updated throughout the day using scheduled data imports. {report.freshness.publicMessage} Latest run fetched{" "}
+          Updates occur through scheduled and manual refreshes. {report.freshness.publicMessage} Latest run fetched{" "}
           {report.freshness.latestRecordsFetched.toLocaleString()} record(s) and considered{" "}
           {report.freshness.latestRecordsConsidered.toLocaleString()} newer record(s).
         </p>

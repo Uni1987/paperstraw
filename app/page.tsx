@@ -82,7 +82,7 @@ export default async function Home() {
               {data.isDemo ? "Demo data" : "Based on the latest imported flight data."}
             </span>
             <span className="rounded-full border border-white/12 bg-white/[0.04] px-4 py-2 text-sm text-white/72">
-              Updated throughout the day using scheduled data imports.
+              Updated throughout the day using scheduled and manual data imports.
             </span>
             <span className="rounded-full border border-white/12 bg-white/[0.04] px-4 py-2 text-sm text-white/72">
               {freshness.publicMessage}
