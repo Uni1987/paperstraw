@@ -56,7 +56,7 @@ export async function runDailyImportAction(formData: FormData) {
   } catch (error) {
     const message = error instanceof Error ? error.message : "Daily import failed";
     const hint = message.includes("DATABASE_URL") || message.includes("datasource")
-      ? `${message} Restart pnpm dev after changing .env. Expected SQLite DATABASE_URL is file:./dev.db.`
+      ? `${message} Restart pnpm dev after changing .env. Expected PostgreSQL DATABASE_URL is the pooled Neon connection string.`
       : message;
     targetUrl = `/admin?error=${encodeURIComponent(hint)}`;
   }

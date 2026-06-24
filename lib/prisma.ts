@@ -1,7 +1,7 @@
 import { PrismaClient } from "@prisma/client";
-import { ensureSqliteDatabaseUrl } from "@/lib/env/loadProjectEnv";
+import { loadProjectEnv } from "@/lib/env/loadProjectEnv";
 
-ensureSqliteDatabaseUrl();
+loadProjectEnv();
 
 const globalForPrisma = globalThis as unknown as {
   prisma?: PrismaClient;

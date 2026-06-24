@@ -38,21 +38,21 @@ export async function getImportFreshness(): Promise<ImportFreshness> {
   const intervalMinutes = getDataRefreshIntervalMinutes();
   const logs = await prisma.$queryRaw<ImportFreshnessLog[]>`
     SELECT
-      id,
-      provider,
-      mode,
-      timestamp,
-      runStartedAt,
-      runEndedAt,
-      status,
-      recordsFetched,
-      recordsConsidered,
-      recordsImported,
-      errors
-    FROM ImportLog
-    WHERE provider = ${ADSB_LOL_DATA_SOURCE}
-      AND (mode = ${IngestionModes.DAILY_API} OR mode IS NULL)
-    ORDER BY timestamp DESC
+      "id",
+      "provider",
+      "mode",
+      "timestamp",
+      "runStartedAt",
+      "runEndedAt",
+      "status",
+      "recordsFetched",
+      "recordsConsidered",
+      "recordsImported",
+      "errors"
+    FROM "ImportLog"
+    WHERE "provider" = ${ADSB_LOL_DATA_SOURCE}
+      AND ("mode" = ${IngestionModes.DAILY_API} OR "mode" IS NULL)
+    ORDER BY "timestamp" DESC
     LIMIT 25
   `;
 

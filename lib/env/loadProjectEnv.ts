@@ -24,18 +24,6 @@ export function loadProjectEnv(cwd = projectRoot, override = false) {
   }
 }
 
-export function ensureSqliteDatabaseUrl() {
-  loadProjectEnv(projectRoot, true);
-  const databaseUrl = process.env.DATABASE_URL;
-
-  if (!databaseUrl) return;
-  if (databaseUrl === "file:dev.db") {
-    process.env.DATABASE_URL = "file:./dev.db";
-    return;
-  }
-  if (databaseUrl.startsWith("file:")) return;
-}
-
 export function requireEnv(name: string) {
   if (!process.env[name]) {
     throw new Error(

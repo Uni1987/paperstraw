@@ -1,5 +1,3 @@
-import { stat } from "node:fs/promises";
-import { join } from "node:path";
 import { prisma } from "@/lib/prisma";
 import { getAwarenessDashboardData } from "@/lib/awareness/aggregates";
 import { getAttributionQualityReport, type AttributionQualityReport } from "@/lib/data/attributionQuality";
@@ -63,7 +61,7 @@ type FlightSummaryRow = {
 };
 
 export async function getDataReport(): Promise<DataReport> {
-  const [dashboard, flights, importLogs, archiveDates, databaseFileSize, freshness, attributionQuality] = await Promise.all([
+  const [dashboard, flights, importLogs, archiveDates, freshness, attributionQuality] = await Promise.all([
     getAwarenessDashboardData(),
     prisma.flight.findMany({
       select: {
@@ -80,7 +78,6 @@ export async function getDataReport(): Promise<DataReport> {
       }
     }),
     getHistoricalArchiveDates(),
-    getDatabaseFileSize(),
     getImportFreshness(),
     getAttributionQualityReport()
   ]);
@@ -106,7 +103,7 @@ export async function getDataReport(): Promise<DataReport> {
       { label: "Latest flight date", value: formatDateOnly(latestFlight), detail: "Imported records only" },
       { label: "Imported days", value: importedDayCount.toLocaleString(), detail: "Distinct dates with imported flights" },
       { label: "Import success rate", value: `${Math.round(importSuccessRate).toLocaleString()}%`, detail: `${successfulImports} of ${importLogs.length} import logs` },
-      { label: "Database file size", value: databaseFileSize, detail: "Local SQLite database when available" }
+      { label: "Database storage", value: "PostgreSQL", detail: "Designed for Neon-managed Postgres" }
     ],
     importHealth: {
       totalImports: importLogs.length,
@@ -139,22 +136,13 @@ async function getHistoricalArchiveDates() {
         releaseTag: string | null;
       }>
     >`
-      SELECT dateKey, status, recordsImported, filesScanned, filesMatched, releaseTag
-      FROM ProcessedArchiveDate
-      ORDER BY dateKey DESC
+      SELECT "dateKey", "status", "recordsImported", "filesScanned", "filesMatched", "releaseTag"
+      FROM "ProcessedArchiveDate"
+      ORDER BY "dateKey" DESC
       LIMIT 8
     `;
   } catch {
     return [];
-  }
-}
-
-async function getDatabaseFileSize() {
-  try {
-    const stats = await stat(join(process.cwd(), "prisma", "dev.db"));
-    return formatBytes(stats.size);
-  } catch {
-    return "Unavailable";
   }
 }
 
@@ -214,11 +202,4 @@ function formatCoverage(earliest: Date | null, latest: Date | null) {
 
 function formatTonnes(valueKg: number) {
   return `${Math.round(valueKg / 1000).toLocaleString()} tonnes CO2`;
-}
-
-function formatBytes(bytes: number) {
-  if (bytes >= 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
-  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  if (bytes >= 1024) return `${Math.round(bytes / 1024).toLocaleString()} KB`;
-  return `${bytes.toLocaleString()} B`;
 }

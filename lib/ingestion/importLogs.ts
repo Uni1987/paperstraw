@@ -18,18 +18,18 @@ export type DailyImportLogInput = {
 
 export async function createDailyImportLog(input: DailyImportLogInput) {
   await prisma.$executeRaw`
-    INSERT INTO ImportLog (
-      id,
-      provider,
-      mode,
-      timestamp,
-      runStartedAt,
-      runEndedAt,
-      status,
-      recordsFetched,
-      recordsConsidered,
-      recordsImported,
-      errors
+    INSERT INTO "ImportLog" (
+      "id",
+      "provider",
+      "mode",
+      "timestamp",
+      "runStartedAt",
+      "runEndedAt",
+      "status",
+      "recordsFetched",
+      "recordsConsidered",
+      "recordsImported",
+      "errors"
     )
     VALUES (
       ${randomUUID()},

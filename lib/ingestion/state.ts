@@ -80,8 +80,8 @@ type ArchiveDateUpdate = {
 
 export async function getIngestionCursor(provider: DataSourceProviderValue, mode: IngestionModeValue) {
   const rows = await prisma.$queryRaw<IngestionCursorRow[]>`
-    SELECT * FROM IngestionCursor
-    WHERE provider = ${provider} AND mode = ${mode}
+    SELECT * FROM "IngestionCursor"
+    WHERE "provider" = ${provider} AND "mode" = ${mode}
     LIMIT 1
   `;
   return rows[0] ?? null;
@@ -91,17 +91,17 @@ export async function updateIngestionCursor(update: CursorUpdate) {
   const now = new Date();
   const lastSuccessfulImportAt = update.status === ImportStatuses.SUCCESS ? now : null;
   await prisma.$executeRaw`
-    INSERT INTO IngestionCursor (
-      id,
-      provider,
-      mode,
-      lastImportedAt,
-      lastSuccessfulImportAt,
-      lastRunAt,
-      lastStatus,
-      lastError,
-      recordsImported,
-      updatedAt
+    INSERT INTO "IngestionCursor" (
+      "id",
+      "provider",
+      "mode",
+      "lastImportedAt",
+      "lastSuccessfulImportAt",
+      "lastRunAt",
+      "lastStatus",
+      "lastError",
+      "recordsImported",
+      "updatedAt"
     )
     VALUES (
       ${randomUUID()},
@@ -115,21 +115,21 @@ export async function updateIngestionCursor(update: CursorUpdate) {
       ${update.recordsImported},
       ${now}
     )
-    ON CONFLICT(provider, mode) DO UPDATE SET
-      lastImportedAt = COALESCE(excluded.lastImportedAt, IngestionCursor.lastImportedAt),
-      lastSuccessfulImportAt = COALESCE(excluded.lastSuccessfulImportAt, IngestionCursor.lastSuccessfulImportAt),
-      lastRunAt = excluded.lastRunAt,
-      lastStatus = excluded.lastStatus,
-      lastError = excluded.lastError,
-      recordsImported = excluded.recordsImported,
-      updatedAt = excluded.updatedAt
+    ON CONFLICT("provider", "mode") DO UPDATE SET
+      "lastImportedAt" = COALESCE(excluded."lastImportedAt", "IngestionCursor"."lastImportedAt"),
+      "lastSuccessfulImportAt" = COALESCE(excluded."lastSuccessfulImportAt", "IngestionCursor"."lastSuccessfulImportAt"),
+      "lastRunAt" = excluded."lastRunAt",
+      "lastStatus" = excluded."lastStatus",
+      "lastError" = excluded."lastError",
+      "recordsImported" = excluded."recordsImported",
+      "updatedAt" = excluded."updatedAt"
   `;
 }
 
 export async function getProcessedArchiveDate(provider: DataSourceProviderValue, dateKey: string) {
   const rows = await prisma.$queryRaw<ProcessedArchiveDateRow[]>`
-    SELECT * FROM ProcessedArchiveDate
-    WHERE provider = ${provider} AND dateKey = ${dateKey}
+    SELECT * FROM "ProcessedArchiveDate"
+    WHERE "provider" = ${provider} AND "dateKey" = ${dateKey}
     LIMIT 1
   `;
   return rows[0] ?? null;
@@ -139,21 +139,21 @@ export async function upsertProcessedArchiveDate(update: ArchiveDateUpdate) {
   const now = new Date();
   const assetNames = update.assetNames?.join(", ") ?? null;
   await prisma.$executeRaw`
-    INSERT INTO ProcessedArchiveDate (
-      id,
-      provider,
-      dateKey,
-      status,
-      releaseTag,
-      assetNames,
-      filesScanned,
-      filesMatched,
-      recordsParsed,
-      privateJetMatches,
-      recordsImported,
-      error,
-      processedAt,
-      updatedAt
+    INSERT INTO "ProcessedArchiveDate" (
+      "id",
+      "provider",
+      "dateKey",
+      "status",
+      "releaseTag",
+      "assetNames",
+      "filesScanned",
+      "filesMatched",
+      "recordsParsed",
+      "privateJetMatches",
+      "recordsImported",
+      "error",
+      "processedAt",
+      "updatedAt"
     )
     VALUES (
       ${randomUUID()},
@@ -171,27 +171,27 @@ export async function upsertProcessedArchiveDate(update: ArchiveDateUpdate) {
       ${now},
       ${now}
     )
-    ON CONFLICT(provider, dateKey) DO UPDATE SET
-      status = excluded.status,
-      releaseTag = COALESCE(excluded.releaseTag, ProcessedArchiveDate.releaseTag),
-      assetNames = COALESCE(excluded.assetNames, ProcessedArchiveDate.assetNames),
-      filesScanned = excluded.filesScanned,
-      filesMatched = excluded.filesMatched,
-      recordsParsed = excluded.recordsParsed,
-      privateJetMatches = excluded.privateJetMatches,
-      recordsImported = excluded.recordsImported,
-      error = excluded.error,
-      processedAt = excluded.processedAt,
-      updatedAt = excluded.updatedAt
+    ON CONFLICT("provider", "dateKey") DO UPDATE SET
+      "status" = excluded."status",
+      "releaseTag" = COALESCE(excluded."releaseTag", "ProcessedArchiveDate"."releaseTag"),
+      "assetNames" = COALESCE(excluded."assetNames", "ProcessedArchiveDate"."assetNames"),
+      "filesScanned" = excluded."filesScanned",
+      "filesMatched" = excluded."filesMatched",
+      "recordsParsed" = excluded."recordsParsed",
+      "privateJetMatches" = excluded."privateJetMatches",
+      "recordsImported" = excluded."recordsImported",
+      "error" = excluded."error",
+      "processedAt" = excluded."processedAt",
+      "updatedAt" = excluded."updatedAt"
   `;
 }
 
 export async function hasExistingHistoricalRecords(dateKey: string, provider: DataSourceProviderValue) {
   const rows = await prisma.$queryRaw<Array<{ count: bigint }>>`
     SELECT COUNT(*) as count
-    FROM Flight
-    WHERE dataSource = ${provider}
-      AND sourceRecordId LIKE ${`adsb-lol-history-${dateKey}%`}
+    FROM "Flight"
+    WHERE "dataSource" = ${provider}
+      AND "sourceRecordId" LIKE ${`adsb-lol-history-${dateKey}%`}
   `;
   return Number(rows[0]?.count ?? 0);
 }
@@ -199,18 +199,18 @@ export async function hasExistingHistoricalRecords(dateKey: string, provider: Da
 export async function getImportStatusSummary() {
   const [cursors, processedArchiveDates, recentImportLogs] = await Promise.all([
     prisma.$queryRaw<IngestionCursorRow[]>`
-      SELECT * FROM IngestionCursor
-      ORDER BY provider ASC, mode ASC
+      SELECT * FROM "IngestionCursor"
+      ORDER BY "provider" ASC, "mode" ASC
     `,
     prisma.$queryRaw<ProcessedArchiveDateRow[]>`
-      SELECT * FROM ProcessedArchiveDate
-      ORDER BY dateKey DESC
+      SELECT * FROM "ProcessedArchiveDate"
+      ORDER BY "dateKey" DESC
       LIMIT 10
     `,
     prisma.$queryRaw<ImportLogSummaryRow[]>`
-      SELECT id, provider, mode, timestamp, runStartedAt, runEndedAt, status, recordsFetched, recordsConsidered, recordsImported, errors
-      FROM ImportLog
-      ORDER BY timestamp DESC
+      SELECT "id", "provider", "mode", "timestamp", "runStartedAt", "runEndedAt", "status", "recordsFetched", "recordsConsidered", "recordsImported", "errors"
+      FROM "ImportLog"
+      ORDER BY "timestamp" DESC
       LIMIT 8
     `
   ]);

@@ -5,7 +5,7 @@ PaperStraw is an MVP CO₂ awareness dashboard for private jet flight activity. 
 ## Stack
 
 - Next.js with TypeScript
-- SQLite with Prisma
+- PostgreSQL with Prisma
 - Tailwind CSS
 - Recharts
 - Vitest for emissions calculation tests
@@ -56,7 +56,7 @@ flight tracking.
 The recent refresh job:
 
 - fetches recent aircraft-type API snapshots from ADSB.lol
-- reads the `ADSB_LOL / DAILY_API` cursor from the local SQLite database
+- reads the `ADSB_LOL / DAILY_API` cursor from the PostgreSQL database
 - only considers records newer than the last successful daily/recent import cursor
 - keeps only likely private/business jet aircraft types from the allowlist
 - normalizes records into `Aircraft` and `Flight`
@@ -101,7 +101,7 @@ The historical job:
 - keeps only aircraft types from the private/business jet allowlist
 - creates one aggregate aircraft-day record per matching aircraft for that date
 - skips duplicates using the unique `dataSource + sourceRecordId` key
-- writes imported flights into the local SQLite database at `prisma/dev.db`
+- writes imported flights into the configured PostgreSQL database
 - records archive date status, release tag, asset names, files scanned, files matched, records parsed, private jet matches, and records imported
 - recalculates daily, monthly, yearly, country, airport, and aircraft type rollups
 - prints progress for every date and continues when a date is unavailable
@@ -212,7 +212,7 @@ values are estimates derived from imported aggregate data.
 
 ## Local Setup
 
-PaperStraw now uses SQLite for local development and MVP deployment. No Docker or PostgreSQL server is required.
+PaperStraw uses PostgreSQL through Prisma. For local development and MVP deployment, create a Neon Postgres database and use its connection string as `DATABASE_URL`.
 
 1. Install dependencies:
 
@@ -232,25 +232,31 @@ PaperStraw now uses SQLite for local development and MVP deployment. No Docker o
    cp .env.example .env
    ```
 
-3. Run the SQLite migration:
+3. Add your Neon PostgreSQL connection string to `.env`:
+
+   ```bash
+   DATABASE_URL="postgresql://USER:PASSWORD@HOST.neon.tech/DB?sslmode=require"
+   ```
+
+4. Run the PostgreSQL migration:
 
    ```bash
    pnpm prisma migrate dev
    ```
 
-4. Optionally seed demo development data:
+5. Optionally seed demo development data:
 
    ```bash
    pnpm db:seed
    ```
 
-5. Optionally run the recent import:
+6. Optionally run the recent import:
 
    ```bash
    pnpm ingest:daily
    ```
 
-6. Start the app:
+7. Start the app:
 
    ```bash
    pnpm dev
@@ -259,7 +265,7 @@ PaperStraw now uses SQLite for local development and MVP deployment. No Docker o
 ## Environment Variables
 
 ```bash
-DATABASE_URL="file:./dev.db"
+DATABASE_URL="postgresql://USER:PASSWORD@HOST.neon.tech/DB?sslmode=require"
 ADMIN_USERNAME=""
 ADMIN_PASSWORD=""
 DATA_REFRESH_INTERVAL_MINUTES=60
@@ -279,13 +285,13 @@ ETHEREUM_ADDRESS=""
 On PowerShell, set one-off variables with `$env:`:
 
 ```powershell
-$env:DATABASE_URL="file:./dev.db"
+$env:DATABASE_URL="postgresql://USER:PASSWORD@HOST.neon.tech/DB?sslmode=require"
 $env:ADSB_LOL_DAILY_URL="https://example.com/adsb-lol-daily-export.json"
 ```
 
 Typing `ADSB_LOL_DAILY_URL` by itself runs it as a command; PowerShell environment variables use `$env:ADSB_LOL_DAILY_URL`.
 
-Prisma commands such as `pnpm prisma migrate dev` also require `DATABASE_URL`. For local development, use `DATABASE_URL="file:./dev.db"`. Prisma stores the SQLite database at `prisma/dev.db`.
+Prisma commands such as `pnpm prisma migrate dev` also require `DATABASE_URL`. Use the Neon PostgreSQL connection string from your Neon project dashboard.
 
 The minimal MVP run sequence is:
 
@@ -296,7 +302,55 @@ pnpm ingest:daily
 pnpm dev
 ```
 
-To backfill a small historical range into the same local SQLite database at `prisma/dev.db`, run:
+## Migrating To Neon PostgreSQL
+
+This migration prepares the schema for PostgreSQL only. Do not import historical or daily flight data until the migration has been applied and the app starts successfully.
+
+1. Create a Neon project and database.
+
+2. Copy the Neon PostgreSQL connection string. It should look like:
+
+   ```bash
+   postgresql://USER:PASSWORD@HOST.neon.tech/DB?sslmode=require
+   ```
+
+3. Set `DATABASE_URL` in `.env` locally and in your hosting provider:
+
+   ```bash
+   DATABASE_URL="postgresql://USER:PASSWORD@HOST.neon.tech/DB?sslmode=require"
+   ```
+
+4. Generate the Prisma client:
+
+   ```bash
+   pnpm db:generate
+   ```
+
+5. Apply migrations locally or to a development Neon branch:
+
+   ```bash
+   pnpm prisma migrate dev
+   ```
+
+6. For production deployment, apply the checked-in migrations:
+
+   ```bash
+   pnpm prisma migrate deploy
+   ```
+
+7. Start the app and confirm public pages load:
+
+   ```bash
+   pnpm dev
+   ```
+
+8. Only after the schema is confirmed, run ingestion when you are ready:
+
+   ```bash
+   pnpm ingest:daily
+   ```
+
+To backfill a small historical range into the same PostgreSQL database, run:
 
 ```bash
 pnpm ingest:historical --from 2026-01-01 --to 2026-01-07
@@ -406,7 +460,7 @@ Use these copy-pasteable commands from the project folder.
 Start the site locally:
 
 ```powershell
-$env:DATABASE_URL="file:./dev.db"
+$env:DATABASE_URL="postgresql://USER:PASSWORD@HOST.neon.tech/DB?sslmode=require"
 $env:ADMIN_USERNAME="admin"
 $env:ADMIN_PASSWORD="replace-this-password"
 $env:CRON_SECRET="replace-this-cron-secret"
@@ -450,7 +504,7 @@ Invoke-RestMethod `
 Verify a new `ImportLog` appeared:
 
 ```powershell
-$env:DATABASE_URL="file:./dev.db"
+$env:DATABASE_URL="postgresql://USER:PASSWORD@HOST.neon.tech/DB?sslmode=require"
 pnpm prisma studio
 ```
 
@@ -482,7 +536,7 @@ DATA_REFRESH_INTERVAL_MINUTES=60
 Required Vercel environment variables:
 
 ```bash
-DATABASE_URL="file:./dev.db"
+DATABASE_URL="postgresql://USER:PASSWORD@HOST.neon.tech/DB?sslmode=require"
 CRON_SECRET="use-a-long-random-token"
 DATA_REFRESH_INTERVAL_MINUTES=60
 ADMIN_USERNAME="admin"

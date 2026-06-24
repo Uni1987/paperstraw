@@ -32,7 +32,7 @@ export default async function DataPage() {
         <SectionIntro
           eyebrow="Dataset overview"
           title="What is currently in the local dataset"
-          description="These figures describe the imported aggregate flight records stored in the local SQLite database."
+          description="These figures describe the imported aggregate flight records stored in the configured PostgreSQL database."
         />
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           {report.summary.map((metric) => (
