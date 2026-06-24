@@ -42,8 +42,7 @@ export async function getAwarenessDashboardData(now = new Date()): Promise<Aware
 }
 
 export function buildAwarenessDashboardDataFromRollups(rollups: StoredAggregateRollup[], now = new Date()): AwarenessDashboardData {
-  const today = startOfDay(now);
-  const todayRollup = findRollup(rollups, AggregatePeriods.DAY, AggregateGroups.GLOBAL, "ALL", today);
+  const todayRollup = findCurrentDayRollup(rollups, now);
   const yearRollup = findCurrentYearRollup(rollups, now);
   const yearCo2Kg = Number(yearRollup?.estimatedCo2Kg ?? 0);
   const todayCo2Kg = Number(todayRollup?.estimatedCo2Kg ?? 0);
@@ -77,6 +76,25 @@ export function buildAwarenessDashboardDataFromRollups(rollups: StoredAggregateR
     topAirports: rollupsToRankPoints(rollups, AggregateGroups.AIRPORT),
     aircraftTypes: rollupsToRankPoints(rollups, AggregateGroups.AIRCRAFT_TYPE)
   };
+}
+
+function findCurrentDayRollup(rollups: StoredAggregateRollup[], now: Date) {
+  const dayStart = startOfDay(now);
+  const nextDay = new Date(dayStart);
+  nextDay.setDate(nextDay.getDate() + 1);
+  const timezoneToleranceStart = new Date(dayStart);
+  timezoneToleranceStart.setHours(timezoneToleranceStart.getHours() - 3);
+
+  return rollups
+    .filter(
+      (rollup) =>
+        rollup.period === AggregatePeriods.DAY &&
+        rollup.group === AggregateGroups.GLOBAL &&
+        rollup.key === "ALL" &&
+        rollup.periodStart >= timezoneToleranceStart &&
+        rollup.periodStart < nextDay
+    )
+    .sort((left, right) => Number(right.estimatedCo2Kg) - Number(left.estimatedCo2Kg))[0];
 }
 
 export function getDemoAwarenessData(): AwarenessDashboardData {

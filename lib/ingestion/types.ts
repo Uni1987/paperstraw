@@ -1,4 +1,5 @@
 import type { DataSourceProviderValue } from "./providerConstants";
+import type { AggregateFlight } from "@/lib/awareness/types";
 
 export type NormalizedFlightRecord = {
   icaoHex: string;
@@ -24,4 +25,5 @@ export type ImportResult = {
   imported: number;
   skipped: number;
   errors: string[];
+  importedFlights: AggregateFlight[];
 };

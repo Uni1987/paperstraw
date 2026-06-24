@@ -126,6 +126,36 @@ describe("stored aggregate rollups", () => {
     expect(dashboard.yearFlights).toBe(367787);
     expect(dashboard.yearCo2Kg).toBe(6223324000);
   });
+
+  it("finds today's precomputed rollup when it was written with a local-midnight timezone offset", () => {
+    const dashboard = buildAwarenessDashboardDataFromRollups(
+      [
+        {
+          period: AggregatePeriods.YEAR,
+          group: AggregateGroups.GLOBAL,
+          key: "ALL",
+          periodStart: new Date("2025-12-31T23:00:00.000Z"),
+          flights: 100,
+          distanceKm: 10000,
+          estimatedCo2Kg: 1000000
+        },
+        {
+          period: AggregatePeriods.DAY,
+          group: AggregateGroups.GLOBAL,
+          key: "ALL",
+          periodStart: new Date("2026-06-23T22:00:00.000Z"),
+          flights: 53,
+          distanceKm: 1234,
+          estimatedCo2Kg: 745000
+        }
+      ],
+      new Date("2026-06-24T12:00:00.000Z")
+    );
+
+    expect(dashboard.todayFlights).toBe(53);
+    expect(dashboard.todayDistanceKm).toBe(1234);
+    expect(dashboard.todayCo2Kg).toBe(745000);
+  });
 });
 
 describe("airport attribution", () => {

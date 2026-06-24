@@ -1,4 +1,4 @@
-import { recalculateAggregateRollups } from "@/lib/awareness/rollups";
+import { incrementAggregateRollupsForFlights } from "@/lib/awareness/rollups";
 import { AdsbLolClient } from "./adsbLol";
 import { createDailyImportLog } from "./importLogs";
 import { importFlights } from "./importer";
@@ -26,7 +26,7 @@ export async function runDailyIngestion() {
       writeImportLog: false
     });
     const latestImportedAt = maxDate([lastImportedAt, ...records.map((record) => record.departureAt)]);
-    const aggregateResult = await recalculateAggregateRollups();
+    const aggregateResult = await incrementAggregateRollupsForFlights(result.importedFlights);
     const status = result.errors.length === 0 ? ImportStatuses.SUCCESS : result.imported > 0 ? ImportStatuses.PARTIAL : ImportStatuses.FAILED;
     const runEndedAt = new Date();
 

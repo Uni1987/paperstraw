@@ -18,6 +18,7 @@ export async function importFlights(
   const errors: string[] = [];
   let imported = 0;
   let skipped = 0;
+  const importedFlights: ImportResult["importedFlights"] = [];
 
   for (const [index, record] of records.entries()) {
     try {
@@ -74,6 +75,14 @@ export async function importFlights(
       });
 
       imported += 1;
+      importedFlights.push({
+        departureAt: record.departureAt,
+        originAirport: record.originAirport.trim().toUpperCase(),
+        destinationAirport: record.destinationAirport.trim().toUpperCase(),
+        distanceKm: record.distanceKm,
+        estimatedCo2Kg,
+        aircraftType
+      });
     } catch (error) {
       errors.push(`Row ${index + 1}: ${error instanceof Error ? error.message : "Unknown import error"}`);
     }
@@ -92,7 +101,7 @@ export async function importFlights(
     });
   }
 
-  return { imported, skipped, errors };
+  return { imported, skipped, errors, importedFlights };
 }
 
 function validateNormalizedRecord(record: NormalizedFlightRecord) {

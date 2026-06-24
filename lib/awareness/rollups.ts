@@ -69,6 +69,49 @@ export async function recalculateAggregateRollups(now = new Date()) {
   return { rollups: rows.length };
 }
 
+export async function incrementAggregateRollupsForFlights(flights: AggregateFlight[], now = new Date()) {
+  const aggregateRollup = (prisma as unknown as { aggregateRollup?: { upsert: Function } }).aggregateRollup;
+  if (!aggregateRollup) {
+    throw new Error("Prisma client is missing AggregateRollup. Run migrations and pnpm db:generate before daily ingestion.");
+  }
+
+  const rows = buildRollupRows(flights, now).filter((row) => row.flights > 0);
+  for (const row of rows) {
+    await aggregateRollup.upsert({
+      where: {
+        period_group_key_periodStart: {
+          period: row.period,
+          group: row.group,
+          key: row.key,
+          periodStart: row.periodStart
+        }
+      },
+      update: {
+        flights: {
+          increment: row.flights
+        },
+        distanceKm: {
+          increment: row.distanceKm
+        },
+        estimatedCo2Kg: {
+          increment: row.estimatedCo2Kg
+        }
+      },
+      create: {
+        period: row.period,
+        group: row.group,
+        key: row.key,
+        periodStart: row.periodStart,
+        flights: row.flights,
+        distanceKm: row.distanceKm,
+        estimatedCo2Kg: row.estimatedCo2Kg
+      }
+    });
+  }
+
+  return { rollups: rows.length };
+}
+
 export function buildRollupRows(flights: AggregateFlight[], now = new Date()): RollupRow[] {
   const rows = [
     ...buildGlobalRollups(flights, AggregatePeriods.DAY),
