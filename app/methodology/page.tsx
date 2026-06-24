@@ -26,7 +26,7 @@ export default function MethodologyPage() {
           </MethodSection>
 
           <MethodSection title="Scheduled batch updates">
-            The app is designed around scheduled recent imports, typically every 30 or 60 minutes. The homepage reads stored
+            The app is designed around regular automated updates throughout the day. The homepage reads stored
             aggregate rollups from the latest import rather than live aircraft positions. This keeps the project lower cost,
             reliable, and focused on trends rather than real-time tracking.
           </MethodSection>

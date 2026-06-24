@@ -50,14 +50,14 @@ Run the incremental recent-data API refresh with:
 pnpm ingest:daily
 ```
 
-Despite the script name, this command is safe to run every 30-60 minutes. It is still a scheduled batch refresh, not live
+Despite the script name, this command is safe to run as a regular scheduled refresh. It is still a scheduled batch refresh, not live
 flight tracking.
 
 The recent refresh job:
 
 - fetches recent aircraft-type API snapshots from ADSB.lol
 - reads the `ADSB_LOL / DAILY_API` cursor from the PostgreSQL database
-- only considers records newer than the last successful daily/recent import cursor
+- only considers records newer than the last successful scheduled import cursor
 - keeps only likely private/business jet aircraft types from the allowlist
 - normalizes records into `Aircraft` and `Flight`
 - estimates distance from known airport metadata when needed
@@ -138,7 +138,7 @@ GLEX GLF4 GLF5 GLF6 GLF7 C25A C25B C25C C56X CL30 CL35 LJ45 F2TH F900 F2LX
 
 ### Scheduling Frequent Recent Imports
 
-Use whichever scheduler fits the deployment. The default interval is 60 minutes:
+Use whichever scheduler fits the deployment. The current hosted schedule is every 2 hours:
 
 ```bash
 pnpm ingest:daily
@@ -147,11 +147,11 @@ pnpm ingest:daily
 Recommended schedules:
 
 ```cron
-# Every 60 minutes
-0 * * * *
+# Every 2 hours
+0 */2 * * *
 
-# Every 30 minutes
-*/30 * * * *
+# Every hour, if you later want more frequent updates
+0 * * * *
 ```
 
 Vercel Cron can call the protected endpoint:
@@ -167,7 +167,7 @@ GitHub Actions can run the script on a schedule:
 name: PaperStraw recent ingest
 on:
   schedule:
-    - cron: "0 * * * *"
+    - cron: "0 */2 * * *"
 jobs:
   ingest:
     runs-on: ubuntu-latest
@@ -182,16 +182,16 @@ jobs:
       - run: pnpm ingest:daily
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          DATA_REFRESH_INTERVAL_MINUTES: "60"
+          DATA_REFRESH_INTERVAL_MINUTES: "120"
 ```
 
 Linux cron can run:
 
 ```cron
-0 * * * * cd /path/to/paperstraw && pnpm ingest:daily
+0 */2 * * * cd /path/to/paperstraw && pnpm ingest:daily
 ```
 
-Windows Task Scheduler can run `pnpm ingest:daily` every 30 or 60 minutes from the project folder. Make sure the task has
+Windows Task Scheduler can run `pnpm ingest:daily` on the same regular schedule from the project folder. Make sure the task has
 `DATABASE_URL` and provider variables available.
 
 ## Equivalent Values
@@ -268,7 +268,7 @@ PaperStraw uses PostgreSQL through Prisma. For local development and MVP deploym
 DATABASE_URL="postgresql://USER:PASSWORD@HOST.neon.tech/DB?sslmode=require"
 ADMIN_USERNAME=""
 ADMIN_PASSWORD=""
-DATA_REFRESH_INTERVAL_MINUTES=60
+DATA_REFRESH_INTERVAL_MINUTES=120
 CRON_SECRET="change-me"
 ADSB_LOL_DAILY_URL=""
 ADSB_EXCHANGE_API_KEY=""
@@ -357,14 +357,14 @@ pnpm ingest:historical --from 2026-01-01 --to 2026-01-07
 ```
 
 `pnpm ingest:daily` uses ADSB.lol public `/type/{aircraftType}` API snapshots for the configured private/business jet
-allowlist and advances the `ADSB_LOL / DAILY_API` cursor after a successful or partial run. It can run every 30-60 minutes
+allowlist and advances the `ADSB_LOL / DAILY_API` cursor after a successful or partial run. It can run on a regular schedule
 without rescanning historical archives. Historical archives are only scanned by `pnpm ingest:historical`.
 
 `ADMIN_USERNAME` and `ADMIN_PASSWORD` protect `/admin`, admin server actions, `/api/admin/*`, `/api/cron/*`, and `/api/ingest`.
 If either value is missing, protected routes return `401 Unauthorized`.
 
-`DATA_REFRESH_INTERVAL_MINUTES` controls how the app labels the refresh cadence and how ADSB.lol snapshot fallback records
-are bucketed. The default is `60`; `30` is also a recommended schedule. `CRON_SECRET` can also authorize `/api/cron/ingest`
+`DATA_REFRESH_INTERVAL_MINUTES` controls next-update calculations and how ADSB.lol snapshot fallback records
+are bucketed. The default is `120` to match the hosted every-2-hours cron schedule. `CRON_SECRET` can also authorize `/api/cron/ingest`
 for schedulers that send bearer tokens.
 
 `ADSB_EXCHANGE_RECENT_FLIGHTS_URL` is retained for the older ADS-B Exchange adapter, but `pnpm ingest:daily` uses ADSB.lol first.
@@ -443,8 +443,8 @@ The older generic endpoint remains available for local/manual provider testing, 
 curl -u "$ADMIN_USERNAME:$ADMIN_PASSWORD" "http://localhost:3000/api/ingest?provider=daily"
 ```
 
-`vercel.json` includes an hourly cron schedule for hosted deployments. To refresh every 30 minutes, change the schedule to
-`*/30 * * * *`.
+`vercel.json` includes an every-2-hours cron schedule for hosted deployments. To refresh every hour later, change the schedule to
+`0 * * * *`.
 
 Historical ingestion and recent ingestion are intentionally separate:
 
@@ -464,7 +464,7 @@ $env:DATABASE_URL="postgresql://USER:PASSWORD@HOST.neon.tech/DB?sslmode=require"
 $env:ADMIN_USERNAME="admin"
 $env:ADMIN_PASSWORD="replace-this-password"
 $env:CRON_SECRET="replace-this-cron-secret"
-$env:DATA_REFRESH_INTERVAL_MINUTES="60"
+$env:DATA_REFRESH_INTERVAL_MINUTES="120"
 pnpm dev
 ```
 
@@ -521,16 +521,16 @@ the Cron refresh status panel.
   "crons": [
     {
       "path": "/api/cron/ingest",
-      "schedule": "0 * * * *"
+      "schedule": "0 */2 * * *"
     }
   ]
 }
 ```
 
-That schedule means every 60 minutes. It matches the default:
+That schedule means every 2 hours. It matches the default:
 
 ```bash
-DATA_REFRESH_INTERVAL_MINUTES=60
+DATA_REFRESH_INTERVAL_MINUTES=120
 ```
 
 Required Vercel environment variables:
@@ -538,7 +538,7 @@ Required Vercel environment variables:
 ```bash
 DATABASE_URL="postgresql://USER:PASSWORD@HOST.neon.tech/DB?sslmode=require"
 CRON_SECRET="use-a-long-random-token"
-DATA_REFRESH_INTERVAL_MINUTES=60
+DATA_REFRESH_INTERVAL_MINUTES=120
 ADMIN_USERNAME="admin"
 ADMIN_PASSWORD="use-a-long-random-password"
 PAYPAL_URL="https://www.paypal.com/ncp/payment/8JHGP7DSZ28XW"
@@ -561,8 +561,8 @@ snapshot path. Use `GITHUB_TOKEN` for historical archive backfills if GitHub rat
 After deployment:
 
 - Open Vercel project settings and confirm the environment variables are set for Production.
-- Open the Vercel Cron page and confirm `/api/cron/ingest` is listed with schedule `0 * * * *`.
-- After the next hourly run, check Vercel function logs for `/api/cron/ingest`.
+- Open the Vercel Cron page and confirm `/api/cron/ingest` is listed with schedule `0 */2 * * *`.
+- After the next scheduled run, check Vercel function logs for `/api/cron/ingest`.
 - Open PaperStraw `/admin` with Basic Auth and check the Cron refresh status panel.
 - Confirm the latest `ImportLog` row has provider `ADSB_LOL`, mode `DAILY_API`, and a recent timestamp.
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { getCronOperationalStatus, getCronScheduleIntervalMinutes } from "@/lib/config/cron";
+import { formatCronScheduleLabel, getCronOperationalStatus, getCronScheduleIntervalMinutes } from "@/lib/config/cron";
 import { formatRefreshInterval, parseDataRefreshIntervalMinutes } from "@/lib/config/refresh";
 import { buildImportFreshness } from "@/lib/ingestion/freshness";
 import { isAuthorizedCronRequest } from "@/lib/ingestion/cronAuth";
@@ -23,23 +23,26 @@ function record(sourceRecordId: string, departureAt: Date): NormalizedFlightReco
 
 describe("refresh interval configuration", () => {
   it("defaults and formats supported refresh intervals", () => {
-    expect(parseDataRefreshIntervalMinutes(undefined)).toBe(60);
+    expect(parseDataRefreshIntervalMinutes(undefined)).toBe(120);
     expect(parseDataRefreshIntervalMinutes("30")).toBe(30);
-    expect(formatRefreshInterval(60)).toBe("Updated every 60 minutes");
-    expect(formatRefreshInterval(30)).toBe("Updated every 30 minutes");
+    expect(formatRefreshInterval(60)).toBe("Updated throughout the day");
+    expect(formatRefreshInterval(30)).toBe("Updated throughout the day");
   });
 
   it("recognizes Vercel cron schedules and matches the default refresh interval", () => {
     expect(getCronScheduleIntervalMinutes("0 * * * *")).toBe(60);
+    expect(getCronScheduleIntervalMinutes("0 */2 * * *")).toBe(120);
     expect(getCronScheduleIntervalMinutes("*/30 * * * *")).toBe(30);
+    expect(formatCronScheduleLabel("0 */2 * * *")).toBe("Every 2 hours");
     expect(
       getCronOperationalStatus({
-        DATA_REFRESH_INTERVAL_MINUTES: "60",
+        DATA_REFRESH_INTERVAL_MINUTES: "120",
         CRON_SECRET: "not-default"
       } as unknown as NodeJS.ProcessEnv)
     ).toMatchObject({
       endpointPath: "/api/cron/ingest",
-      scheduleIntervalMinutes: 60,
+      scheduleIntervalMinutes: 120,
+      scheduleLabel: "Every 2 hours",
       scheduleMatchesRefresh: true,
       cronSecretConfigured: true,
       cronSecretIsDefault: false

@@ -1,16 +1,30 @@
 import { getDataRefreshIntervalMinutes } from "./refresh";
 
 export const CRON_ENDPOINT_PATH = "/api/cron/ingest";
-export const VERCEL_CRON_SCHEDULE = "0 * * * *";
+export const VERCEL_CRON_SCHEDULE = "0 */2 * * *";
 
 export function getCronScheduleIntervalMinutes(schedule = VERCEL_CRON_SCHEDULE) {
   const normalized = schedule.trim().replace(/\s+/g, " ");
   if (normalized === "0 * * * *") return 60;
 
+  const everyHoursMatch = normalized.match(/^0 \*\/(\d+) \* \* \*$/);
+  if (everyHoursMatch) return Number(everyHoursMatch[1]) * 60;
+
   const everyMinutesMatch = normalized.match(/^\*\/(\d+) \* \* \* \*$/);
   if (everyMinutesMatch) return Number(everyMinutesMatch[1]);
 
   return null;
+}
+
+export function formatCronScheduleLabel(schedule = VERCEL_CRON_SCHEDULE) {
+  const minutes = getCronScheduleIntervalMinutes(schedule);
+  if (!minutes) return "Custom schedule";
+  if (minutes < 60) return `Every ${minutes} minutes`;
+  if (minutes % 60 === 0) {
+    const hours = minutes / 60;
+    return `Every ${hours} ${hours === 1 ? "hour" : "hours"}`;
+  }
+  return `Every ${minutes} minutes`;
 }
 
 export function getCronOperationalStatus(env: NodeJS.ProcessEnv = process.env) {
@@ -21,6 +35,7 @@ export function getCronOperationalStatus(env: NodeJS.ProcessEnv = process.env) {
   return {
     endpointPath: CRON_ENDPOINT_PATH,
     vercelSchedule: VERCEL_CRON_SCHEDULE,
+    scheduleLabel: formatCronScheduleLabel(),
     refreshIntervalMinutes,
     scheduleIntervalMinutes,
     scheduleMatchesRefresh: scheduleIntervalMinutes === refreshIntervalMinutes,

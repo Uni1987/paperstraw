@@ -41,14 +41,14 @@ export default async function AdminPage({ searchParams }: AdminProps) {
       {!cronStatus.scheduleMatchesRefresh ? (
         <StatusMessage
           type="warning"
-          message={`Vercel cron schedule is every ${cronStatus.scheduleIntervalMinutes ?? "unknown"} minutes, but DATA_REFRESH_INTERVAL_MINUTES is ${cronStatus.refreshIntervalMinutes}.`}
+          message={`Vercel cron schedule is ${cronStatus.scheduleLabel}, but DATA_REFRESH_INTERVAL_MINUTES is ${cronStatus.refreshIntervalMinutes} minutes.`}
         />
       ) : null}
 
       <section className="mt-8 rounded-lg border border-ink/10 bg-white p-6 shadow-soft">
         <div className="grid gap-6 lg:grid-cols-[0.8fr_1.2fr] lg:items-end">
           <div>
-            <h2 className="text-lg font-semibold text-ink">Daily real-data import</h2>
+            <h2 className="text-lg font-semibold text-ink">Latest real-data import</h2>
             <p className="mt-3 text-sm leading-6 text-ink/65">
               Runs the scheduled recent-data batch refresh, filters to private/business jet aircraft types, writes aggregate
               rollups, and refreshes the public pages. Leave the URL blank to use ADSB.lol public aircraft-type snapshots.
@@ -56,7 +56,7 @@ export default async function AdminPage({ searchParams }: AdminProps) {
           </div>
           <form action={runDailyImportAction} className="grid gap-3">
             <label className="text-sm font-semibold text-ink" htmlFor="adsbLolUrl">
-              ADSB.lol daily URL
+              ADSB.lol source URL
             </label>
             <input
               id="adsbLolUrl"
@@ -78,13 +78,13 @@ export default async function AdminPage({ searchParams }: AdminProps) {
         </p>
         <div className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <QualityCard label="Cron endpoint" value={cronStatus.endpointPath} />
-          <QualityCard label="Refresh interval" value={`${cronStatus.refreshIntervalMinutes} min`} />
           <QualityCard label="Vercel schedule" value={cronStatus.vercelSchedule} />
+          <QualityCard label="Schedule label" value={cronStatus.scheduleLabel} />
           <QualityCard label="Secret configured" value={cronStatus.cronSecretConfigured ? "Yes" : "No"} />
         </div>
         <div className="mt-5 grid gap-4 lg:grid-cols-2">
           <StatusPanel title="Latest scheduled refresh">
-            <StatusRow label="Last successful refresh" value={formatDateTime(freshness.lastSuccessfulUpdateAt)} detail="Most recent successful or partial daily/recent ingestion run." />
+            <StatusRow label="Last successful refresh" value={formatDateTime(freshness.lastSuccessfulUpdateAt)} detail="Most recent successful or partial scheduled ingestion run." />
             <StatusRow label="Latest refresh status" value={freshness.latestStatus ?? "n/a"} detail={`Latest run ended: ${formatDateTime(freshness.latestRunEndedAt)}`} />
             <StatusRow label="Records fetched" value={freshness.latestRecordsFetched.toLocaleString()} detail="Provider records returned before cursor filtering." />
             <StatusRow label="Records imported" value={freshness.latestRecordsImported.toLocaleString()} detail="New records written during the latest run." />
@@ -93,7 +93,7 @@ export default async function AdminPage({ searchParams }: AdminProps) {
             <StatusRow
               label="Schedule matches interval"
               value={cronStatus.scheduleMatchesRefresh ? "Yes" : "No"}
-              detail={`vercel.json is ${cronStatus.scheduleIntervalMinutes ?? "unknown"} minutes; DATA_REFRESH_INTERVAL_MINUTES is ${cronStatus.refreshIntervalMinutes}.`}
+              detail={`vercel.json is ${cronStatus.scheduleLabel}; DATA_REFRESH_INTERVAL_MINUTES is ${cronStatus.refreshIntervalMinutes} minutes.`}
             />
             <StatusRow
               label="CRON_SECRET safety"
@@ -109,7 +109,7 @@ export default async function AdminPage({ searchParams }: AdminProps) {
           <div>
             <h2 className="text-lg font-semibold text-ink">Import status</h2>
             <p className="mt-2 text-sm leading-6 text-ink/65">
-              Daily operation uses the ADSB.lol API cursor. Historical bootstrap dates are recorded so multi-GB archives are
+              Recent operation uses the ADSB.lol API cursor. Historical bootstrap dates are recorded so multi-GB archives are
               not scanned again after a successful import.
             </p>
           </div>

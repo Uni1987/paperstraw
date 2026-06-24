@@ -1,4 +1,4 @@
-export const DEFAULT_DATA_REFRESH_INTERVAL_MINUTES = 60;
+export const DEFAULT_DATA_REFRESH_INTERVAL_MINUTES = 120;
 
 export function getDataRefreshIntervalMinutes(env: NodeJS.ProcessEnv = process.env) {
   return parseDataRefreshIntervalMinutes(env["DATA_REFRESH_INTERVAL_MINUTES"]);
@@ -15,11 +15,5 @@ export function parseDataRefreshIntervalMinutes(value: string | number | null | 
 }
 
 export function formatRefreshInterval(minutes: number) {
-  if (minutes === 60) return "Updated every 60 minutes";
-  if (minutes < 60) return `Updated every ${minutes} minutes`;
-  if (minutes % 60 === 0) {
-    const hours = minutes / 60;
-    return `Updated every ${hours} ${hours === 1 ? "hour" : "hours"}`;
-  }
-  return `Updated every ${minutes} minutes`;
+  return "Updated throughout the day";
 }

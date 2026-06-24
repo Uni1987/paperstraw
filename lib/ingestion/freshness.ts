@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { getDataRefreshIntervalMinutes, formatRefreshInterval } from "@/lib/config/refresh";
+import { getCronScheduleIntervalMinutes } from "@/lib/config/cron";
 import { ImportStatuses } from "./importStatus";
 import { ADSB_LOL_DATA_SOURCE } from "./providerConstants";
 import { IngestionModes } from "./state";
@@ -35,7 +36,7 @@ export type ImportFreshness = {
 };
 
 export async function getImportFreshness(): Promise<ImportFreshness> {
-  const intervalMinutes = getDataRefreshIntervalMinutes();
+  const intervalMinutes = getCronScheduleIntervalMinutes() ?? getDataRefreshIntervalMinutes();
   const logs = await prisma.$queryRaw<ImportFreshnessLog[]>`
     SELECT
       "id",
@@ -109,7 +110,7 @@ export function buildFreshnessMessage({
     return `Last successful update: ${formatFreshnessDate(lastSuccessfulUpdateAt)}.`;
   }
 
-  return `${formatRefreshInterval(refreshIntervalMinutes)}. No successful update has run yet.`;
+  return "Scheduled data refreshes are configured. No successful update has run yet.";
 }
 
 export function formatFreshnessDate(date: Date | null) {

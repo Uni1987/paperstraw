@@ -54,7 +54,7 @@ export async function runDailyImportAction(formData: FormData) {
 
     targetUrl = `/admin?success=${encodeURIComponent(detail)}`;
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Daily import failed";
+    const message = error instanceof Error ? error.message : "Latest data refresh failed";
     const hint = message.includes("DATABASE_URL") || message.includes("datasource")
       ? `${message} Restart pnpm dev after changing .env. Expected PostgreSQL DATABASE_URL is the pooled Neon connection string.`
       : message;

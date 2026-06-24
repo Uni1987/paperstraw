@@ -48,18 +48,17 @@ export default async function DataPage() {
       <section className="mx-auto max-w-7xl px-4 pb-20 sm:px-6 lg:px-8">
         <SectionIntro
           eyebrow="Freshness"
-          title="Recent data refresh schedule"
-          description="Recent ingestion is a scheduled batch refresh. It updates aggregate data without displaying live positions or tracking individual aircraft."
+          title="Scheduled data refreshes"
+          description="Recent ingestion uses regular automated updates. It updates aggregate data without displaying live positions or tracking individual aircraft."
         />
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
-          <HealthCard label="Refresh interval" value={`${report.freshness.refreshIntervalMinutes} minutes`} />
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <HealthCard label="Last successful update" value={formatDateTime(report.freshness.lastSuccessfulUpdateAt)} />
-          <HealthCard label="Next expected update" value={formatDateTime(report.freshness.nextExpectedUpdateAt)} />
+          <HealthCard label="Next scheduled update" value={formatDateTime(report.freshness.nextExpectedUpdateAt)} />
           <HealthCard label="Latest import status" value={report.freshness.latestStatus?.toLowerCase() ?? "n/a"} />
           <HealthCard label="Latest records imported" value={report.freshness.latestRecordsImported.toLocaleString()} />
         </div>
         <p className="mt-4 rounded-lg border border-white/10 bg-white/[0.035] px-4 py-3 text-sm leading-6 text-white/64">
-          {report.freshness.refreshIntervalLabel}. {report.freshness.publicMessage} Latest run fetched{" "}
+          Updated throughout the day using scheduled data imports. {report.freshness.publicMessage} Latest run fetched{" "}
           {report.freshness.latestRecordsFetched.toLocaleString()} record(s) and considered{" "}
           {report.freshness.latestRecordsConsidered.toLocaleString()} newer record(s).
         </p>
@@ -172,7 +171,7 @@ export default async function DataPage() {
             </p>
             <p>
               Historical ingestion processes ADSB.lol archive dates and records import status so large archives do not
-              need to be rescanned repeatedly. Daily operation is designed for one scheduled batch import per day.
+              need to be rescanned repeatedly. Recent operation uses scheduled data refreshes for latest imported flight data.
             </p>
             <p>
               Aircraft are included by aircraft type allowlist for likely private or business jets. CO2 values are

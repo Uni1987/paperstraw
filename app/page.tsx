@@ -82,7 +82,7 @@ export default async function Home() {
               {data.isDemo ? "Demo data" : "Based on the latest imported flight data."}
             </span>
             <span className="rounded-full border border-white/12 bg-white/[0.04] px-4 py-2 text-sm text-white/72">
-              {freshness.refreshIntervalLabel}
+              Updated throughout the day using scheduled data imports.
             </span>
             <span className="rounded-full border border-white/12 bg-white/[0.04] px-4 py-2 text-sm text-white/72">
               {freshness.publicMessage}
@@ -183,7 +183,7 @@ export default async function Home() {
             <h2 className="mt-5 text-4xl font-semibold leading-tight tracking-normal sm:text-5xl">Transparent by default.</h2>
           </Reveal>
           <div className="grid gap-6 text-base leading-7 text-ink/72 sm:grid-cols-2">
-            <MethodPoint title="Data sources" text="ADSB.lol is the primary daily source, with OpenSky and CSV imports available for fallback and backfills." />
+            <MethodPoint title="Data sources" text="ADSB.lol is the primary scheduled source, with OpenSky and CSV imports available for fallback and backfills." />
             <MethodPoint title="Aircraft filtering" text="Imports are filtered to configured private and business jet aircraft type codes before aggregation." />
             <MethodPoint title="Emission estimates" text="Flight distance is multiplied by configurable aircraft-type emission factors. Every CO2 value is an estimate." />
             <MethodPoint title="Limitations" text="Coverage can be incomplete, delayed, or missing route context, so rankings should be read as awareness signals." />
