@@ -17,7 +17,8 @@
     "ingest:historical": "tsx scripts/ingest-flights.ts historical",
     "ingest:adsb-lol": "tsx scripts/ingest-flights.ts adsb_lol",
     "ingest:adsb": "tsx scripts/ingest-flights.ts adsb_exchange",
-    "ingest:opensky": "tsx scripts/ingest-flights.ts opensky"
+    "ingest:opensky": "tsx scripts/ingest-flights.ts opensky",
+    "migrate:sqlite-to-postgres": "tsx scripts/migrate-sqlite-to-postgres.ts"
   },
   "dependencies": {
     "@prisma/client": "^5.22.0",
