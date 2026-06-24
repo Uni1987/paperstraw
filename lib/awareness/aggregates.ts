@@ -67,8 +67,9 @@ export function buildAwarenessDashboardDataFromRollups(rollups: StoredAggregateR
       })),
     monthlySeries: rollups
       .filter((rollup) => rollup.period === AggregatePeriods.MONTH && rollup.group === AggregateGroups.GLOBAL)
+      .filter((rollup) => isCompletedMonthRollup(rollup, now))
       .map((rollup) => ({
-        period: rollup.periodStart.toLocaleDateString("en-US", { month: "short" }),
+        period: displayMonthDate(rollup.periodStart).toLocaleDateString("en-US", { month: "short" }),
         estimatedCo2Kg: Number(rollup.estimatedCo2Kg),
         flights: rollup.flights
       })),
@@ -200,7 +201,7 @@ function buildDailySeries(flights: AggregateFlight[], now: Date): AwarenessSerie
 
 function buildMonthlySeries(flights: AggregateFlight[], now: Date): AwarenessSeriesPoint[] {
   const points = new Map<string, AwarenessSeriesPoint>();
-  for (let month = 0; month <= now.getMonth(); month += 1) {
+  for (let month = 0; month < now.getMonth(); month += 1) {
     const date = new Date(now.getFullYear(), month, 1);
     const key = `${now.getFullYear()}-${month}`;
     points.set(key, { period: date.toLocaleDateString("en-US", { month: "short" }), estimatedCo2Kg: 0, flights: 0 });
@@ -291,4 +292,16 @@ function startOfDay(date: Date) {
   const start = new Date(date);
   start.setHours(0, 0, 0, 0);
   return start;
+}
+
+function isCompletedMonthRollup(rollup: StoredAggregateRollup, now: Date) {
+  const rollupMonth = displayMonthDate(rollup.periodStart);
+  const currentMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+  return rollupMonth < currentMonthStart;
+}
+
+function displayMonthDate(date: Date) {
+  const adjusted = new Date(date);
+  adjusted.setHours(adjusted.getHours() + 3);
+  return new Date(adjusted.getFullYear(), adjusted.getMonth(), 1);
 }

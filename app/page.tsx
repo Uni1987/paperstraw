@@ -13,7 +13,7 @@ export const dynamic = "force-dynamic";
 
 export default async function Home() {
   const [data, freshness] = await Promise.all([getAwarenessDashboardData(), getImportFreshness()]);
-  const trendSeries = data.monthlySeries.length > 1 ? data.monthlySeries : data.dailySeries;
+  const trendSeries = data.monthlySeries;
   const donationOptions = getDonationOptions();
 
   const impactMetrics = [
@@ -154,8 +154,8 @@ export default async function Home() {
 
       <StorySection
         eyebrow="Emissions over time"
-        title="The point is the trend, not the live dot."
-        description="PaperStraw is built around scheduled batch imports and stored aggregates, so the public view stays focused on climate impact over time."
+        title="Monthly private jet emissions"
+        description="Monthly totals based on completed calendar months. The current month is excluded until complete."
       >
         <EditorialChart kind="time" data={trendSeries} />
       </StorySection>

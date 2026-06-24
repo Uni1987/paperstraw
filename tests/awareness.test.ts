@@ -156,6 +156,43 @@ describe("stored aggregate rollups", () => {
     expect(dashboard.todayDistanceKm).toBe(1234);
     expect(dashboard.todayCo2Kg).toBe(745000);
   });
+
+  it("shows only completed months in the homepage trend series", () => {
+    const dashboard = buildAwarenessDashboardDataFromRollups(
+      [
+        {
+          period: AggregatePeriods.YEAR,
+          group: AggregateGroups.GLOBAL,
+          key: "ALL",
+          periodStart: new Date("2025-12-31T23:00:00.000Z"),
+          flights: 100,
+          distanceKm: 10000,
+          estimatedCo2Kg: 1000000
+        },
+        {
+          period: AggregatePeriods.MONTH,
+          group: AggregateGroups.GLOBAL,
+          key: "ALL",
+          periodStart: new Date("2026-05-01T00:00:00.000Z"),
+          flights: 40,
+          distanceKm: 4000,
+          estimatedCo2Kg: 400000
+        },
+        {
+          period: AggregatePeriods.MONTH,
+          group: AggregateGroups.GLOBAL,
+          key: "ALL",
+          periodStart: new Date("2026-05-31T22:00:00.000Z"),
+          flights: 60,
+          distanceKm: 6000,
+          estimatedCo2Kg: 600000
+        }
+      ],
+      new Date("2026-06-24T12:00:00.000Z")
+    );
+
+    expect(dashboard.monthlySeries).toEqual([{ period: "May", estimatedCo2Kg: 400000, flights: 40 }]);
+  });
 });
 
 describe("airport attribution", () => {
