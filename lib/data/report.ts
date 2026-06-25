@@ -56,72 +56,137 @@ export type DataReport = {
 };
 
 type FlightSummaryRow = {
-  departureAt: Date;
-  estimatedCo2Kg: unknown;
+  dateKey: string;
+  flights: bigint;
 };
 
 export async function getDataReport(): Promise<DataReport> {
-  const [dashboard, flights, importLogs, archiveDates, freshness, attributionQuality] = await Promise.all([
+  const [
+    dashboard,
+    flightSummary,
+    importSummary,
+    recentImportLogs,
+    flightsPerDay,
+    importsPerDay,
+    archiveDates,
+    freshness,
+    attributionQuality
+  ] = await Promise.all([
     getAwarenessDashboardData(),
-    prisma.flight.findMany({
-      select: {
-        departureAt: true,
-        estimatedCo2Kg: true
-      },
-      orderBy: {
-        departureAt: "asc"
-      }
-    }),
-    prisma.importLog.findMany({
-      orderBy: {
-        timestamp: "desc"
-      }
-    }),
+    getFlightDatasetSummary(),
+    getImportLogSummary(),
+    getRecentImportLogs(),
+    getFlightsPerDay(),
+    getImportsPerDay(),
     getHistoricalArchiveDates(),
     getImportFreshness(),
     getAttributionQualityReport()
   ]);
 
-  const totalFlights = flights.length;
-  const totalCo2Kg = flights.reduce((total, flight) => total + Number(flight.estimatedCo2Kg), 0);
-  const earliestFlight = flights[0]?.departureAt ?? null;
-  const latestFlight = flights[flights.length - 1]?.departureAt ?? null;
-  const importedDayCount = new Set(flights.map((flight) => dateKey(flight.departureAt))).size;
-  const successfulImports = importLogs.filter((log) => log.status === "SUCCESS").length;
-  const failedImports = importLogs.filter((log) => log.status === "FAILED").length;
-  const partialImports = importLogs.filter((log) => log.status === "PARTIAL").length;
-  const latestSuccessfulImportAt = importLogs.find((log) => log.status === "SUCCESS")?.timestamp ?? null;
-  const importSuccessRate = importLogs.length ? (successfulImports / importLogs.length) * 100 : 0;
+  const importSuccessRate = importSummary.totalImports ? (importSummary.successfulImports / importSummary.totalImports) * 100 : 0;
 
   return {
     isDemo: dashboard.isDemo,
     summary: [
-      { label: "Total flights imported", value: totalFlights.toLocaleString(), detail: "Source-attributed aggregate records" },
-      { label: "Total estimated CO2 calculated", value: formatTonnes(totalCo2Kg), detail: "All imported flight records" },
-      { label: "Date coverage", value: formatCoverage(earliestFlight, latestFlight), detail: "Earliest to latest imported departure date" },
-      { label: "Earliest flight date", value: formatDateOnly(earliestFlight), detail: "Imported records only" },
-      { label: "Latest flight date", value: formatDateOnly(latestFlight), detail: "Imported records only" },
-      { label: "Imported days", value: importedDayCount.toLocaleString(), detail: "Distinct dates with imported flights" },
-      { label: "Import success rate", value: `${Math.round(importSuccessRate).toLocaleString()}%`, detail: `${successfulImports} of ${importLogs.length} import logs` },
+      { label: "Total flights imported", value: flightSummary.totalFlights.toLocaleString(), detail: "Source-attributed aggregate records" },
+      { label: "Total estimated CO2 calculated", value: formatTonnes(flightSummary.totalCo2Kg), detail: "All imported flight records" },
+      { label: "Date coverage", value: formatCoverage(flightSummary.earliestFlight, flightSummary.latestFlight), detail: "Earliest to latest imported departure date" },
+      { label: "Earliest flight date", value: formatDateOnly(flightSummary.earliestFlight), detail: "Imported records only" },
+      { label: "Latest flight date", value: formatDateOnly(flightSummary.latestFlight), detail: "Imported records only" },
+      { label: "Imported days", value: flightSummary.importedDayCount.toLocaleString(), detail: "Distinct dates with imported flights" },
+      { label: "Import success rate", value: `${Math.round(importSuccessRate).toLocaleString()}%`, detail: `${importSummary.successfulImports} of ${importSummary.totalImports} import logs` },
       { label: "Database storage", value: "PostgreSQL", detail: "Designed for Neon-managed Postgres" }
     ],
     importHealth: {
-      totalImports: importLogs.length,
-      successfulImports,
-      failedImports,
-      partialImports,
-      latestSuccessfulImportAt,
-      recentImportLogs: importLogs.slice(0, 8),
+      totalImports: importSummary.totalImports,
+      successfulImports: importSummary.successfulImports,
+      failedImports: importSummary.failedImports,
+      partialImports: importSummary.partialImports,
+      latestSuccessfulImportAt: importSummary.latestSuccessfulImportAt,
+      recentImportLogs,
       historicalArchiveDates: archiveDates
     },
-    flightsPerDay: buildFlightsPerDay(flights),
-    importsPerDay: buildImportsPerDay(importLogs),
+    flightsPerDay,
+    importsPerDay,
     aircraftTypes: dashboard.aircraftTypes,
     topCountries: dashboard.topCountries,
     topAirports: dashboard.topAirports,
     freshness,
     attributionQuality
   };
+}
+
+async function getFlightDatasetSummary() {
+  const rows = await prisma.$queryRaw<
+    Array<{
+      totalFlights: bigint;
+      totalCo2Kg: string | number | null;
+      earliestFlight: Date | null;
+      latestFlight: Date | null;
+      importedDayCount: bigint;
+    }>
+  >`
+    SELECT
+      COUNT(*)::bigint AS "totalFlights",
+      COALESCE(SUM("estimatedCo2Kg"), 0)::text AS "totalCo2Kg",
+      MIN("departureAt") AS "earliestFlight",
+      MAX("departureAt") AS "latestFlight",
+      COUNT(DISTINCT DATE("departureAt"))::bigint AS "importedDayCount"
+    FROM "Flight"
+  `;
+  const row = rows[0];
+  return {
+    totalFlights: Number(row?.totalFlights ?? 0),
+    totalCo2Kg: Number(row?.totalCo2Kg ?? 0),
+    earliestFlight: row?.earliestFlight ?? null,
+    latestFlight: row?.latestFlight ?? null,
+    importedDayCount: Number(row?.importedDayCount ?? 0)
+  };
+}
+
+async function getImportLogSummary() {
+  const rows = await prisma.$queryRaw<
+    Array<{
+      totalImports: bigint;
+      successfulImports: bigint;
+      failedImports: bigint;
+      partialImports: bigint;
+      latestSuccessfulImportAt: Date | null;
+    }>
+  >`
+    SELECT
+      COUNT(*)::bigint AS "totalImports",
+      COUNT(*) FILTER (WHERE "status" = 'SUCCESS')::bigint AS "successfulImports",
+      COUNT(*) FILTER (WHERE "status" = 'FAILED')::bigint AS "failedImports",
+      COUNT(*) FILTER (WHERE "status" = 'PARTIAL')::bigint AS "partialImports",
+      MAX("timestamp") FILTER (WHERE "status" = 'SUCCESS') AS "latestSuccessfulImportAt"
+    FROM "ImportLog"
+  `;
+  const row = rows[0];
+  return {
+    totalImports: Number(row?.totalImports ?? 0),
+    successfulImports: Number(row?.successfulImports ?? 0),
+    failedImports: Number(row?.failedImports ?? 0),
+    partialImports: Number(row?.partialImports ?? 0),
+    latestSuccessfulImportAt: row?.latestSuccessfulImportAt ?? null
+  };
+}
+
+async function getRecentImportLogs() {
+  return prisma.importLog.findMany({
+    select: {
+      id: true,
+      provider: true,
+      timestamp: true,
+      status: true,
+      recordsImported: true,
+      errors: true
+    },
+    orderBy: {
+      timestamp: "desc"
+    },
+    take: 8
+  });
 }
 
 async function getHistoricalArchiveDates() {
@@ -146,44 +211,55 @@ async function getHistoricalArchiveDates() {
   }
 }
 
-function buildFlightsPerDay(flights: FlightSummaryRow[]): DataSeriesPoint[] {
-  const grouped = new Map<string, number>();
-  for (const flight of flights) {
-    const key = dateKey(flight.departureAt);
-    grouped.set(key, (grouped.get(key) ?? 0) + 1);
-  }
+async function getFlightsPerDay(): Promise<DataSeriesPoint[]> {
+  const rows = await prisma.$queryRaw<FlightSummaryRow[]>`
+    SELECT "dateKey", flights
+    FROM (
+      SELECT TO_CHAR(DATE("departureAt"), 'YYYY-MM-DD') AS "dateKey", COUNT(*)::bigint AS flights
+      FROM "Flight"
+      GROUP BY DATE("departureAt")
+      ORDER BY DATE("departureAt") DESC
+      LIMIT 30
+    ) daily_flights
+    ORDER BY "dateKey" ASC
+  `;
 
-  return [...grouped.entries()]
-    .sort(([left], [right]) => left.localeCompare(right))
-    .slice(-30)
-    .map(([period, flights]) => ({
-      period: formatShortDate(period),
-      flights
-    }));
+  return rows.map((row) => ({
+    period: formatShortDate(row.dateKey),
+    flights: Number(row.flights)
+  }));
 }
 
-function buildImportsPerDay(importLogs: Array<{ timestamp: Date; status: string; recordsImported: number }>): DataSeriesPoint[] {
-  const grouped = new Map<string, { recordsImported: number; successfulImports: number; failedImports: number }>();
-  for (const log of importLogs) {
-    const key = dateKey(log.timestamp);
-    const existing = grouped.get(key) ?? { recordsImported: 0, successfulImports: 0, failedImports: 0 };
-    existing.recordsImported += log.recordsImported;
-    if (log.status === "SUCCESS") existing.successfulImports += 1;
-    if (log.status === "FAILED") existing.failedImports += 1;
-    grouped.set(key, existing);
-  }
+async function getImportsPerDay(): Promise<DataSeriesPoint[]> {
+  const rows = await prisma.$queryRaw<
+    Array<{
+      dateKey: string;
+      recordsImported: bigint | number;
+      successfulImports: bigint;
+      failedImports: bigint;
+    }>
+  >`
+    SELECT "dateKey", "recordsImported", "successfulImports", "failedImports"
+    FROM (
+      SELECT
+        TO_CHAR(DATE("timestamp"), 'YYYY-MM-DD') AS "dateKey",
+        COALESCE(SUM("recordsImported"), 0)::bigint AS "recordsImported",
+        COUNT(*) FILTER (WHERE "status" = 'SUCCESS')::bigint AS "successfulImports",
+        COUNT(*) FILTER (WHERE "status" = 'FAILED')::bigint AS "failedImports"
+      FROM "ImportLog"
+      GROUP BY DATE("timestamp")
+      ORDER BY DATE("timestamp") DESC
+      LIMIT 30
+    ) daily_imports
+    ORDER BY "dateKey" ASC
+  `;
 
-  return [...grouped.entries()]
-    .sort(([left], [right]) => left.localeCompare(right))
-    .slice(-30)
-    .map(([period, values]) => ({
-      period: formatShortDate(period),
-      ...values
-    }));
-}
-
-function dateKey(date: Date) {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+  return rows.map((row) => ({
+    period: formatShortDate(row.dateKey),
+    recordsImported: Number(row.recordsImported),
+    successfulImports: Number(row.successfulImports),
+    failedImports: Number(row.failedImports)
+  }));
 }
 
 function formatShortDate(date: string) {
