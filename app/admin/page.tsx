@@ -7,6 +7,9 @@ import { getImportStatusSummary } from "@/lib/ingestion/state";
 import Link from "next/link";
 import type { ReactNode } from "react";
 
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
 type AdminProps = {
   searchParams?: {
     success?: string;

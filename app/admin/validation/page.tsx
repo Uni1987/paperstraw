@@ -3,6 +3,9 @@ import type { ReactNode } from "react";
 import { getEmissionsValidationReport } from "@/lib/validation/emissions";
 import { formatCo2, formatKm } from "@/lib/format";
 
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
 export default async function ValidationPage() {
   const report = await getEmissionsValidationReport(20);
 
