@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Analytics } from "@vercel/analytics/react";
+import { SpeedInsights } from "@vercel/speed-insights/next";
 import type { ReactNode } from "react";
 import { SiteHeader } from "@/components/SiteHeader";
 import "./globals.css";
@@ -16,6 +17,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
         <SiteHeader />
         {children}
         <Analytics />
+        <SpeedInsights />
       </body>
     </html>
   );
