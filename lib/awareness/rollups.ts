@@ -34,8 +34,8 @@ export async function recalculateAggregateRollups(now = new Date()) {
   const rows = buildRollupRows(
     flights.map((flight) => ({
       departureAt: flight.departureAt,
-      originAirport: flight.originAirport,
-      destinationAirport: flight.destinationAirport,
+      originAirport: flight.originAirportIdent ?? flight.originAirport,
+      destinationAirport: flight.destinationAirportIdent ?? flight.destinationAirport,
       distanceKm: Number(flight.distanceKm),
       estimatedCo2Kg: Number(flight.estimatedCo2Kg),
       aircraftType: flight.aircraft.aircraftType

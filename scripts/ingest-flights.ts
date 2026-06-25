@@ -7,7 +7,7 @@ const provider = process.argv[2];
 async function main() {
   if (provider !== "daily" && provider !== "historical" && provider !== "adsb_lol" && provider !== "adsb_exchange" && provider !== "opensky") {
     console.error(
-      "Usage: pnpm ingest:daily, pnpm ingest:historical --from YYYY-MM-DD --to YYYY-MM-DD, pnpm ingest:adsb-lol, pnpm ingest:adsb or pnpm ingest:opensky"
+      "Usage: pnpm ingest:daily, pnpm ingest:historical --from YYYY-MM-DD --to YYYY-MM-DD [--force|--reprocess], pnpm ingest:adsb-lol, pnpm ingest:adsb or pnpm ingest:opensky"
     );
     process.exit(1);
   }
@@ -29,14 +29,15 @@ async function main() {
   if (provider === "historical") {
     requireEnv("DATABASE_URL");
     const { runHistoricalIngestion } = await import("../lib/ingestion/historical");
-    const { from, to } = parseHistoricalDateArgs(process.argv.slice(3));
+    const { from, to, force } = parseHistoricalDateArgs(process.argv.slice(3));
     const result = await runHistoricalIngestion({
       from,
       to,
+      force,
       onProgress: (message) => console.log(message)
     });
     console.log(
-      `Historical bootstrap processed ${result.datesProcessed} day(s), skipped ${result.datesSkipped} already-processed day(s), imported ${result.imported} record(s), skipped ${result.datesUnavailable} unavailable/failed day(s), recalculated ${result.rollups} rollup(s).`
+      `Historical bootstrap processed ${result.datesProcessed} day(s), skipped ${result.datesSkipped} already-processed day(s), imported ${result.imported} record(s), updated attribution on ${result.attributionUpdated} duplicate record(s), skipped ${result.datesUnavailable} unavailable/failed day(s), recalculated ${result.rollups} rollup(s).`
     );
     if (result.errors.length) {
       console.error(result.errors.join("\n"));
@@ -68,13 +69,18 @@ function parseHistoricalDateArgs(args: string[]) {
   const toArg = getFlagValue(args, "--to") ?? defaultTo;
   return {
     from: parseDateArg(fromArg, "--from"),
-    to: parseDateArg(toArg, "--to")
+    to: parseDateArg(toArg, "--to"),
+    force: hasFlag(args, "--force") || hasFlag(args, "--reprocess")
   };
 }
 
 function getFlagValue(args: string[], flag: string) {
   const index = args.indexOf(flag);
   return index >= 0 ? args[index + 1] : undefined;
+}
+
+function hasFlag(args: string[], flag: string) {
+  return args.includes(flag);
 }
 
 function parseDateArg(value: string | undefined, flag: string) {

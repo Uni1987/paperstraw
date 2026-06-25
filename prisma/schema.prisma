@@ -26,6 +26,12 @@ model Flight {
   aircraftId        String
   originAirport     String
   destinationAirport String
+  originAirportIdent String?
+  destinationAirportIdent String?
+  originCountryCode String?
+  destinationCountryCode String?
+  attributionSource String?
+  attributionConfidence Decimal?
   departureAt       DateTime
   arrivalAt         DateTime?
   distanceKm        Decimal

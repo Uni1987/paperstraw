@@ -1,4 +1,5 @@
 import { estimateAirportDistanceKm, findNearestKnownAirport } from "./airports";
+import { resolveAirport } from "@/lib/airports/ourAirports";
 import { getDataRefreshIntervalMinutes } from "@/lib/config/refresh";
 import { filterPrivateJetRecords, PRIVATE_JET_AIRCRAFT_TYPES } from "./privateJets";
 import { ADSB_LOL_DATA_SOURCE } from "./providerConstants";
@@ -99,8 +100,12 @@ function extractRows(payload: unknown): AdsbLolRecord[] {
 
 function normalizeAdsbLolRecord(record: AdsbLolRecord): NormalizedFlightRecord | null {
   const aircraftType = (record.aircraftType ?? record.type ?? record.t ?? "").trim().toUpperCase();
-  const originAirport = (record.originAirport ?? record.origin ?? record.orig ?? "").trim().toUpperCase();
-  const destinationAirport = (record.destinationAirport ?? record.destination ?? record.dest ?? "").trim().toUpperCase();
+  const originValue = (record.originAirport ?? record.origin ?? record.orig ?? "").trim().toUpperCase();
+  const destinationValue = (record.destinationAirport ?? record.destination ?? record.dest ?? "").trim().toUpperCase();
+  const originMatch = resolveAirport(originValue);
+  const destinationMatch = resolveAirport(destinationValue);
+  const originAirport = originMatch?.ident ?? originValue;
+  const destinationAirport = destinationMatch?.ident ?? destinationValue;
   const departureAt = parseDate(record.departureAt ?? record.departureTime ?? record.firstSeen);
   const arrivalAt = parseDate(record.arrivalAt ?? record.arrivalTime ?? record.lastSeen);
   const explicitDistance = Number(record.distanceKm ?? record.distance_km ?? record.distance);
@@ -123,6 +128,12 @@ function normalizeAdsbLolRecord(record: AdsbLolRecord): NormalizedFlightRecord |
     verifiedPublicEntity: null,
     originAirport,
     destinationAirport,
+    originAirportIdent: originMatch?.ident ?? null,
+    destinationAirportIdent: destinationMatch?.ident ?? null,
+    originCountryCode: originMatch?.countryCode ?? null,
+    destinationCountryCode: destinationMatch?.countryCode ?? null,
+    attributionSource: originMatch || destinationMatch ? "OurAirports exact airport field" : null,
+    attributionConfidence: originMatch || destinationMatch ? Math.min(originMatch?.confidence ?? 1, destinationMatch?.confidence ?? 1) : null,
     departureAt,
     arrivalAt,
     distanceKm,
@@ -150,8 +161,14 @@ function normalizeAdsbLolSnapshotRecord(record: AdsbLolRecord, now: Date): Norma
     registration: record.registration ?? record.r ?? null,
     aircraftType,
     verifiedPublicEntity: null,
-    originAirport: nearestAirport.code,
+    originAirport: nearestAirport.ident,
     destinationAirport: "ENROUTE",
+    originAirportIdent: nearestAirport.ident,
+    destinationAirportIdent: null,
+    originCountryCode: nearestAirport.countryCode,
+    destinationCountryCode: null,
+    attributionSource: "OurAirports coordinate match; destination ENROUTE",
+    attributionConfidence: nearestAirport.confidence,
     departureAt: now,
     arrivalAt: null,
     distanceKm,

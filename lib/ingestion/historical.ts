@@ -22,6 +22,7 @@ const FILE_SAMPLE_LIMIT = 80;
 type HistoricalIngestionOptions = {
   from: Date;
   to: Date;
+  force?: boolean;
   onProgress?: (message: string) => void;
 };
 
@@ -30,6 +31,7 @@ type HistoricalIngestionResult = {
   datesProcessed: number;
   datesUnavailable: number;
   datesSkipped: number;
+  attributionUpdated: number;
   rollups: number;
   errors: string[];
 };
@@ -125,10 +127,16 @@ export async function runHistoricalIngestion(options: HistoricalIngestionOptions
   const years = new Set<number>();
   const errors: string[] = [];
   let imported = 0;
+  let attributionUpdated = 0;
   let datesUnavailable = 0;
   let datesSkipped = 0;
 
   options.onProgress?.(`Historical import range: ${formatDateKey(options.from)} to ${formatDateKey(options.to)} (${dates.length} day(s)).`);
+  if (options.force) {
+    options.onProgress?.(
+      "Historical reprocess mode enabled: already-successful archive dates will be scanned again; existing flights only receive attribution field updates."
+    );
+  }
 
   for (const date of dates) {
     const dateKey = formatDateKey(date);
@@ -137,14 +145,14 @@ export async function runHistoricalIngestion(options: HistoricalIngestionOptions
 
     try {
       const processedDate = await getProcessedArchiveDate(ADSB_LOL_DATA_SOURCE, dateKey);
-      if (processedDate?.status === ImportStatuses.SUCCESS) {
+      if (shouldSkipHistoricalDate({ force: options.force, processedStatus: processedDate?.status, existingHistoricalRecords: 0 })) {
         datesSkipped += 1;
         options.onProgress?.(`[${dateKey}] Already processed successfully; skipping archive scan.`);
         continue;
       }
 
       const existingHistoricalRecords = await hasExistingHistoricalRecords(dateKey, ADSB_LOL_DATA_SOURCE);
-      if (existingHistoricalRecords > 0) {
+      if (shouldSkipHistoricalDate({ force: options.force, processedStatus: processedDate?.status, existingHistoricalRecords })) {
         datesSkipped += 1;
         await upsertProcessedArchiveDate({
           provider: ADSB_LOL_DATA_SOURCE,
@@ -190,8 +198,11 @@ export async function runHistoricalIngestion(options: HistoricalIngestionOptions
         options.onProgress?.(`[${dateKey}] JSON file samples: ${stats.compressedJsonSamples.join(", ")}`);
       }
       options.onProgress?.(`[${dateKey}] Top-level archive entries: ${formatTopLevelEntries(stats.topLevelEntries)}`);
-      const result = await importFlights(records, ADSB_LOL_DATA_SOURCE);
+      const result = await importFlights(records, ADSB_LOL_DATA_SOURCE, {
+        updateDuplicateAttribution: Boolean(options.force)
+      });
       imported += result.imported;
+      attributionUpdated += result.updatedAttribution;
       if (result.errors.length) errors.push(...result.errors.map((error) => `${dateKey}: ${error}`));
       await upsertProcessedArchiveDate({
         provider: ADSB_LOL_DATA_SOURCE,
@@ -206,7 +217,9 @@ export async function runHistoricalIngestion(options: HistoricalIngestionOptions
         recordsImported: result.imported,
         error: result.errors.join("\n") || null
       });
-      options.onProgress?.(`[${dateKey}] Records imported: ${result.imported}.`);
+      options.onProgress?.(
+        `[${dateKey}] Records imported: ${result.imported}; duplicate attribution updates: ${result.updatedAttribution}.`
+      );
     } catch (error) {
       const message = `${dateKey}: ${error instanceof Error ? error.message : "Unknown historical import error"}`;
       errors.push(message);
@@ -251,9 +264,23 @@ export async function runHistoricalIngestion(options: HistoricalIngestionOptions
     datesProcessed: dates.length,
     datesUnavailable,
     datesSkipped,
+    attributionUpdated,
     rollups,
     errors
   };
+}
+
+export function shouldSkipHistoricalDate({
+  force,
+  processedStatus,
+  existingHistoricalRecords
+}: {
+  force?: boolean;
+  processedStatus?: string | null;
+  existingHistoricalRecords: number;
+}) {
+  if (force) return false;
+  return processedStatus === ImportStatuses.SUCCESS || existingHistoricalRecords > 0;
 }
 
 async function fetchHistoricalRecordsForRelease(
@@ -544,14 +571,23 @@ function mergeTrackPosition(
 function trackToRecord(track: AircraftTrack, date: Date): NormalizedFlightRecord {
   const dateKey = formatDateKey(date);
   const distanceKm = Math.max(25, Math.round(track.distanceKm || estimateCoordinateDistanceKm(track.firstPosition, track.lastPosition)));
+  const origin = nearestAirport(track.firstPosition);
+  const destination = nearestAirport(track.lastPosition);
+  const confidenceValues = [origin?.confidence, destination?.confidence].filter((value): value is number => typeof value === "number");
 
   return {
     icaoHex: track.icaoHex,
     registration: track.registration,
     aircraftType: track.aircraftType,
     verifiedPublicEntity: null,
-    originAirport: nearestAirportCode(track.firstPosition),
-    destinationAirport: nearestAirportCode(track.lastPosition),
+    originAirport: origin?.ident ?? "UNKNOWN",
+    destinationAirport: destination?.ident ?? "UNKNOWN",
+    originAirportIdent: origin?.ident ?? null,
+    destinationAirportIdent: destination?.ident ?? null,
+    originCountryCode: origin?.countryCode ?? null,
+    destinationCountryCode: destination?.countryCode ?? null,
+    attributionSource: origin || destination ? "OurAirports coordinate match" : null,
+    attributionConfidence: confidenceValues.length ? Math.min(...confidenceValues) : null,
     departureAt: track.firstAt,
     arrivalAt: track.lastAt.getTime() > track.firstAt.getTime() ? track.lastAt : null,
     distanceKm,
@@ -561,9 +597,9 @@ function trackToRecord(track: AircraftTrack, date: Date): NormalizedFlightRecord
   };
 }
 
-function nearestAirportCode(position: GeoPosition) {
+function nearestAirport(position: GeoPosition) {
   const nearest = findNearestKnownAirport(position.lat, position.lon);
-  return nearest && nearest.distanceKm <= 150 ? nearest.code : "UNKNOWN";
+  return nearest;
 }
 
 function parseTarHeader(header: Buffer): TarEntry {

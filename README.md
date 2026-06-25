@@ -78,6 +78,16 @@ Run a historical ADSB.lol archive bootstrap with:
 pnpm ingest:historical --from YYYY-MM-DD --to YYYY-MM-DD
 ```
 
+To re-scan dates that were already marked as successful, add `--force` or `--reprocess`:
+
+```bash
+pnpm ingest:historical --from YYYY-MM-DD --to YYYY-MM-DD --force
+```
+
+Reprocess mode keeps duplicate protection enabled. Existing matching flights are not inserted again; only the attribution
+fields (`originAirportIdent`, `destinationAirportIdent`, `originCountryCode`, `destinationCountryCode`,
+`attributionSource`, and `attributionConfidence`) are refreshed before rollups are recalculated.
+
 Historical bootstrap is intended for one-time backfills of a selected date range. After that, use `pnpm ingest:daily` for
 frequent recent operation.
 
@@ -97,6 +107,7 @@ The historical job:
 - chooses the largest available prod/staging release for that date
 - skips any date already marked as successfully processed in `ProcessedArchiveDate`
 - also skips dates where matching historical flight records already exist, then marks that date as processed
+- allows those already-processed dates to be scanned again when `--force` or `--reprocess` is provided
 - streams the split tar archive assets and reads ADSB.lol `traces/**/*.json` files, including gzip-compressed JSON files that do not use a `.gz` suffix
 - keeps only aircraft types from the private/business jet allowlist
 - creates one aggregate aircraft-day record per matching aircraft for that date
@@ -109,6 +120,48 @@ The historical job:
 ADSB.lol historical archives are very large. The 2026 archive repository describes the dataset at roughly terabyte scale,
 and a single daily release can be large. Start with a small date range first, confirm the output, then expand the range
 deliberately.
+
+### Airport Attribution
+
+PaperStraw uses OurAirports as the airport reference dataset. The checked-in file lives at:
+
+```txt
+data/ourairports/airports.csv
+```
+
+The lookup includes large, medium, and small airports and excludes closed airports. Heliports are excluded by default to
+avoid assigning private jet records to city heliports, but can be enabled for research with `OURAIRPORTS_INCLUDE_HELIPORTS=true`.
+
+Matching order:
+
+- exact airport ident / ICAO code
+- exact IATA code
+- airport name or municipality
+- nearest coordinate match within `AIRPORT_MATCH_MAX_RADIUS_KM`
+- `UNKNOWN` when no reasonable match exists
+
+The default coordinate radius is `75 km`. `ENROUTE` is kept only for current-position snapshots where there is no reliable
+destination airport.
+
+### Full Historical Reimport Plan
+
+Do not wipe production data automatically. For a full attribution rebuild:
+
+1. Create a Neon backup or branch from the current production database.
+2. Confirm `data/ourairports/airports.csv` is present and current.
+3. Deploy migrations so the nullable airport attribution columns exist on `Flight`.
+4. On the backup/branch first, clear rebuildable imported data only after confirmation: `Flight`, `AggregateRollup`,
+   `ImportLog`, `IngestionCursor`, and `ProcessedArchiveDate`. Keep schema migrations and emission factors.
+5. Run a small historical range first, for example:
+
+   ```bash
+   pnpm ingest:historical --from 2026-01-01 --to 2026-01-03
+   ```
+
+6. Verify duplicate protection with `dataSource + sourceRecordId` by rerunning the same small range.
+7. Check `/data` attribution rates, top airports, top countries, and import logs.
+8. Run the full intended historical range only after the small-range verification looks correct.
+9. Verify rollups, homepage totals, `/data`, `/admin/validation`, and Neon usage before promoting the rebuilt database.
 
 The `/admin` page includes a manual **Refresh latest data now** button plus an import status dashboard showing
 daily/recent cursors, recently processed historical archive dates, and recent import logs.
@@ -274,6 +327,8 @@ ADSB_EXCHANGE_RECENT_FLIGHTS_URL=""
 OPENSKY_USERNAME=""
 OPENSKY_PASSWORD=""
 GITHUB_TOKEN=""
+AIRPORT_MATCH_MAX_RADIUS_KM=75
+OURAIRPORTS_INCLUDE_HELIPORTS=false
 PAYPAL_URL="https://www.paypal.com/ncp/payment/8JHGP7DSZ28XW"
 BUY_ME_A_COFFEE_URL=""
 BITCOIN_ADDRESS=""
@@ -352,6 +407,13 @@ To backfill a small historical range into the same PostgreSQL database, run:
 
 ```bash
 pnpm ingest:historical --from 2026-01-01 --to 2026-01-07
+```
+
+To test improved airport/country attribution against dates that were previously imported, run the same command with
+`--force` or `--reprocess`. This re-scans the archives and updates only attribution fields on duplicate flights:
+
+```bash
+pnpm ingest:historical --from 2026-01-01 --to 2026-01-07 --force
 ```
 
 `pnpm ingest:daily` uses ADSB.lol public `/type/{aircraftType}` API snapshots for the configured private/business jet
@@ -550,6 +612,8 @@ ADSB_EXCHANGE_API_KEY=""
 ADSB_EXCHANGE_RECENT_FLIGHTS_URL=""
 OPENSKY_USERNAME=""
 OPENSKY_PASSWORD=""
+AIRPORT_MATCH_MAX_RADIUS_KM=75
+OURAIRPORTS_INCLUDE_HELIPORTS=false
 ```
 
 Use `ADSB_LOL_DAILY_URL` only if you have a specific ADSB.lol export/API URL to use instead of the built-in public type

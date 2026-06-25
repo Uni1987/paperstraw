@@ -26,28 +26,47 @@ export type AttributionQualityReport = {
 };
 
 type EndpointCount = {
-  value: string;
+  airportEndpoint: string;
+  countryCode?: string | null;
+  legacyEndpoint?: string | null;
   count: number;
 };
 
 export async function getAttributionQualityReport(): Promise<AttributionQualityReport> {
-  const endpointCounts = await prisma.$queryRaw<Array<{ endpoint: string | null; count: bigint }>>`
-    SELECT endpoint, SUM(count)::bigint AS count
+  const endpointCounts = await prisma.$queryRaw<
+    Array<{
+      airportEndpoint: string | null;
+      countryCode: string | null;
+      legacyEndpoint: string | null;
+      count: bigint;
+    }>
+  >`
+    SELECT "airportEndpoint", "countryCode", "legacyEndpoint", SUM(count)::bigint AS count
     FROM (
-      SELECT UPPER(TRIM(COALESCE("originAirport", ''))) AS endpoint, COUNT(*)::bigint AS count
+      SELECT
+        UPPER(TRIM(COALESCE(NULLIF("originAirportIdent", ''), "originAirport", ''))) AS "airportEndpoint",
+        UPPER(TRIM(COALESCE("originCountryCode", ''))) AS "countryCode",
+        UPPER(TRIM(COALESCE("originAirport", ''))) AS "legacyEndpoint",
+        COUNT(*)::bigint AS count
       FROM "Flight"
-      GROUP BY 1
+      GROUP BY 1, 2, 3
       UNION ALL
-      SELECT UPPER(TRIM(COALESCE("destinationAirport", ''))) AS endpoint, COUNT(*)::bigint AS count
+      SELECT
+        UPPER(TRIM(COALESCE(NULLIF("destinationAirportIdent", ''), "destinationAirport", ''))) AS "airportEndpoint",
+        UPPER(TRIM(COALESCE("destinationCountryCode", ''))) AS "countryCode",
+        UPPER(TRIM(COALESCE("destinationAirport", ''))) AS "legacyEndpoint",
+        COUNT(*)::bigint AS count
       FROM "Flight"
-      GROUP BY 1
+      GROUP BY 1, 2, 3
     ) grouped_endpoints
-    GROUP BY endpoint
+    GROUP BY "airportEndpoint", "countryCode", "legacyEndpoint"
   `;
 
   return buildAttributionQualityReportFromCounts(
     endpointCounts.map((row) => ({
-      value: row.endpoint ?? "",
+      airportEndpoint: row.airportEndpoint ?? "",
+      countryCode: row.countryCode ?? "",
+      legacyEndpoint: row.legacyEndpoint ?? "",
       count: Number(row.count)
     }))
   );
@@ -61,21 +80,23 @@ export function buildAttributionQualityReport(endpoints: string[]): AttributionQ
   }
 
   return buildAttributionQualityReportFromCounts(
-    [...counts.entries()].map(([value, count]) => ({ value, count }))
+    [...counts.entries()].map(([value, count]) => ({ airportEndpoint: value, legacyEndpoint: value, count }))
   );
 }
 
 export function buildAttributionQualityReportFromCounts(endpointCounts: EndpointCount[]): AttributionQualityReport {
   const normalizedCounts = endpointCounts.map((endpoint) => ({
-    value: normalizeEndpoint(endpoint.value),
+    airportEndpoint: normalizeEndpoint(endpoint.airportEndpoint),
+    countryCode: normalizeEndpoint(endpoint.countryCode ?? ""),
+    legacyEndpoint: normalizeEndpoint(endpoint.legacyEndpoint ?? endpoint.airportEndpoint),
     count: endpoint.count
   }));
   const totalEndpoints = sumCounts(normalizedCounts);
   const totalRecords = Math.floor(totalEndpoints / 2);
-  const countryAttributedEndpoints = sumMatchingCounts(normalizedCounts, isCountryAttributed);
-  const airportAttributedEndpoints = sumMatchingCounts(normalizedCounts, isAirportAttributed);
-  const legacyUnknownCountryEndpoints = sumMatchingCounts(normalizedCounts, (endpoint) => !isLegacyCountryAttributed(endpoint));
-  const legacyUnknownAirportEndpoints = sumMatchingCounts(normalizedCounts, (endpoint) => !isLegacyAirportAttributed(endpoint));
+  const countryAttributedEndpoints = sumMatchingCounts(normalizedCounts, isCountryEndpointAttributed);
+  const airportAttributedEndpoints = sumMatchingCounts(normalizedCounts, (endpoint) => isAirportAttributed(endpoint.airportEndpoint));
+  const legacyUnknownCountryEndpoints = sumMatchingCounts(normalizedCounts, (endpoint) => !isLegacyCountryAttributed(endpoint.legacyEndpoint ?? ""));
+  const legacyUnknownAirportEndpoints = sumMatchingCounts(normalizedCounts, (endpoint) => !isLegacyAirportAttributed(endpoint.legacyEndpoint ?? ""));
 
   return {
     totalRecords,
@@ -94,9 +115,9 @@ export function buildAttributionQualityReportFromCounts(endpointCounts: Endpoint
     publicUnknownAirportBucketAfter: 0,
     topUnattributedEndpointValues: topUnattributedEndpoints(normalizedCounts),
     sourceFieldNotes: [
-      "Stored Flight records currently contain originAirport and destinationAirport text fields only.",
-      "The schema does not store IATA, airport name, country code, latitude/longitude, or source airport metadata per flight.",
-      "ADSB.lol historical imports collapsed coordinates to the nearest known airport during import; when no airport was within the old limited lookup radius, UNKNOWN was stored.",
+      "Quality metrics prefer originAirportIdent and destinationAirportIdent, then fall back to the legacy originAirport and destinationAirport text fields.",
+      "Country attribution prefers stored originCountryCode and destinationCountryCode, then falls back to resolving the selected airport endpoint.",
+      "Legacy before/after metrics continue to show how many endpoints were unknown under the older originAirport and destinationAirport text-only calculation.",
       "ADSB.lol recent type snapshots are position snapshots rather than completed routes, so destination can be ENROUTE.",
       "OpenSky records can provide estimated departure and arrival ICAO airport fields when available."
     ]
@@ -105,11 +126,20 @@ export function buildAttributionQualityReportFromCounts(endpointCounts: Endpoint
 
 function topUnattributedEndpoints(endpoints: EndpointCount[]) {
   return endpoints
-    .filter((endpoint) => !isAirportAttributed(endpoint.value) && !isCountryAttributed(endpoint.value))
-    .map((endpoint) => ({ value: endpoint.value || "EMPTY", count: endpoint.count }))
+    .filter((endpoint) => !isAirportAttributed(endpoint.airportEndpoint) && !isCountryEndpointAttributed(endpoint))
+    .map((endpoint) => ({ value: endpoint.airportEndpoint || "EMPTY", count: endpoint.count }))
     .sort((left, right) => right.count - left.count)
     .slice(0, 8)
     .map(({ value, count }) => ({ value, count }));
+}
+
+function isCountryEndpointAttributed(endpoint: Pick<EndpointCount, "airportEndpoint" | "countryCode">) {
+  return isCountryCodeAttributed(endpoint.countryCode ?? "") || isCountryAttributed(endpoint.airportEndpoint);
+}
+
+function isCountryCodeAttributed(countryCode: string) {
+  const normalized = normalizeEndpoint(countryCode);
+  return /^[A-Z]{2}$/.test(normalized);
 }
 
 function normalizeEndpoint(endpoint: string) {
@@ -120,8 +150,8 @@ function sumCounts(endpoints: EndpointCount[]) {
   return endpoints.reduce((total, endpoint) => total + endpoint.count, 0);
 }
 
-function sumMatchingCounts(endpoints: EndpointCount[], predicate: (endpoint: string) => boolean) {
-  return endpoints.reduce((total, endpoint) => total + (predicate(endpoint.value) ? endpoint.count : 0), 0);
+function sumMatchingCounts(endpoints: EndpointCount[], predicate: (endpoint: EndpointCount) => boolean) {
+  return endpoints.reduce((total, endpoint) => total + (predicate(endpoint) ? endpoint.count : 0), 0);
 }
 
 function percent(value: number, total: number) {

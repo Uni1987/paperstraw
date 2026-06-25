@@ -8,6 +8,12 @@ export type NormalizedFlightRecord = {
   verifiedPublicEntity?: string | null;
   originAirport: string;
   destinationAirport: string;
+  originAirportIdent?: string | null;
+  destinationAirportIdent?: string | null;
+  originCountryCode?: string | null;
+  destinationCountryCode?: string | null;
+  attributionSource?: string | null;
+  attributionConfidence?: number | null;
   departureAt: Date;
   arrivalAt?: Date | null;
   distanceKm: number;
@@ -24,6 +30,7 @@ export type ProviderClient = {
 export type ImportResult = {
   imported: number;
   skipped: number;
+  updatedAttribution: number;
   errors: string[];
   importedFlights: AggregateFlight[];
 };
