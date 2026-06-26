@@ -41,6 +41,7 @@ const clusterCoreLayerId = "airport-emissions-cluster-core";
 const pointGlowLayerId = "airport-emissions-point-glow";
 const pointCoreLayerId = "airport-emissions-point-core";
 const interactiveLayerIds = [clusterCoreLayerId, pointCoreLayerId];
+const cartoVectorSourceId = "carto-vector";
 
 export function AirportEmissionsMap({ airports }: { airports: AirportEmissionPoint[] }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -59,10 +60,11 @@ export function AirportEmissionsMap({ airports }: { airports: AirportEmissionPoi
       const maplibregl = (await import("maplibre-gl")).default;
       if (disposed || !containerRef.current) return;
       const initialView = getMapInitialView();
+      const isMobile = isMobileViewport();
 
       const map = new maplibregl.Map({
         container: containerRef.current,
-        style: darkRasterStyle(),
+        style: darkRasterStyle(isMobile),
         center: initialView.center,
         zoom: initialView.zoom,
         minZoom: initialView.minZoom,
@@ -92,7 +94,7 @@ export function AirportEmissionsMap({ airports }: { airports: AirportEmissionPoi
           data: geojson
         } as never);
 
-        addEmissionLayers(map, maxCo2Kg);
+        addEmissionLayers(map, maxCo2Kg, isMobile);
         applyInitialView(map, initialView, 0);
         setMapReady(true);
       });
@@ -179,7 +181,7 @@ export function AirportEmissionsMap({ airports }: { airports: AirportEmissionPoi
         </div>
       ) : null}
 
-      <div className="absolute bottom-3 left-3 z-10 rounded-xl border border-white/10 bg-[#07100f]/88 p-2.5 shadow-2xl backdrop-blur md:bottom-5 md:left-5 md:p-4">
+      <div className="absolute bottom-3 left-3 z-10 rounded-xl border border-white/15 bg-[#07100f]/94 p-2.5 shadow-2xl backdrop-blur md:bottom-5 md:left-5 md:bg-[#07100f]/90 md:p-4">
         <p className="text-[0.68rem] font-semibold uppercase tracking-[0.14em] text-white/74">CO2 emissions tonnes</p>
         <div className="mt-2.5 h-2.5 w-28 rounded-full bg-gradient-to-r from-violet-700 via-orange-500 to-yellow-100 shadow-[0_0_22px_rgba(217,164,65,0.42)] md:mt-3 md:h-3 md:w-44" />
         <div className="mt-2 flex justify-between text-[0.65rem] font-semibold uppercase tracking-[0.12em] text-white/62">
@@ -243,7 +245,9 @@ export function AirportEmissionsMap({ airports }: { airports: AirportEmissionPoi
   );
 }
 
-function addEmissionLayers(map: MapLibreMap, maxCo2Kg: number) {
+function addEmissionLayers(map: MapLibreMap, maxCo2Kg: number, isMobile: boolean) {
+  const glowScale = isMobile ? 0.88 : 1;
+  const glowOpacityScale = isMobile ? 0.86 : 1;
   const colorExpression = [
     "interpolate",
     ["linear"],
@@ -266,9 +270,9 @@ function addEmissionLayers(map: MapLibreMap, maxCo2Kg: number) {
     source: rawSourceId,
     paint: {
       "circle-color": colorExpression,
-      "circle-radius": ["interpolate", ["linear"], ["get", "emissionScore"], 0, 2.4, 0.5, 5.5, 1, 13],
+      "circle-radius": ["interpolate", ["linear"], ["get", "emissionScore"], 0, 2.4 * glowScale, 0.5, 5.5 * glowScale, 1, 13 * glowScale],
       "circle-blur": 1.4,
-      "circle-opacity": ["interpolate", ["linear"], ["get", "emissionScore"], 0, 0.18, 0.45, 0.38, 1, 0.68]
+      "circle-opacity": ["interpolate", ["linear"], ["get", "emissionScore"], 0, 0.18 * glowOpacityScale, 0.45, 0.38 * glowOpacityScale, 1, 0.68 * glowOpacityScale]
     }
   } as never);
 
@@ -306,7 +310,7 @@ function addEmissionLayers(map: MapLibreMap, maxCo2Kg: number) {
       ],
       "circle-radius": ["interpolate", ["linear"], ["get", "totalCo2Kg"], 0, 10, maxCo2Kg, 34],
       "circle-blur": 1,
-      "circle-opacity": 0.32
+      "circle-opacity": 0.32 * glowOpacityScale
     }
   } as never);
 
@@ -331,9 +335,9 @@ function addEmissionLayers(map: MapLibreMap, maxCo2Kg: number) {
     filter: ["!", ["has", "point_count"]],
     paint: {
       "circle-color": colorExpression,
-      "circle-radius": ["interpolate", ["linear"], ["get", "emissionScore"], 0, 2.8, 0.55, 7, 1, 16],
+      "circle-radius": ["interpolate", ["linear"], ["get", "emissionScore"], 0, 2.8 * glowScale, 0.55, 7 * glowScale, 1, 16 * glowScale],
       "circle-blur": 1.25,
-      "circle-opacity": 0.5
+      "circle-opacity": 0.5 * glowOpacityScale
     }
   } as never);
 
@@ -374,7 +378,7 @@ function buildAirportGeoJson(airports: AirportEmissionPoint[], maxCo2Kg: number)
 }
 
 function getMapInitialView(): MapInitialView {
-  if (typeof window !== "undefined" && window.matchMedia("(max-width: 767px)").matches) {
+  if (isMobileViewport()) {
     return {
       center: [0, 8],
       zoom: -0.55,
@@ -391,6 +395,10 @@ function getMapInitialView(): MapInitialView {
     zoom: 1.35,
     minZoom: 1
   };
+}
+
+function isMobileViewport() {
+  return typeof window !== "undefined" && window.matchMedia("(max-width: 767px)").matches;
 }
 
 function applyInitialView(map: MapLibreMap, initialView: MapInitialView, duration: number) {
@@ -435,7 +443,7 @@ function featureToTooltip(feature: MapGeoJSONFeature, x: number, y: number): Too
   };
 }
 
-function darkRasterStyle(): StyleSpecification {
+function darkRasterStyle(isMobile: boolean): StyleSpecification {
   return {
     version: 8 as const,
     sources: {
@@ -447,6 +455,12 @@ function darkRasterStyle(): StyleSpecification {
           "https://c.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}.png"
         ],
         tileSize: 256,
+        attribution: "Basemap by CARTO"
+      },
+      [cartoVectorSourceId]: {
+        type: "vector",
+        tiles: ["https://basemaps.cartocdn.com/vector/carto.streets/v1/{z}/{x}/{y}.mvt"],
+        maxzoom: 14,
         attribution: "Basemap by CARTO"
       }
     },
@@ -463,11 +477,33 @@ function darkRasterStyle(): StyleSpecification {
         type: "raster",
         source: "carto-dark",
         paint: {
-          "raster-opacity": 0.56,
-          "raster-contrast": -0.18,
-          "raster-saturation": -0.85,
+          "raster-opacity": isMobile ? 0.72 : 0.64,
+          "raster-contrast": isMobile ? -0.04 : -0.1,
+          "raster-saturation": isMobile ? -0.75 : -0.82,
           "raster-brightness-min": 0,
-          "raster-brightness-max": 0.62
+          "raster-brightness-max": isMobile ? 0.78 : 0.69
+        }
+      },
+      {
+        id: "water-contrast",
+        type: "fill",
+        source: cartoVectorSourceId,
+        "source-layer": "water",
+        paint: {
+          "fill-color": "#020706",
+          "fill-opacity": isMobile ? 0.3 : 0.18,
+          "fill-outline-color": isMobile ? "rgba(255,255,255,0.18)" : "rgba(255,255,255,0.1)"
+        }
+      },
+      {
+        id: "geography-boundaries",
+        type: "line",
+        source: cartoVectorSourceId,
+        "source-layer": "boundary",
+        paint: {
+          "line-color": "rgba(220,238,232,0.72)",
+          "line-opacity": isMobile ? 0.34 : 0.22,
+          "line-width": ["interpolate", ["linear"], ["zoom"], 0, isMobile ? 0.34 : 0.26, 4, isMobile ? 0.64 : 0.46, 7, isMobile ? 0.9 : 0.68]
         }
       }
     ]

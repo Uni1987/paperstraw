@@ -26,6 +26,7 @@ import type { AirportEmissionPoint } from "@/lib/dashboard/report";
 import { formatCompactNumber } from "@/lib/format";
 
 const countryColors = ["#8B5CF6", "#3B82F6", "#22C55E", "#D9A441", "#F97316", "#EC4899"];
+const countryOtherColor = "#64748B";
 const aircraftCategoryColors = ["#22C55E", "#14B8A6", "#38BDF8", "#6366F1", "#A78BFA", "#F59E0B", "#94A3B8"];
 
 type VisualsProps = {
@@ -143,7 +144,7 @@ function EmissionsBreakdownCard({
   return (
     <DashboardCard title="CO2 emissions breakdown">
       <div className="grid min-h-80 gap-10 p-5 md:grid-cols-2 xl:gap-12">
-        <DonutBreakdown title="CO2 by Country" data={countryData} colors={countryColors} totalCo2Kg={totalCo2Kg} />
+        <DonutBreakdown title="CO2 by Country" data={countryData} colors={countryColors} totalCo2Kg={totalCo2Kg} otherColor={countryOtherColor} />
         <DonutBreakdown title="CO2 by Aircraft Type" data={aircraftCategoryData} colors={aircraftCategoryColors} totalCo2Kg={totalCo2Kg} />
       </div>
     </DashboardCard>
@@ -154,13 +155,17 @@ function DonutBreakdown({
   title,
   data,
   colors,
-  totalCo2Kg
+  totalCo2Kg,
+  otherColor
 }: {
   title: string;
   data: DonutBreakdownPoint[];
   colors: string[];
   totalCo2Kg: number;
+  otherColor?: string;
 }) {
+  const getPointColor = (point: DonutBreakdownPoint, index: number) => (point.label === "Other" && otherColor ? otherColor : colors[index % colors.length]);
+
   return (
     <section className="flex h-full flex-col">
       <h3 className="text-sm font-semibold text-white">{title}</h3>
@@ -171,7 +176,7 @@ function DonutBreakdown({
               <PieChart>
                 <Pie data={data} dataKey="estimatedCo2Kg" innerRadius={28} outerRadius={56} paddingAngle={2}>
                   {data.map((entry, index) => (
-                    <Cell key={entry.label} fill={colors[index % colors.length]} />
+                    <Cell key={entry.label} fill={getPointColor(entry, index)} />
                   ))}
                 </Pie>
                 <Tooltip content={<DashboardTooltip />} />
@@ -186,7 +191,7 @@ function DonutBreakdown({
             {data.map((point, index) => (
               <div key={point.label} className="flex items-center justify-between gap-3 text-[0.82rem]">
                 <div className="flex min-w-0 items-center gap-2">
-                  <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: colors[index % colors.length] }} />
+                  <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: getPointColor(point, index) }} />
                   <span className="truncate text-white/76">{point.label}</span>
                 </div>
                 <span className="font-semibold tabular-nums text-white">{point.percent.toFixed(1)}%</span>
