@@ -1,6 +1,7 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { DataReportCharts } from "@/components/DataReportCharts";
+import { PublicShell } from "@/components/PublicShell";
 import { getDataReport } from "@/lib/data/report";
 import { formatCo2, formatKm } from "@/lib/format";
 import type { AwarenessRankPoint } from "@/lib/awareness/types";
@@ -11,8 +12,8 @@ export default async function DataPage() {
   const report = await getDataReport();
 
   return (
-    <main className="min-h-screen bg-charcoal text-white">
-      <section className="mx-auto max-w-7xl px-4 pb-14 pt-16 sm:px-6 sm:pt-24 lg:px-8">
+    <PublicShell>
+      <section className="mx-auto max-w-7xl pb-14 pt-16 sm:pt-24">
         <div className="max-w-3xl">
           <p className="text-sm font-semibold uppercase tracking-normal text-paper">Transparency report</p>
           <h1 className="mt-4 text-5xl font-semibold tracking-normal text-white sm:text-6xl lg:text-7xl">
@@ -28,7 +29,7 @@ export default async function DataPage() {
         </div>
       </section>
 
-      <section className="mx-auto max-w-7xl px-4 pb-20 sm:px-6 lg:px-8">
+      <section className="mx-auto max-w-7xl pb-20">
         <SectionIntro
           eyebrow="Dataset overview"
           title="What is currently in the local dataset"
@@ -45,7 +46,7 @@ export default async function DataPage() {
         </div>
       </section>
 
-      <section className="mx-auto max-w-7xl px-4 pb-20 sm:px-6 lg:px-8">
+      <section className="mx-auto max-w-7xl pb-20">
         <SectionIntro
           eyebrow="Freshness"
           title="Scheduled data refreshes"
@@ -64,7 +65,7 @@ export default async function DataPage() {
         </p>
       </section>
 
-      <section className="mx-auto max-w-7xl px-4 pb-20 sm:px-6 lg:px-8">
+      <section className="mx-auto max-w-7xl pb-20">
         <SectionIntro
           eyebrow="Attribution quality"
           title="Country and airport mapping confidence"
@@ -124,7 +125,7 @@ export default async function DataPage() {
         </section>
       </section>
 
-      <section className="mx-auto max-w-7xl px-4 pb-20 sm:px-6 lg:px-8">
+      <section className="mx-auto max-w-7xl pb-20">
         <SectionIntro
           eyebrow="Import activity"
           title="Ingestion health and historical coverage"
@@ -145,7 +146,7 @@ export default async function DataPage() {
         </div>
       </section>
 
-      <section className="mx-auto max-w-7xl px-4 pb-20 sm:px-6 lg:px-8">
+      <section className="mx-auto max-w-7xl pb-20">
         <SectionIntro
           eyebrow="Aggregate views"
           title="Grouped emissions, without individual aircraft exposure"
@@ -159,7 +160,7 @@ export default async function DataPage() {
       </section>
 
       <section className="border-t border-white/10 bg-white/[0.025]">
-        <div className="mx-auto grid max-w-7xl gap-10 px-4 py-20 sm:px-6 lg:grid-cols-[0.8fr_1.2fr] lg:px-8">
+        <div className="mx-auto grid max-w-7xl gap-10 py-20 lg:grid-cols-[0.8fr_1.2fr]">
           <div>
             <p className="text-sm font-semibold uppercase tracking-normal text-paper">Dataset notes</p>
             <h2 className="mt-4 text-4xl font-semibold tracking-normal text-white">How this report should be read</h2>
@@ -183,7 +184,7 @@ export default async function DataPage() {
           </div>
         </div>
       </section>
-    </main>
+    </PublicShell>
   );
 }
 

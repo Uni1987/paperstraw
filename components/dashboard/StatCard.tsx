@@ -5,13 +5,15 @@ export function StatCard({
   value,
   detail,
   accent = "green",
-  icon
+  icon,
+  compact = false
 }: {
   label: string;
   value: string;
   detail: string;
   accent?: "green" | "gold" | "blue" | "purple" | "pink";
   icon: ReactNode;
+  compact?: boolean;
 }) {
   const accentClass = {
     green: "from-emerald-400/30 text-emerald-300 ring-emerald-300/20",
@@ -22,18 +24,26 @@ export function StatCard({
   }[accent];
 
   return (
-    <article className="rounded-2xl border border-white/10 bg-gradient-to-br from-white/[0.075] to-white/[0.025] p-5 shadow-2xl shadow-black/25">
+    <article
+      className={`rounded-2xl border border-white/10 bg-gradient-to-br from-white/[0.075] to-white/[0.025] shadow-2xl shadow-black/25 ${
+        compact ? "min-h-40 p-4" : "p-5"
+      }`}
+    >
       <div className="flex items-start justify-between gap-4">
         <div
-          className={`flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br to-transparent text-lg ring-1 ${accentClass}`}
+          className={`flex items-center justify-center rounded-xl bg-gradient-to-br to-transparent ring-1 ${accentClass} ${
+            compact ? "h-8 w-8 text-sm" : "h-10 w-10 text-lg"
+          }`}
           aria-hidden="true"
         >
           {icon}
         </div>
-        <p className="text-right text-[0.68rem] font-semibold uppercase tracking-[0.14em] text-white/54">{label}</p>
+        <p className={`text-right font-semibold uppercase tracking-[0.14em] text-white/54 ${compact ? "text-[0.62rem]" : "text-[0.68rem]"}`}>
+          {label}
+        </p>
       </div>
-      <p className="mt-5 text-3xl font-semibold tracking-normal text-white md:text-4xl">{value}</p>
-      <p className="mt-2 text-sm text-white/52">{detail}</p>
+      <p className={`font-semibold tracking-normal text-white ${compact ? "mt-4 text-2xl" : "mt-5 text-3xl md:text-4xl"}`}>{value}</p>
+      <p className={`mt-2 text-white/52 ${compact ? "text-xs leading-5" : "text-sm"}`}>{detail}</p>
     </article>
   );
 }

@@ -1,3 +1,4 @@
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import {
   isAirportAttributed,
@@ -32,7 +33,17 @@ type EndpointCount = {
   count: number;
 };
 
-export async function getAttributionQualityReport(): Promise<AttributionQualityReport> {
+export type AttributionQualityPeriod = {
+  from?: Date;
+  to?: Date;
+};
+
+export async function getAttributionQualityReport(period: AttributionQualityPeriod = {}): Promise<AttributionQualityReport> {
+  const dateFilter =
+    period.from && period.to
+      ? Prisma.sql`WHERE "departureAt" >= ${period.from} AND "departureAt" < ${period.to}`
+      : Prisma.empty;
+
   const endpointCounts = await prisma.$queryRaw<
     Array<{
       airportEndpoint: string | null;
@@ -49,6 +60,7 @@ export async function getAttributionQualityReport(): Promise<AttributionQualityR
         UPPER(TRIM(COALESCE("originAirport", ''))) AS "legacyEndpoint",
         COUNT(*)::bigint AS count
       FROM "Flight"
+      ${dateFilter}
       GROUP BY 1, 2, 3
       UNION ALL
       SELECT
@@ -57,6 +69,7 @@ export async function getAttributionQualityReport(): Promise<AttributionQualityR
         UPPER(TRIM(COALESCE("destinationAirport", ''))) AS "legacyEndpoint",
         COUNT(*)::bigint AS count
       FROM "Flight"
+      ${dateFilter}
       GROUP BY 1, 2, 3
     ) grouped_endpoints
     GROUP BY "airportEndpoint", "countryCode", "legacyEndpoint"

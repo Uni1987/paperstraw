@@ -25,6 +25,12 @@ type AirportFeatureProperties = {
   emissionScore: number;
 };
 
+type MapInitialView = {
+  center: [number, number];
+  zoom: number;
+  minZoom: number;
+};
+
 const sourceId = "airport-emissions";
 const rawSourceId = "airport-emissions-raw";
 const rawGlowLayerId = "airport-emissions-raw-glow";
@@ -51,13 +57,14 @@ export function AirportEmissionsMap({ airports }: { airports: AirportEmissionPoi
     async function createMap() {
       const maplibregl = (await import("maplibre-gl")).default;
       if (disposed || !containerRef.current) return;
+      const initialView = getMapInitialView();
 
       const map = new maplibregl.Map({
         container: containerRef.current,
         style: darkRasterStyle(),
-        center: [8, 28],
-        zoom: 1.35,
-        minZoom: 1,
+        center: initialView.center,
+        zoom: initialView.zoom,
+        minZoom: initialView.minZoom,
         maxZoom: 8,
         attributionControl: false
       });
@@ -148,14 +155,23 @@ export function AirportEmissionsMap({ airports }: { airports: AirportEmissionPoi
     setDataVisible(visible);
   }
 
+  function resetMapView() {
+    const initialView = getMapInitialView();
+    mapRef.current?.easeTo({
+      center: initialView.center,
+      zoom: initialView.zoom,
+      duration: 650
+    });
+  }
+
   return (
     <div className="relative overflow-hidden rounded-2xl border border-white/10 bg-[#030807] shadow-2xl shadow-black/35">
-      <div className="absolute left-5 top-5 z-10 max-w-md">
+      <div className="absolute left-4 top-4 z-10 max-w-[15rem] md:left-5 md:top-5 md:max-w-md">
         <p className="text-sm font-semibold uppercase tracking-[0.14em] text-white">World airport emissions heatmap</p>
-        <p className="mt-2 text-sm leading-5 text-white/58">Aggregate CO2 emissions from private jet activity at airports.</p>
+        <p className="mt-2 hidden text-sm leading-5 text-white/58 sm:block">Aggregate CO2 emissions from private jet activity at airports.</p>
       </div>
 
-      <div ref={containerRef} className="h-[34rem] w-full md:h-[36rem]" />
+      <div ref={containerRef} className="h-[26rem] w-full md:h-[36rem]" />
 
       {!mapReady ? (
         <div className="absolute inset-0 flex items-center justify-center bg-[#030807] text-sm text-white/58">
@@ -163,25 +179,33 @@ export function AirportEmissionsMap({ airports }: { airports: AirportEmissionPoi
         </div>
       ) : null}
 
-      <div className="absolute bottom-5 left-5 z-10 rounded-xl border border-white/10 bg-[#07100f]/88 p-4 shadow-2xl backdrop-blur">
+      <div className="absolute bottom-3 left-3 z-10 rounded-xl border border-white/10 bg-[#07100f]/88 p-2.5 shadow-2xl backdrop-blur md:bottom-5 md:left-5 md:p-4">
         <p className="text-[0.68rem] font-semibold uppercase tracking-[0.14em] text-white/74">CO2 emissions tonnes</p>
-        <div className="mt-3 h-3 w-44 rounded-full bg-gradient-to-r from-violet-700 via-orange-500 to-yellow-100 shadow-[0_0_22px_rgba(217,164,65,0.42)]" />
+        <div className="mt-2.5 h-2.5 w-28 rounded-full bg-gradient-to-r from-violet-700 via-orange-500 to-yellow-100 shadow-[0_0_22px_rgba(217,164,65,0.42)] md:mt-3 md:h-3 md:w-44" />
         <div className="mt-2 flex justify-between text-[0.65rem] font-semibold uppercase tracking-[0.12em] text-white/62">
           <span>Low</span>
           <span>High</span>
         </div>
       </div>
 
-      <div className="absolute right-5 top-1/2 z-10 flex -translate-y-1/2 flex-col overflow-hidden rounded-xl border border-white/10 bg-[#07100f]/88 shadow-2xl backdrop-blur">
-        <button type="button" className="h-11 w-11 text-xl text-white transition hover:bg-white/10" onClick={() => mapRef.current?.zoomIn()}>
+      <div className="absolute right-3 top-1/2 z-10 flex -translate-y-1/2 flex-col overflow-hidden rounded-xl border border-white/10 bg-[#07100f]/88 shadow-2xl backdrop-blur md:right-5">
+        <button type="button" className="h-9 w-9 text-lg text-white transition hover:bg-white/10 md:h-11 md:w-11 md:text-xl" onClick={() => mapRef.current?.zoomIn()}>
           +
         </button>
-        <button type="button" className="h-11 w-11 border-t border-white/10 text-xl text-white transition hover:bg-white/10" onClick={() => mapRef.current?.zoomOut()}>
+        <button type="button" className="h-9 w-9 border-t border-white/10 text-lg text-white transition hover:bg-white/10 md:h-11 md:w-11 md:text-xl" onClick={() => mapRef.current?.zoomOut()}>
           -
         </button>
         <button
           type="button"
-          className="h-11 w-11 border-t border-white/10 text-sm text-white transition hover:bg-white/10"
+          className="h-9 w-9 border-t border-white/10 text-[0.56rem] font-semibold uppercase tracking-[0.08em] text-white transition hover:bg-white/10 md:h-11 md:w-11 md:text-[0.62rem]"
+          title="Reset map view"
+          onClick={resetMapView}
+        >
+          Fit
+        </button>
+        <button
+          type="button"
+          className="h-9 w-9 border-t border-white/10 text-xs text-white transition hover:bg-white/10 md:h-11 md:w-11 md:text-sm"
           aria-pressed={dataVisible}
           title="Toggle emissions layer"
           onClick={() => setLayerVisibility(!dataVisible)}
@@ -346,6 +370,22 @@ function buildAirportGeoJson(airports: AirportEmissionPoint[], maxCo2Kg: number)
         emissionScore: Math.log1p(airport.totalCo2Kg) / Math.log1p(maxCo2Kg)
       } satisfies AirportFeatureProperties
     }))
+  };
+}
+
+function getMapInitialView(): MapInitialView {
+  if (typeof window !== "undefined" && window.matchMedia("(max-width: 767px)").matches) {
+    return {
+      center: [0, 12],
+      zoom: 0.08,
+      minZoom: 0
+    };
+  }
+
+  return {
+    center: [8, 28],
+    zoom: 1.35,
+    minZoom: 1
   };
 }
 

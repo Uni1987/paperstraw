@@ -18,11 +18,12 @@ export type AirportEmissionPoint = {
 };
 
 export async function getVisualDashboardReport() {
+  const period = getDashboardYearToDatePeriod(new Date());
   const [awareness, freshness, attributionQuality, aggregateCounts, airportEmissionPoints] = await Promise.all([
-    getAwarenessDashboardData(),
+    getAwarenessDashboardData(period.now),
     getImportFreshness(),
-    getAttributionQualityReport(),
-    getAggregateCounts(),
+    getAttributionQualityReport({ from: period.yearStart, to: period.nextYearStart }),
+    getAggregateCounts(period),
     getAirportEmissionPoints()
   ]);
 
@@ -44,13 +45,34 @@ export async function getVisualDashboardReport() {
   };
 }
 
-async function getAggregateCounts() {
+type DashboardYearToDatePeriod = ReturnType<typeof getDashboardYearToDatePeriod>;
+
+function getDashboardYearToDatePeriod(now: Date) {
+  const yearStart = new Date(now.getFullYear(), 0, 1);
+  const nextYearStart = new Date(now.getFullYear() + 1, 0, 1);
+  const rollupYearStartLower = new Date(yearStart);
+  rollupYearStartLower.setDate(rollupYearStartLower.getDate() - 1);
+  const rollupYearStartUpper = new Date(yearStart);
+  rollupYearStartUpper.setDate(rollupYearStartUpper.getDate() + 1);
+
+  return {
+    now,
+    yearStart,
+    nextYearStart,
+    rollupYearStartLower,
+    rollupYearStartUpper
+  };
+}
+
+async function getAggregateCounts(period: DashboardYearToDatePeriod) {
   try {
     const rows = await prisma.$queryRaw<Array<{ group: string; count: bigint }>>`
       SELECT "group", COUNT(DISTINCT "key")::bigint AS count
       FROM "AggregateRollup"
       WHERE "period" = ${AggregatePeriods.YEAR}
         AND "group" IN (${AggregateGroups.AIRPORT}, ${AggregateGroups.COUNTRY})
+        AND "periodStart" >= ${period.rollupYearStartLower}
+        AND "periodStart" < ${period.rollupYearStartUpper}
         AND "estimatedCo2Kg" > 0
       GROUP BY "group"
     `;

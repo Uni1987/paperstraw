@@ -32,6 +32,7 @@ type VisualsProps = {
   freshness: ImportFreshness;
   totalCo2Kg: number;
   airportEmissionPoints: AirportEmissionPoint[];
+  showMap?: boolean;
 };
 
 export function DashboardVisuals({
@@ -41,14 +42,17 @@ export function DashboardVisuals({
   comparisons,
   freshness,
   totalCo2Kg,
-  airportEmissionPoints
+  airportEmissionPoints,
+  showMap = true
 }: VisualsProps) {
   return (
     <>
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_300px]">
-        <AirportEmissionsMap airports={airportEmissionPoints} />
-        <FreshnessPanel freshness={freshness} />
-      </div>
+      {showMap ? (
+        <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_300px]">
+          <AirportEmissionsMap airports={airportEmissionPoints} />
+          <FreshnessPanel freshness={freshness} />
+        </div>
+      ) : null}
 
       <div className="grid gap-4 xl:grid-cols-[1.05fr_0.95fr]">
         <EmissionsTimelineChart data={monthlySeries} />
@@ -59,6 +63,8 @@ export function DashboardVisuals({
         <CountryEmissionsChart data={topCountries} totalCo2Kg={totalCo2Kg} />
         <ComparisonCards comparisons={comparisons} />
       </div>
+
+      {!showMap ? <FreshnessPanel freshness={freshness} /> : null}
     </>
   );
 }

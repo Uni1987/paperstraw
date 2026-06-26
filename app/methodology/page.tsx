@@ -1,10 +1,11 @@
+import { PublicShell } from "@/components/PublicShell";
 import { PAPER_STRAW_CO2_KG } from "@/lib/awareness/equivalents";
 import type { ReactNode } from "react";
 
 export default function MethodologyPage() {
   return (
-    <main className="min-h-screen bg-charcoal text-white">
-      <section className="mx-auto max-w-4xl px-4 py-16 sm:px-6 lg:px-8 lg:py-24">
+    <PublicShell>
+      <section className="mx-auto max-w-4xl py-16 lg:py-24">
         <p className="text-sm font-semibold uppercase tracking-[0.18em] text-paper">Transparency</p>
         <h1 className="mt-4 text-5xl font-semibold tracking-normal text-white sm:text-7xl">Methodology</h1>
         <p className="mt-6 max-w-3xl text-lg leading-8 text-white/62">
@@ -44,7 +45,7 @@ export default function MethodologyPage() {
           </MethodSection>
         </div>
       </section>
-    </main>
+    </PublicShell>
   );
 }
 

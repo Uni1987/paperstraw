@@ -1,4 +1,4 @@
-import Link from "next/link";
+import { PublicShell } from "@/components/PublicShell";
 import { buildComparisonCards, COMPARISON_CATEGORIES, type ComparisonCardData } from "@/lib/comparisons";
 import { getAwarenessDashboardData } from "@/lib/awareness/aggregates";
 
@@ -10,13 +10,9 @@ export default async function ComparisonsPage() {
   const comparisons = buildComparisonCards(co2Tons);
 
   return (
-    <main className="min-h-screen bg-charcoal text-white">
-      <section className="mx-auto max-w-7xl px-4 py-14 sm:px-6 lg:px-8 lg:py-20">
-        <Link href="/" className="text-sm font-semibold text-paper hover:text-white">
-          Back to PaperStraw
-        </Link>
-
-        <div className="mt-10 max-w-4xl">
+    <PublicShell>
+      <section className="mx-auto max-w-7xl py-14 lg:py-20">
+        <div className="max-w-4xl">
           <p className="text-sm font-semibold uppercase tracking-[0.18em] text-paper">Comparisons</p>
           <h1 className="mt-4 text-5xl font-semibold leading-tight tracking-normal text-white sm:text-7xl">
             More ways to understand this number
@@ -53,7 +49,7 @@ export default async function ComparisonsPage() {
           technology, fuel mix, manufacturing process and individual circumstances.
         </footer>
       </section>
-    </main>
+    </PublicShell>
   );
 }
 
