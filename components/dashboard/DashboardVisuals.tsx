@@ -15,12 +15,13 @@ import {
   YAxis
 } from "recharts";
 import { Car, House, TreePine } from "lucide-react";
+import type { ReactNode } from "react";
 import { AirportEmissionsMap } from "@/components/dashboard/AirportEmissionsMap";
 import { DashboardCard } from "@/components/dashboard/DashboardCard";
+import { dashboardGridRowClass } from "@/components/dashboard/dashboardGrid";
 import type { AwarenessRankPoint, AwarenessSeriesPoint } from "@/lib/awareness/types";
 import type { ComparisonCardData } from "@/lib/comparisons";
 import type { AirportEmissionPoint } from "@/lib/dashboard/report";
-import type { ImportFreshness } from "@/lib/ingestion/freshness";
 
 const countryColors = ["#8B5CF6", "#3B82F6", "#22C55E", "#D9A441", "#F97316", "#EC4899"];
 
@@ -29,7 +30,6 @@ type VisualsProps = {
   topAirports: AwarenessRankPoint[];
   topCountries: AwarenessRankPoint[];
   comparisons: ComparisonCardData[];
-  freshness: ImportFreshness;
   totalCo2Kg: number;
   airportEmissionPoints: AirportEmissionPoint[];
   showMap?: boolean;
@@ -40,49 +40,29 @@ export function DashboardVisuals({
   topAirports,
   topCountries,
   comparisons,
-  freshness,
   totalCo2Kg,
   airportEmissionPoints,
   showMap = true
 }: VisualsProps) {
   return (
     <>
-      {showMap ? (
-        <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_300px]">
-          <AirportEmissionsMap airports={airportEmissionPoints} />
-          <FreshnessPanel freshness={freshness} />
-        </div>
-      ) : null}
+      {showMap ? <AirportEmissionsMap airports={airportEmissionPoints} /> : null}
 
-      <div className="grid gap-4 xl:grid-cols-[1.05fr_0.95fr]">
+      <DashboardGridRow>
         <EmissionsTimelineChart data={monthlySeries} />
         <TopAirportsChart data={topAirports} />
-      </div>
+      </DashboardGridRow>
 
-      <div className="grid gap-4 xl:grid-cols-[0.95fr_1.05fr]">
+      <DashboardGridRow>
         <CountryEmissionsChart data={topCountries} totalCo2Kg={totalCo2Kg} />
         <ComparisonCards comparisons={comparisons} />
-      </div>
-
-      {!showMap ? <FreshnessPanel freshness={freshness} /> : null}
+      </DashboardGridRow>
     </>
   );
 }
 
-function FreshnessPanel({ freshness }: { freshness: ImportFreshness }) {
-  return (
-    <DashboardCard title="Data source" eyebrow="Freshness">
-      <div className="space-y-3 p-4">
-        <StatusRow label="Last successful update" value={formatDateTime(freshness.lastSuccessfulUpdateAt)} />
-        <StatusRow label="Import status" value={freshness.latestStatus?.toLowerCase() ?? "n/a"} />
-        <StatusRow label="Records imported" value={freshness.latestRecordsImported.toLocaleString()} />
-        <StatusRow label="Latest run ended" value={formatDateTime(freshness.latestRunEndedAt)} />
-        <div className="rounded-lg border border-white/10 bg-black/20 px-3 py-2.5">
-          <p className="text-xs leading-5 text-white/48">{freshness.publicMessage}</p>
-        </div>
-      </div>
-    </DashboardCard>
-  );
+function DashboardGridRow({ children }: { children: ReactNode }) {
+  return <div className={dashboardGridRowClass}>{children}</div>;
 }
 
 function EmissionsTimelineChart({ data }: { data: AwarenessSeriesPoint[] }) {
@@ -154,7 +134,7 @@ function CountryEmissionsChart({
 
   return (
     <DashboardCard title="CO2 emissions by country">
-      <div className="grid gap-4 p-5 md:grid-cols-[minmax(0,220px)_1fr]">
+      <div className="grid min-h-80 gap-4 p-5 md:grid-cols-[minmax(0,220px)_1fr]">
         <div className="relative h-56">
           <ResponsiveContainer width="100%" height="100%">
             <PieChart>
@@ -193,7 +173,7 @@ function CountryEmissionsChart({
 function ComparisonCards({ comparisons }: { comparisons: ComparisonCardData[] }) {
   return (
     <DashboardCard title="CO2 comparisons">
-      <div className="grid gap-4 p-5 md:grid-cols-3">
+      <div className="grid min-h-80 gap-4 p-5 md:grid-cols-3">
         {comparisons.map((comparison) => (
           <article
             key={comparison.id}
@@ -210,15 +190,6 @@ function ComparisonCards({ comparisons }: { comparisons: ComparisonCardData[] })
         ))}
       </div>
     </DashboardCard>
-  );
-}
-
-function StatusRow({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex items-start justify-between gap-4 border-b border-white/10 pb-3 last:border-0 last:pb-0">
-      <p className="text-xs leading-5 text-white/48">{label}</p>
-      <p className="max-w-[10rem] text-right text-sm font-semibold leading-5 text-white">{value}</p>
-    </div>
   );
 }
 
@@ -265,15 +236,4 @@ function DashboardTooltip({
 
 function formatTonnes(valueKg: number) {
   return Math.round(valueKg / 1000).toLocaleString();
-}
-
-function formatDateTime(date: Date | null) {
-  if (!date) return "No successful update yet";
-  return date.toLocaleString("en-US", {
-    month: "short",
-    day: "2-digit",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit"
-  });
 }

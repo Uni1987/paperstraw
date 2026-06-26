@@ -2,7 +2,9 @@ import { PublicShell } from "@/components/PublicShell";
 import { AirportEmissionsMap } from "@/components/dashboard/AirportEmissionsMap";
 import { DashboardVisuals } from "@/components/dashboard/DashboardVisuals";
 import { StatCard } from "@/components/dashboard/StatCard";
+import { dashboardGridRowClass } from "@/components/dashboard/dashboardGrid";
 import { getVisualDashboardReport } from "@/lib/dashboard/report";
+import type { ImportFreshness } from "@/lib/ingestion/freshness";
 
 export async function DashboardHome() {
   const report = await getVisualDashboardReport();
@@ -12,28 +14,28 @@ export async function DashboardHome() {
     {
       label: "Total CO2 emitted",
       value: `${formatTonnes(awareness.yearCo2Kg)} t`,
-      detail: "Year-to-date estimate",
+      detail: "2026 year-to-date",
       accent: "purple" as const,
       icon: "CO2"
     },
     {
       label: "Total flights",
       value: awareness.yearFlights.toLocaleString(),
-      detail: "Aggregate flight records",
+      detail: "Flights analysed",
       accent: "blue" as const,
       icon: "FL"
     },
     {
       label: "Airports",
       value: aggregateCounts.airports.toLocaleString(),
-      detail: "Attributed airport groups",
+      detail: "Mapped airports",
       accent: "pink" as const,
       icon: "AP"
     },
     {
       label: "Countries",
       value: aggregateCounts.countries.toLocaleString(),
-      detail: "Attributed country groups",
+      detail: "Countries represented",
       accent: "gold" as const,
       icon: "GL"
     },
@@ -48,13 +50,7 @@ export async function DashboardHome() {
 
   return (
     <PublicShell
-      sidebarFooter={
-        <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-4">
-          <p className="text-[0.68rem] font-semibold uppercase tracking-[0.16em] text-emerald-300">Data updated</p>
-          <p className="mt-2 text-sm text-white/76">{formatDateTime(freshness.lastSuccessfulUpdateAt)}</p>
-          <p className="mt-4 text-xs leading-5 text-white/45">ADSB.lol archive/API data with stored aggregate rollups.</p>
-        </div>
-      }
+      sidebarFooter={<DataStatusWidget freshness={freshness} />}
     >
       <header className="grid gap-3 md:gap-6 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start">
         <div>
@@ -93,7 +89,6 @@ export async function DashboardHome() {
           topAirports={awareness.topAirports}
           topCountries={awareness.topCountries}
           comparisons={comparisons}
-          freshness={freshness}
           totalCo2Kg={awareness.yearCo2Kg}
           airportEmissionPoints={airportEmissionPoints}
           showMap={false}
@@ -106,13 +101,12 @@ export async function DashboardHome() {
           topAirports={awareness.topAirports}
           topCountries={awareness.topCountries}
           comparisons={comparisons}
-          freshness={freshness}
           totalCo2Kg={awareness.yearCo2Kg}
           airportEmissionPoints={airportEmissionPoints}
         />
       </section>
 
-      <section className="mt-6 grid gap-4 md:grid-cols-2" id="attribution">
+      <section className={`mt-6 ${dashboardGridRowClass}`} id="attribution">
         <MiniDataPanel
           title="Airport attribution"
           value={`${attributionQuality.airportAttributionRate}%`}
@@ -125,6 +119,31 @@ export async function DashboardHome() {
         />
       </section>
     </PublicShell>
+  );
+}
+
+function DataStatusWidget({ freshness }: { freshness: ImportFreshness }) {
+  const importedToday = isSameDay(freshness.latestRunEndedAt, new Date()) ? freshness.latestRecordsImported : 0;
+
+  return (
+    <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-4">
+      <p className="text-[0.68rem] font-semibold uppercase tracking-[0.16em] text-emerald-300">Data status</p>
+      <div className="mt-4 space-y-3">
+        <SidebarStatusRow label="Source" value="ADS-B.lol archive/API" />
+        <SidebarStatusRow label="Updated" value={formatDateTime(freshness.lastSuccessfulUpdateAt)} />
+        <SidebarStatusRow label="Imported today" value={`${importedToday.toLocaleString()} flights`} />
+        <SidebarStatusRow label="Status" value={formatFreshnessStatus(freshness.latestStatus)} />
+      </div>
+    </div>
+  );
+}
+
+function SidebarStatusRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="border-b border-white/10 pb-3 last:border-0 last:pb-0">
+      <p className="text-[0.65rem] font-semibold uppercase tracking-[0.14em] text-white/36">{label}</p>
+      <p className="mt-1 text-sm font-semibold leading-5 text-white/78">{value}</p>
+    </div>
   );
 }
 
@@ -151,4 +170,15 @@ function formatDateTime(date: Date | null) {
     hour: "2-digit",
     minute: "2-digit"
   });
+}
+
+function formatFreshnessStatus(status: string | null) {
+  if (status === "SUCCESS" || status === "PARTIAL") return "Healthy";
+  if (status === "FAILED") return "Delayed";
+  return "Pending";
+}
+
+function isSameDay(left: Date | null, right: Date) {
+  if (!left) return false;
+  return left.getFullYear() === right.getFullYear() && left.getMonth() === right.getMonth() && left.getDate() === right.getDate();
 }

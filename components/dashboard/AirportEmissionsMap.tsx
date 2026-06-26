@@ -29,6 +29,7 @@ type MapInitialView = {
   center: [number, number];
   zoom: number;
   minZoom: number;
+  bounds?: [[number, number], [number, number]];
 };
 
 const sourceId = "airport-emissions";
@@ -92,6 +93,7 @@ export function AirportEmissionsMap({ airports }: { airports: AirportEmissionPoi
         } as never);
 
         addEmissionLayers(map, maxCo2Kg);
+        applyInitialView(map, initialView, 0);
         setMapReady(true);
       });
 
@@ -157,11 +159,9 @@ export function AirportEmissionsMap({ airports }: { airports: AirportEmissionPoi
 
   function resetMapView() {
     const initialView = getMapInitialView();
-    mapRef.current?.easeTo({
-      center: initialView.center,
-      zoom: initialView.zoom,
-      duration: 650
-    });
+    const map = mapRef.current;
+    if (!map) return;
+    applyInitialView(map, initialView, 650);
   }
 
   return (
@@ -171,7 +171,7 @@ export function AirportEmissionsMap({ airports }: { airports: AirportEmissionPoi
         <p className="mt-2 hidden text-sm leading-5 text-white/58 sm:block">Aggregate CO2 emissions from private jet activity at airports.</p>
       </div>
 
-      <div ref={containerRef} className="h-[26rem] w-full md:h-[36rem]" />
+      <div ref={containerRef} className="h-[23rem] w-full md:h-[36rem]" />
 
       {!mapReady ? (
         <div className="absolute inset-0 flex items-center justify-center bg-[#030807] text-sm text-white/58">
@@ -376,9 +376,13 @@ function buildAirportGeoJson(airports: AirportEmissionPoint[], maxCo2Kg: number)
 function getMapInitialView(): MapInitialView {
   if (typeof window !== "undefined" && window.matchMedia("(max-width: 767px)").matches) {
     return {
-      center: [0, 12],
-      zoom: 0.08,
-      minZoom: 0
+      center: [0, 8],
+      zoom: -0.55,
+      minZoom: -0.75,
+      bounds: [
+        [-179.9, -58],
+        [179.9, 78]
+      ]
     };
   }
 
@@ -387,6 +391,22 @@ function getMapInitialView(): MapInitialView {
     zoom: 1.35,
     minZoom: 1
   };
+}
+
+function applyInitialView(map: MapLibreMap, initialView: MapInitialView, duration: number) {
+  if (initialView.bounds) {
+    map.fitBounds(initialView.bounds, {
+      duration,
+      padding: { top: 24, right: 8, bottom: 24, left: 8 }
+    });
+    return;
+  }
+
+  map.easeTo({
+    center: initialView.center,
+    zoom: initialView.zoom,
+    duration
+  });
 }
 
 function featureToTooltip(feature: MapGeoJSONFeature, x: number, y: number): TooltipState {
