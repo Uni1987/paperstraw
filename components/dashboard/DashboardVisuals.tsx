@@ -21,14 +21,18 @@ import { DashboardCard } from "@/components/dashboard/DashboardCard";
 import { dashboardGridRowClass } from "@/components/dashboard/dashboardGrid";
 import type { AwarenessRankPoint, AwarenessSeriesPoint } from "@/lib/awareness/types";
 import type { ComparisonCardData } from "@/lib/comparisons";
+import { buildAircraftCategoryBreakdown, buildCountryBreakdown, type DonutBreakdownPoint } from "@/lib/dashboard/breakdowns";
 import type { AirportEmissionPoint } from "@/lib/dashboard/report";
+import { formatCompactNumber } from "@/lib/format";
 
 const countryColors = ["#8B5CF6", "#3B82F6", "#22C55E", "#D9A441", "#F97316", "#EC4899"];
+const aircraftCategoryColors = ["#22C55E", "#14B8A6", "#38BDF8", "#6366F1", "#A78BFA", "#F59E0B", "#94A3B8"];
 
 type VisualsProps = {
   monthlySeries: AwarenessSeriesPoint[];
   topAirports: AwarenessRankPoint[];
   topCountries: AwarenessRankPoint[];
+  aircraftTypes: AwarenessRankPoint[];
   comparisons: ComparisonCardData[];
   totalCo2Kg: number;
   airportEmissionPoints: AirportEmissionPoint[];
@@ -39,6 +43,7 @@ export function DashboardVisuals({
   monthlySeries,
   topAirports,
   topCountries,
+  aircraftTypes,
   comparisons,
   totalCo2Kg,
   airportEmissionPoints,
@@ -54,7 +59,7 @@ export function DashboardVisuals({
       </DashboardGridRow>
 
       <DashboardGridRow>
-        <CountryEmissionsChart data={topCountries} totalCo2Kg={totalCo2Kg} />
+        <EmissionsBreakdownCard countries={topCountries} aircraftTypes={aircraftTypes} totalCo2Kg={totalCo2Kg} />
         <ComparisonCards comparisons={comparisons} />
       </DashboardGridRow>
     </>
@@ -123,50 +128,74 @@ function TopAirportsChart({ data }: { data: AwarenessRankPoint[] }) {
   );
 }
 
-function CountryEmissionsChart({
-  data,
+function EmissionsBreakdownCard({
+  countries,
+  aircraftTypes,
   totalCo2Kg
 }: {
-  data: AwarenessRankPoint[];
+  countries: AwarenessRankPoint[];
+  aircraftTypes: AwarenessRankPoint[];
   totalCo2Kg: number;
 }) {
-  const chartData = data.slice(0, 6);
+  const countryData = buildCountryBreakdown(countries, totalCo2Kg);
+  const aircraftCategoryData = buildAircraftCategoryBreakdown(aircraftTypes, totalCo2Kg);
 
   return (
-    <DashboardCard title="CO2 emissions by country">
-      <div className="grid min-h-80 gap-4 p-5 md:grid-cols-[minmax(0,220px)_1fr]">
-        <div className="relative h-56">
-          <ResponsiveContainer width="100%" height="100%">
-            <PieChart>
-              <Pie data={chartData} dataKey="estimatedCo2Kg" innerRadius={64} outerRadius={96} paddingAngle={2}>
-                {chartData.map((entry, index) => (
-                  <Cell key={entry.label} fill={countryColors[index % countryColors.length]} />
-                ))}
-              </Pie>
-              <Tooltip content={<DashboardTooltip />} />
-            </PieChart>
-          </ResponsiveContainer>
-          <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center text-center">
-            <p className="text-2xl font-semibold text-white">{formatTonnes(totalCo2Kg)}</p>
-            <p className="text-xs uppercase tracking-[0.12em] text-white/48">total</p>
-          </div>
-        </div>
-        <div className="space-y-3 self-center">
-          {chartData.map((country, index) => {
-            const percent = totalCo2Kg ? (country.estimatedCo2Kg / totalCo2Kg) * 100 : 0;
-            return (
-              <div key={country.label} className="flex items-center justify-between gap-4 text-sm">
-                <div className="flex min-w-0 items-center gap-3">
-                  <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: countryColors[index % countryColors.length] }} />
-                  <span className="truncate text-white/76">{country.label}</span>
-                </div>
-                <span className="font-semibold tabular-nums text-white">{percent.toFixed(1)}%</span>
-              </div>
-            );
-          })}
-        </div>
+    <DashboardCard title="CO2 emissions breakdown">
+      <div className="grid min-h-80 gap-10 p-5 md:grid-cols-2 xl:gap-12">
+        <DonutBreakdown title="CO2 by Country" data={countryData} colors={countryColors} totalCo2Kg={totalCo2Kg} />
+        <DonutBreakdown title="CO2 by Aircraft Type" data={aircraftCategoryData} colors={aircraftCategoryColors} totalCo2Kg={totalCo2Kg} />
       </div>
     </DashboardCard>
+  );
+}
+
+function DonutBreakdown({
+  title,
+  data,
+  colors,
+  totalCo2Kg
+}: {
+  title: string;
+  data: DonutBreakdownPoint[];
+  colors: string[];
+  totalCo2Kg: number;
+}) {
+  return (
+    <section className="flex h-full flex-col">
+      <h3 className="text-sm font-semibold text-white">{title}</h3>
+      <div className="mt-6 flex justify-center">
+        <div className="grid w-full max-w-[18rem] grid-cols-[7rem_minmax(0,1fr)] items-start gap-5 xl:max-w-[19rem] xl:gap-7">
+          <div className="relative h-36 w-28 self-start">
+            <ResponsiveContainer width="100%" height="100%">
+              <PieChart>
+                <Pie data={data} dataKey="estimatedCo2Kg" innerRadius={28} outerRadius={56} paddingAngle={2}>
+                  {data.map((entry, index) => (
+                    <Cell key={entry.label} fill={colors[index % colors.length]} />
+                  ))}
+                </Pie>
+                <Tooltip content={<DashboardTooltip />} />
+              </PieChart>
+            </ResponsiveContainer>
+            <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center text-center">
+              <p className="text-[0.82rem] font-semibold leading-none text-white">{formatCompactNumber(totalCo2Kg / 1000)}</p>
+              <p className="mt-1 text-[0.5rem] uppercase leading-none tracking-[0.1em] text-white/48">TOTAL</p>
+            </div>
+          </div>
+          <div className="space-y-1.5">
+            {data.map((point, index) => (
+              <div key={point.label} className="flex items-center justify-between gap-3 text-[0.82rem]">
+                <div className="flex min-w-0 items-center gap-2">
+                  <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: colors[index % colors.length] }} />
+                  <span className="truncate text-white/76">{point.label}</span>
+                </div>
+                <span className="font-semibold tabular-nums text-white">{point.percent.toFixed(1)}%</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </section>
   );
 }
 

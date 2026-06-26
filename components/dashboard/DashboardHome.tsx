@@ -79,6 +79,7 @@ export async function DashboardHome() {
           monthlySeries={awareness.monthlySeries}
           topAirports={awareness.topAirports}
           topCountries={awareness.topCountries}
+          aircraftTypes={awareness.aircraftTypes}
           comparisons={comparisons}
           totalCo2Kg={awareness.yearCo2Kg}
           airportEmissionPoints={airportEmissionPoints}
@@ -91,6 +92,7 @@ export async function DashboardHome() {
           monthlySeries={awareness.monthlySeries}
           topAirports={awareness.topAirports}
           topCountries={awareness.topCountries}
+          aircraftTypes={awareness.aircraftTypes}
           comparisons={comparisons}
           totalCo2Kg={awareness.yearCo2Kg}
           airportEmissionPoints={airportEmissionPoints}
