@@ -2,7 +2,6 @@ import { PublicShell } from "@/components/PublicShell";
 import { AirportEmissionsMap } from "@/components/dashboard/AirportEmissionsMap";
 import { DashboardVisuals } from "@/components/dashboard/DashboardVisuals";
 import { StatCard } from "@/components/dashboard/StatCard";
-import { dashboardGridRowClass } from "@/components/dashboard/dashboardGrid";
 import { getVisualDashboardReport } from "@/lib/dashboard/report";
 import type { ImportFreshness } from "@/lib/ingestion/freshness";
 
@@ -49,20 +48,12 @@ export async function DashboardHome() {
   ];
 
   return (
-    <PublicShell
-      sidebarFooter={<DataStatusWidget freshness={freshness} />}
-    >
-      <header className="grid gap-3 md:gap-6 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start">
-        <div>
-          <h1 className="max-w-4xl text-3xl font-semibold leading-tight tracking-normal text-white md:text-6xl">
-            Private jets. Public impact.
-          </h1>
-          <p className="mt-2 text-base text-white/64 md:mt-4 md:text-xl">Real data. Real emissions. No excuses.</p>
-        </div>
-        <div className="hidden rounded-2xl border border-white/10 bg-white/[0.045] px-4 py-3 text-sm text-white/66 md:block">
-          <span className="text-white/42">Period</span>
-          <span className="ml-3 font-semibold text-white">2026 year to date</span>
-        </div>
+    <PublicShell sidebarFooter={<DataStatusWidget freshness={freshness} />}>
+      <header>
+        <h1 className="max-w-4xl text-3xl font-semibold leading-tight tracking-normal text-white md:text-6xl">
+          Private jets. Public impact.
+        </h1>
+        <p className="mt-2 text-base text-white/64 md:mt-4 md:text-xl">Real data. Real emissions. No excuses.</p>
       </header>
 
       <section className="-mx-4 mt-4 flex snap-x gap-3 overflow-x-auto px-4 pb-2 md:hidden">
@@ -105,19 +96,6 @@ export async function DashboardHome() {
           airportEmissionPoints={airportEmissionPoints}
         />
       </section>
-
-      <section className={`mt-6 ${dashboardGridRowClass}`} id="attribution">
-        <MiniDataPanel
-          title="Airport attribution"
-          value={`${attributionQuality.airportAttributionRate}%`}
-          detail={`${attributionQuality.airportAttributedEndpoints.toLocaleString()} of ${attributionQuality.totalEndpoints.toLocaleString()} endpoints attributed`}
-        />
-        <MiniDataPanel
-          title="Country attribution"
-          value={`${attributionQuality.countryAttributionRate}%`}
-          detail={`${attributionQuality.countryAttributedEndpoints.toLocaleString()} of ${attributionQuality.totalEndpoints.toLocaleString()} endpoints attributed`}
-        />
-      </section>
     </PublicShell>
   );
 }
@@ -144,16 +122,6 @@ function SidebarStatusRow({ label, value }: { label: string; value: string }) {
       <p className="text-[0.65rem] font-semibold uppercase tracking-[0.14em] text-white/36">{label}</p>
       <p className="mt-1 text-sm font-semibold leading-5 text-white/78">{value}</p>
     </div>
-  );
-}
-
-function MiniDataPanel({ title, value, detail }: { title: string; value: string; detail: string }) {
-  return (
-    <article className="rounded-2xl border border-white/10 bg-white/[0.045] p-5">
-      <p className="text-sm text-white/52">{title}</p>
-      <p className="mt-3 text-4xl font-semibold text-white">{value}</p>
-      <p className="mt-2 text-sm text-white/50">{detail}</p>
-    </article>
   );
 }
 
