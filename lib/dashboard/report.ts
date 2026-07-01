@@ -8,15 +8,13 @@ import { getImportFreshness } from "@/lib/ingestion/freshness";
 import { prisma } from "@/lib/prisma";
 
 export type AirportEmissionPoint = {
-  icao: string;
-  airportName: string;
-  country: string;
-  countryCode: string;
   latitude: number;
   longitude: number;
   totalCo2Kg: number;
-  flights: number;
 };
+
+const AIRPORT_MAP_GRID_DEGREES = 0.35;
+const AIRPORT_MAP_PAYLOAD_WARNING_BYTES = 1_500_000;
 
 export const getVisualDashboardReport = unstable_cache(getVisualDashboardReportUncached, ["visual-dashboard-report-v2"], {
   revalidate: 300
@@ -93,7 +91,7 @@ async function getAggregateCounts(period: DashboardYearToDatePeriod) {
   }
 }
 
-async function getAirportEmissionPoints(): Promise<AirportEmissionPoint[]> {
+export async function getAirportEmissionPoints(): Promise<AirportEmissionPoint[]> {
   try {
     const rows = await prisma.aggregateRollup.findMany({
       where: {
@@ -108,7 +106,6 @@ async function getAirportEmissionPoints(): Promise<AirportEmissionPoint[]> {
       },
       select: {
         key: true,
-        flights: true,
         estimatedCo2Kg: true
       },
       orderBy: {
@@ -117,25 +114,66 @@ async function getAirportEmissionPoints(): Promise<AirportEmissionPoint[]> {
     });
 
     const seen = new Set<string>();
-    return rows.flatMap((row) => {
+    const airportPoints = rows.flatMap((row) => {
       const airport = resolveAirport(row.key);
       if (!airport || seen.has(airport.ident)) return [];
       seen.add(airport.ident);
 
       return [
         {
-          icao: airport.ident,
-          airportName: airport.name,
-          country: airport.countryName,
-          countryCode: airport.countryCode,
           latitude: airport.latitude,
           longitude: airport.longitude,
-          totalCo2Kg: Number(row.estimatedCo2Kg),
-          flights: row.flights
+          totalCo2Kg: Number(row.estimatedCo2Kg)
         }
       ];
     });
+    const aggregatedPoints = aggregateAirportEmissionPointsToGrid(airportPoints);
+    logAirportMapPayloadSize(aggregatedPoints, airportPoints.length);
+    return aggregatedPoints;
   } catch {
     return [];
   }
+}
+
+export function aggregateAirportEmissionPointsToGrid(points: AirportEmissionPoint[], gridDegrees = AIRPORT_MAP_GRID_DEGREES): AirportEmissionPoint[] {
+  const cells = new Map<string, { weightedLatitude: number; weightedLongitude: number; totalCo2Kg: number }>();
+
+  for (const point of points) {
+    if (!Number.isFinite(point.latitude) || !Number.isFinite(point.longitude) || !Number.isFinite(point.totalCo2Kg) || point.totalCo2Kg <= 0) {
+      continue;
+    }
+
+    const latIndex = Math.floor((point.latitude + 90) / gridDegrees);
+    const lonIndex = Math.floor((point.longitude + 180) / gridDegrees);
+    const key = `${latIndex}:${lonIndex}`;
+    const current = cells.get(key) ?? { weightedLatitude: 0, weightedLongitude: 0, totalCo2Kg: 0 };
+    current.weightedLatitude += point.latitude * point.totalCo2Kg;
+    current.weightedLongitude += point.longitude * point.totalCo2Kg;
+    current.totalCo2Kg += point.totalCo2Kg;
+    cells.set(key, current);
+  }
+
+  return [...cells.values()]
+    .map((cell) => ({
+      latitude: roundCoordinate(cell.weightedLatitude / cell.totalCo2Kg),
+      longitude: roundCoordinate(cell.weightedLongitude / cell.totalCo2Kg),
+      totalCo2Kg: Math.round(cell.totalCo2Kg)
+    }))
+    .sort((a, b) => b.totalCo2Kg - a.totalCo2Kg);
+}
+
+export function estimateAirportMapPayloadBytes(points: AirportEmissionPoint[]) {
+  return new TextEncoder().encode(JSON.stringify(points)).length;
+}
+
+function roundCoordinate(value: number) {
+  return Math.round(value * 10000) / 10000;
+}
+
+function logAirportMapPayloadSize(points: AirportEmissionPoint[], rawPointCount: number) {
+  if (process.env.NODE_ENV === "production") return;
+  const bytes = estimateAirportMapPayloadBytes(points);
+  const mb = (bytes / 1024 / 1024).toFixed(2);
+  const level = bytes > AIRPORT_MAP_PAYLOAD_WARNING_BYTES ? "warn" : "info";
+  console[level](`Dashboard airport map cache payload: ${bytes} bytes (${mb} MB), ${points.length}/${rawPointCount} grid cells.`);
 }

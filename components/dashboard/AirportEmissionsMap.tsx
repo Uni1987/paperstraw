@@ -7,19 +7,12 @@ import type { AirportEmissionPoint } from "@/lib/dashboard/report";
 type TooltipState = {
   x: number;
   y: number;
-  airportName: string;
-  icao: string;
-  country: string;
-  flights: number;
+  title: string;
+  detail: string;
   totalCo2Kg: number;
 } | null;
 
 type AirportFeatureProperties = {
-  airportName: string;
-  icao: string;
-  country: string;
-  countryCode: string;
-  flights: number;
   totalCo2Kg: number;
   totalCo2Tons: number;
   emissionScore: number;
@@ -85,8 +78,7 @@ export function AirportEmissionsMap({ airports }: { airports: AirportEmissionPoi
           clusterMaxZoom: 4,
           clusterRadius: 34,
           clusterProperties: {
-            totalCo2Kg: ["+", ["get", "totalCo2Kg"]],
-            flights: ["+", ["get", "flights"]]
+            totalCo2Kg: ["+", ["get", "totalCo2Kg"]]
           }
         } as never);
         map.addSource(rawSourceId, {
@@ -127,8 +119,7 @@ export function AirportEmissionsMap({ airports }: { airports: AirportEmissionPoi
           return;
         }
 
-        const icao = String(feature.properties?.icao ?? "");
-        if (icao) window.location.href = `/data?airport=${encodeURIComponent(icao)}`;
+        if (!feature.properties?.cluster) setTooltip(featureToTooltip(feature, event.point.x, event.point.y));
       });
     }
 
@@ -224,21 +215,14 @@ export function AirportEmissionsMap({ airports }: { airports: AirportEmissionPoi
             top: Math.max(tooltip.y - 28, 74)
           }}
         >
-          <p className="font-semibold text-white">{tooltip.airportName}</p>
-          <p className="mt-1 text-sm text-white/58">
-            {tooltip.icao} · {tooltip.country}
-          </p>
-          <dl className="mt-4 grid grid-cols-2 gap-3 border-t border-white/10 pt-4 text-sm">
+          <p className="font-semibold text-white">{tooltip.title}</p>
+          <p className="mt-1 text-sm text-white/58">{tooltip.detail}</p>
+          <dl className="mt-4 border-t border-white/10 pt-4 text-sm">
             <div>
-              <dt className="text-white/42">Flights</dt>
-              <dd className="mt-1 font-semibold tabular-nums text-white">{tooltip.flights.toLocaleString()}</dd>
-            </div>
-            <div>
-              <dt className="text-white/42">Total CO2</dt>
+              <dt className="text-white/42">Estimated CO2</dt>
               <dd className="mt-1 font-semibold tabular-nums text-paper">{formatTonnes(tooltip.totalCo2Kg)} t</dd>
             </div>
           </dl>
-          <p className="mt-4 text-xs text-white/42">Click to view in the data report</p>
         </div>
       ) : null}
     </div>
@@ -364,11 +348,6 @@ function buildAirportGeoJson(airports: AirportEmissionPoint[], maxCo2Kg: number)
         coordinates: [airport.longitude, airport.latitude]
       },
       properties: {
-        airportName: airport.airportName,
-        icao: airport.icao,
-        country: airport.country,
-        countryCode: airport.countryCode,
-        flights: airport.flights,
         totalCo2Kg: airport.totalCo2Kg,
         totalCo2Tons: Math.round(airport.totalCo2Kg / 1000),
         emissionScore: Math.log1p(airport.totalCo2Kg) / Math.log1p(maxCo2Kg)
@@ -424,10 +403,8 @@ function featureToTooltip(feature: MapGeoJSONFeature, x: number, y: number): Too
     return {
       x,
       y,
-      airportName: `${Number(properties.point_count ?? 0).toLocaleString()} airport cluster`,
-      icao: "Cluster",
-      country: "Zoom in for individual airports",
-      flights: Number(properties.flights ?? 0),
+      title: `${Number(properties.point_count ?? 0).toLocaleString()} emission cells`,
+      detail: "Zoom in for a more detailed hotspot view",
       totalCo2Kg: Number(properties.totalCo2Kg ?? 0)
     };
   }
@@ -435,10 +412,8 @@ function featureToTooltip(feature: MapGeoJSONFeature, x: number, y: number): Too
   return {
     x,
     y,
-    airportName: String(properties.airportName ?? "Unknown airport"),
-    icao: String(properties.icao ?? "n/a"),
-    country: String(properties.country ?? "Unknown"),
-    flights: Number(properties.flights ?? 0),
+    title: "Private jet emissions hotspot",
+    detail: "Aggregated airport activity within this map cell",
     totalCo2Kg: Number(properties.totalCo2Kg ?? 0)
   };
 }
