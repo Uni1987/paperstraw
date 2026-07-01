@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   getPositionQualityIssue,
   messageDataToString,
@@ -7,8 +7,20 @@ import {
   type CruiseShipIdentityRecord,
   type CruiseShipIdentityRepository
 } from "@/lib/cruises/aisstream";
+import { CRUISE_REGIONS, getCruiseRegionConfig, getCruiseRegions, validateCruiseRegions } from "@/lib/cruises/config";
 import { estimateCruiseDailyEmissions, haversineNm } from "@/lib/cruises/estimation";
 import { parseMrvCsv } from "@/lib/cruises/mrv";
+import {
+  CRUISE_POSITION_FRESHNESS_WINDOW_MS,
+  dedupeCruiseEstimateRows,
+  getCruiseDataStatus,
+  selectLatestCruisePositionPerShip,
+  summarizeCruiseEstimateRows
+} from "@/lib/cruises/queries";
+
+afterEach(() => {
+  delete process.env.AISSTREAM_BOUNDING_BOXES;
+});
 
 describe("cruise emissions estimation", () => {
   it("uses annual MRV CO2 as a baseline when available", () => {
@@ -89,6 +101,70 @@ describe("AIS position cleanup", () => {
   });
 });
 
+describe("AISStream cruise region configuration", () => {
+  it("uses all default regions when AISSTREAM_BOUNDING_BOXES is missing", () => {
+    delete process.env.AISSTREAM_BOUNDING_BOXES;
+
+    const config = getCruiseRegionConfig();
+
+    expect(config.source).toBe("default");
+    expect(config.regions).toHaveLength(CRUISE_REGIONS.length);
+    expect(getCruiseRegions()).toHaveLength(CRUISE_REGIONS.length);
+  });
+
+  it("uses all default regions when AISSTREAM_BOUNDING_BOXES is blank", () => {
+    process.env.AISSTREAM_BOUNDING_BOXES = "   ";
+
+    const config = getCruiseRegionConfig();
+
+    expect(config.source).toBe("default");
+    expect(config.regions).toHaveLength(CRUISE_REGIONS.length);
+  });
+
+  it("uses a valid explicit override instead of merging with defaults", () => {
+    process.env.AISSTREAM_BOUNDING_BOXES = JSON.stringify([
+      {
+        id: "test-region",
+        name: "Test Region",
+        boundingBox: [
+          [10, 20],
+          [12, 22]
+        ]
+      }
+    ]);
+
+    const config = getCruiseRegionConfig();
+
+    expect(config.source).toBe("override");
+    expect(config.regions).toEqual([
+      {
+        id: "test-region",
+        name: "Test Region",
+        boundingBox: [
+          [10, 20],
+          [12, 22]
+        ]
+      }
+    ]);
+  });
+
+  it("throws a clear error for invalid explicit configuration", () => {
+    process.env.AISSTREAM_BOUNDING_BOXES = JSON.stringify([{ id: "Bad Id", name: "Bad", boundingBox: [[0, 0]] }]);
+
+    expect(() => getCruiseRegionConfig()).toThrow(/Invalid AISSTREAM_BOUNDING_BOXES/);
+  });
+
+  it("keeps default region ids unique", () => {
+    const ids = CRUISE_REGIONS.map((region) => region.id);
+
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it("defines valid default bounding boxes", () => {
+    expect(() => validateCruiseRegions(CRUISE_REGIONS)).not.toThrow();
+  });
+});
+
 describe("AIS websocket payload parsing", () => {
   it("normalizes string, Buffer, ArrayBuffer, Blob-like, and data-wrapped payloads", async () => {
     const json = '{"MessageType":"PositionReport"}';
@@ -101,6 +177,68 @@ describe("AIS websocket payload parsing", () => {
     await expect(messageDataToString(arrayBuffer)).resolves.toBe(json);
     await expect(messageDataToString(blobLike)).resolves.toBe(json);
     await expect(messageDataToString({ data: blobLike })).resolves.toBe(json);
+  });
+});
+
+describe("cruise dashboard query helpers", () => {
+  const now = new Date("2026-07-01T12:00:00Z");
+
+  it("selects one latest marker per ship when many AIS positions exist", () => {
+    const points = selectLatestCruisePositionPerShip(
+      [
+        position({ shipId: "ship-1", latitude: 40, longitude: 4, timestamp: new Date("2026-07-01T10:00:00Z") }),
+        position({ shipId: "ship-1", latitude: 41, longitude: 5, timestamp: new Date("2026-07-01T11:00:00Z") }),
+        position({ shipId: "ship-2", latitude: 25, longitude: -78, timestamp: new Date("2026-07-01T11:30:00Z") })
+      ],
+      now,
+      CRUISE_POSITION_FRESHNESS_WINDOW_MS
+    );
+
+    expect(points).toHaveLength(2);
+    expect(points.find((point) => point.shipId === "ship-1")?.latitude).toBe(41);
+  });
+
+  it("excludes stale positions from currently tracked vessels", () => {
+    const points = selectLatestCruisePositionPerShip(
+      [
+        position({ shipId: "fresh", timestamp: new Date("2026-07-01T11:00:00Z") }),
+        position({ shipId: "stale", timestamp: new Date("2026-07-01T02:00:00Z") })
+      ],
+      now,
+      CRUISE_POSITION_FRESHNESS_WINDOW_MS
+    );
+
+    expect(points.map((point) => point.shipId)).toEqual(["fresh"]);
+    expect(getCruiseDataStatus(new Date("2026-07-01T11:00:00Z"), now)).toBe("Healthy");
+    expect(getCruiseDataStatus(new Date("2026-07-01T02:00:00Z"), now)).toBe("Stale");
+    expect(getCruiseDataStatus(null, now)).toBe("Awaiting data");
+  });
+
+  it("filters invalid coordinates before map rendering", () => {
+    const points = selectLatestCruisePositionPerShip(
+      [
+        position({ shipId: "valid", latitude: 58, longitude: 6 }),
+        position({ shipId: "zero", latitude: 0, longitude: 0 }),
+        position({ shipId: "swapped", latitude: 120, longitude: 4 })
+      ],
+      now,
+      CRUISE_POSITION_FRESHNESS_WINDOW_MS
+    );
+
+    expect(points.map((point) => point.shipId)).toEqual(["valid"]);
+  });
+
+  it("deduplicates ship/date/method estimates before totals", () => {
+    const date = new Date("2026-07-01T00:00:00Z");
+    const rows = [
+      estimateRow({ shipId: "ship-1", date, methodVersion: "v1", estimatedCo2Tonnes: 100 }),
+      estimateRow({ shipId: "ship-1", date, methodVersion: "v1", estimatedCo2Tonnes: 100 }),
+      estimateRow({ shipId: "ship-1", date, methodVersion: "v2", estimatedCo2Tonnes: 125 }),
+      estimateRow({ shipId: "ship-2", date, methodVersion: "v1", estimatedCo2Tonnes: 50 })
+    ];
+
+    expect(dedupeCruiseEstimateRows(rows)).toHaveLength(3);
+    expect(summarizeCruiseEstimateRows(rows).co2Tonnes).toBe(275);
   });
 });
 
@@ -190,6 +328,39 @@ function identity(overrides: Partial<CruiseShipIdentityInput>): CruiseShipIdenti
     shipType: "Passenger ship",
     destination: "TEST",
     source: "AISStream.io",
+    ...overrides
+  };
+}
+
+function position(overrides: Partial<ReturnType<typeof positionBase>>) {
+  return { ...positionBase(), ...overrides };
+}
+
+function positionBase() {
+  return {
+    shipId: "ship",
+    name: "Example Cruise",
+    operator: "Example Operator",
+    mmsi: "244123456",
+    latitude: 40,
+    longitude: 4,
+    speedOverGround: 14,
+    destination: "TEST",
+    timestamp: new Date("2026-07-01T11:00:00Z")
+  };
+}
+
+function estimateRow(overrides: {
+  shipId: string;
+  date: Date;
+  methodVersion: string;
+  estimatedCo2Tonnes: number;
+  estimatedFuelTonnes?: number;
+  distanceNm?: number;
+}) {
+  return {
+    estimatedFuelTonnes: 0,
+    distanceNm: 0,
     ...overrides
   };
 }

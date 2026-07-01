@@ -698,7 +698,10 @@ wss://stream.aisstream.io/v0/stream
 Create a free AISStream account at https://aisstream.io, copy the API key, and set `AISSTREAM_API_KEY` in `.env` or in
 the environment where the worker runs.
 
-The built-in cruise regions are:
+PaperStraw does not subscribe to the entire world by default. The built-in AISStream coverage uses route-focused cruise
+corridors and coastal cruise regions so message volume stays manageable.
+
+The default cruise coverage regions are:
 
 - Mediterranean
 - Caribbean
@@ -707,17 +710,43 @@ The built-in cruise regions are:
 - Alaska
 - Norwegian Fjords
 - US East Coast
+- US West Coast
+- Mexico / Baja California
+- Canary Islands / Madeira / Azores
+- Red Sea
+- Persian Gulf / Dubai
+- Singapore / Southeast Asia
+- Japan
+- Australia East Coast
+- New Zealand
+- South Pacific
+- South America / Patagonia
+- Antarctica cruise approach routes
 
-To override the regions, set `AISSTREAM_BOUNDING_BOXES` to JSON:
+Local cruise filtering does not reduce incoming AISStream traffic. AISStream sends all ship messages inside subscribed
+bounding boxes first, then PaperStraw filters for passenger/cruise-like vessels or known MRV ships locally. Wider
+coverage increases incoming messages, network usage, CPU parsing work, database writes, and potential hosting cost.
+
+Route coverage is not the same thing as complete global vessel coverage. Long ocean crossings outside configured
+corridors may not be captured until a vessel enters one of the subscribed boxes.
+
+To override the regions, set `AISSTREAM_BOUNDING_BOXES` to a JSON array. If this variable is missing, empty, or blank,
+PaperStraw uses all default cruise corridor regions. If it is set, it fully replaces the defaults; custom boxes are not
+merged with the built-in list. Invalid explicit JSON fails startup with an actionable error.
+
+Supported override format:
 
 ```json
 [
   {
-    "name": "Example Region",
-    "boundingBox": [[30.0, -6.5], [46.5, 37.0]]
+    "id": "test-mediterranean",
+    "name": "Test Mediterranean",
+    "boundingBox": [[35.0, 10.0], [43.0, 22.0]]
   }
 ]
 ```
+
+`boundingBox` uses `[[minLat, minLon], [maxLat, maxLon]]`, the same order expected by AISStream.
 
 Only relevant vessels are persisted: passenger/cruise-like AIS ship types or ships already known from imported MRV data by
 IMO or MMSI. Cargo, tanker, fishing, military, corrupt, implausibly fast, duplicate, and impossible-jump messages are

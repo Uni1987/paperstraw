@@ -5,7 +5,7 @@ import {
   CRUISE_AIS_SOURCE,
   getAisStreamApiKey,
   getAisStreamLogLevel,
-  getCruiseRegions,
+  getCruiseRegionConfig,
   isAisStreamIngestionEnabled
 } from "@/lib/cruises/config";
 import { estimateAndStoreCruiseDailyEmissions, haversineNm } from "@/lib/cruises/estimation";
@@ -125,8 +125,10 @@ export async function runAisStreamWorker() {
     throw new Error("Missing AISSTREAM_API_KEY.");
   }
 
-  const regions = getCruiseRegions();
-  logInfo(`AISStream worker starting with ${regions.length} configured region(s): ${regions.map((region) => region.name).join(", ")}`);
+  const regionConfig = getCruiseRegionConfig();
+  const regions = regionConfig.regions;
+  const sourceLabel = regionConfig.source === "default" ? "default cruise corridors" : "AISSTREAM_BOUNDING_BOXES override";
+  logInfo(`AISStream worker starting with ${regions.length} configured region(s) using ${sourceLabel}: ${regions.map((region) => region.name).join(", ")}`);
   startStatsLogger();
   await connectForever(apiKey, regions.map((region) => region.boundingBox));
 }
