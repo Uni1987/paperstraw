@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import { LazyDataReportCharts } from "@/components/LazyDataReportCharts";
 import { PublicShell } from "@/components/PublicShell";
 import { getDataReport } from "@/lib/data/report";
+import { normalizeDate } from "@/lib/dates";
 import { formatCo2, formatKm } from "@/lib/format";
 import type { AwarenessRankPoint } from "@/lib/awareness/types";
 
@@ -370,7 +371,8 @@ function EmptyRow({ columns, message }: { columns: number; message: string }) {
   );
 }
 
-function formatDateTime(date: Date | null) {
+function formatDateTime(value: Date | string | number | null | undefined) {
+  const date = normalizeDate(value);
   if (!date) return "No successful import";
   return date.toLocaleString("en-US", {
     year: "numeric",

@@ -3,6 +3,7 @@ import { PublicShell } from "@/components/PublicShell";
 import { DashboardMapSkeleton } from "@/components/dashboard/DashboardSkeletons";
 import { LazyAirportEmissionsMap, LazyDashboardVisuals } from "@/components/dashboard/LazyDashboardVisuals";
 import { StatCard } from "@/components/dashboard/StatCard";
+import { isSameCalendarDay, normalizeDate } from "@/lib/dates";
 import { getDashboardAirportEmissionPoints, getVisualDashboardReport } from "@/lib/dashboard/report";
 import type { ImportFreshness } from "@/lib/ingestion/freshness";
 
@@ -97,7 +98,7 @@ async function DashboardMapSection() {
 }
 
 function DataStatusWidget({ freshness }: { freshness: ImportFreshness }) {
-  const importedToday = isSameDay(freshness.latestRunEndedAt, new Date()) ? freshness.latestRecordsImported : 0;
+  const importedToday = isSameCalendarDay(freshness.latestRunEndedAt, new Date()) ? freshness.latestRecordsImported : 0;
 
   return (
     <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-4">
@@ -125,7 +126,8 @@ function formatTonnes(valueKg: number) {
   return Math.round(valueKg / 1000).toLocaleString();
 }
 
-function formatDateTime(date: Date | null) {
+function formatDateTime(value: Date | string | number | null | undefined) {
+  const date = normalizeDate(value);
   if (!date) return "No successful update yet";
   return date.toLocaleString("en-US", {
     month: "short",
@@ -140,9 +142,4 @@ function formatFreshnessStatus(status: string | null) {
   if (status === "SUCCESS" || status === "PARTIAL") return "Healthy";
   if (status === "FAILED") return "Delayed";
   return "Pending";
-}
-
-function isSameDay(left: Date | null, right: Date) {
-  if (!left) return false;
-  return left.getFullYear() === right.getFullYear() && left.getMonth() === right.getMonth() && left.getDate() === right.getDate();
 }
