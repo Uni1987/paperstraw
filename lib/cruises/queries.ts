@@ -25,7 +25,7 @@ export type CruiseMapPoint = {
   mmsi: string;
   latitude: number;
   longitude: number;
-  intensity: number;
+  activityWeight: number;
   estimatedCo2Tonnes: number | null;
   speedOverGround: number | null;
   destination: string | null;
@@ -33,7 +33,7 @@ export type CruiseMapPoint = {
 };
 
 export type CruisePositionRow = CruiseMapPoint;
-export type CruiseMapWeighting = "density" | "co2" | "mixed";
+export type CruiseMapMode = "activity" | "emissions";
 
 export type CruiseEstimateInputRow = {
   shipId: string;
@@ -88,7 +88,8 @@ export const getCruiseDashboardData = reactCache(async () => {
 
   const todayTotals = summarizeCruiseEstimateRows(todayEstimateRows);
   const ytdTotals = summarizeCruiseEstimateRows(ytdEstimateRows);
-  const mapIntensity = applyCruiseMapIntensity(positions, todayEstimateRows);
+  const activityMapPoints = buildCruiseActivityMapPoints(positions, todayEstimateRows);
+  const mapMode: CruiseMapMode = "activity";
   const [topToday, topYtd] = await Promise.all([
     hydrateCruiseRankRows(rankCruiseEstimateRows(todayEstimateRows, 100)),
     hydrateCruiseRankRows(rankCruiseEstimateRows(ytdEstimateRows, 100))
@@ -109,8 +110,8 @@ export const getCruiseDashboardData = reactCache(async () => {
       hasTodayEstimates: todayTotals.rows > 0,
       hasYtdEstimates: ytdTotals.rows > 0
     },
-    mapPoints: mapIntensity.points,
-    mapWeighting: mapIntensity.weighting,
+    mapPoints: activityMapPoints,
+    mapMode,
     topToday,
     topYtd,
     operators,
@@ -202,7 +203,7 @@ async function getLatestCruisePositions(recentSince: Date, now = new Date()): Pr
       speedOverGround: row.speedOverGround ? Number(row.speedOverGround) : null,
       destination: row.destination,
       timestamp: row.timestamp,
-      intensity: 1,
+      activityWeight: 1,
       estimatedCo2Tonnes: null
     })),
     now,
@@ -314,35 +315,18 @@ export function selectLatestCruisePositionPerShip(rows: CruisePositionRow[], now
   return [...latestByShip.values()].sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
 }
 
-export function applyCruiseMapIntensity(points: CruiseMapPoint[], estimateRows: CruiseEstimateInputRow[]): { points: CruiseMapPoint[]; weighting: CruiseMapWeighting } {
+export function buildCruiseActivityMapPoints(points: CruiseMapPoint[], estimateRows: CruiseEstimateInputRow[]): CruiseMapPoint[] {
   const estimatesByShip = new Map<string, number>();
   for (const row of dedupeCruiseEstimateRows(estimateRows)) {
     const value = Number(row.estimatedCo2Tonnes ?? 0);
     if (Number.isFinite(value) && value > 0) estimatesByShip.set(row.shipId, value);
   }
 
-  if (!estimatesByShip.size) {
-    return {
-      weighting: "density",
-      points: points.map((point) => ({ ...point, intensity: 1, estimatedCo2Tonnes: null }))
-    };
-  }
-
-  let estimatedPoints = 0;
-  const weightedPoints = points.map((point) => {
-    const estimatedCo2Tonnes = estimatesByShip.get(point.shipId) ?? null;
-    if (estimatedCo2Tonnes !== null) estimatedPoints += 1;
-    return {
-      ...point,
-      estimatedCo2Tonnes,
-      intensity: estimatedCo2Tonnes ?? 1
-    };
-  });
-
-  return {
-    weighting: estimatedPoints === points.length ? "co2" : "mixed",
-    points: weightedPoints
-  };
+  return points.map((point) => ({
+    ...point,
+    activityWeight: 1,
+    estimatedCo2Tonnes: estimatesByShip.get(point.shipId) ?? null
+  }));
 }
 
 export function estimateCruiseMapPayloadBytes(points: CruiseMapPoint[]) {
@@ -352,7 +336,7 @@ export function estimateCruiseMapPayloadBytes(points: CruiseMapPoint[]) {
         shipId: point.shipId,
         latitude: point.latitude,
         longitude: point.longitude,
-        intensity: point.intensity,
+        activityWeight: point.activityWeight,
         estimatedCo2Tonnes: point.estimatedCo2Tonnes,
         name: point.name,
         operator: point.operator,
@@ -362,6 +346,19 @@ export function estimateCruiseMapPayloadBytes(points: CruiseMapPoint[]) {
       }))
     )
   ).length;
+}
+
+export function getCruiseMapCopy(mode: CruiseMapMode) {
+  if (mode === "emissions") {
+    return {
+      subtitle: "Estimated cruise emissions mode is reserved for future use when all displayed ships have comparable daily estimates.",
+      legendTitle: "Estimated cruise emissions"
+    };
+  }
+  return {
+    subtitle: "Latest AIS vessel positions from monitored cruise regions.",
+    legendTitle: "Live cruise vessel activity"
+  };
 }
 
 export function summarizeCruiseEstimateRows(rows: CruiseEstimateInputRow[]) {

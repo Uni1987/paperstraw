@@ -2,7 +2,7 @@
 
 import dynamic from "next/dynamic";
 import { DashboardMapSkeleton } from "@/components/dashboard/DashboardSkeletons";
-import type { CruiseMapPoint, CruiseMapWeighting } from "@/lib/cruises/queries";
+import type { CruiseMapMode, CruiseMapPoint } from "@/lib/cruises/queries";
 
 const DynamicCruiseVesselMap = dynamic(
   () => import("@/components/cruises/CruiseVesselMap").then((mod) => mod.CruiseVesselMap),
@@ -14,13 +14,13 @@ const DynamicCruiseVesselMap = dynamic(
 
 export function LazyCruiseVesselMap({
   points,
-  mapWeighting,
+  mapMode,
   latestPositionLabel,
   freshnessWindowHours,
   monitoredRegionCount
 }: {
   points: CruiseMapPoint[];
-  mapWeighting: CruiseMapWeighting;
+  mapMode: CruiseMapMode;
   latestPositionLabel: string;
   freshnessWindowHours: number;
   monitoredRegionCount: number;
@@ -28,7 +28,7 @@ export function LazyCruiseVesselMap({
   return (
     <DynamicCruiseVesselMap
       points={points}
-      mapWeighting={mapWeighting}
+      mapMode={mapMode}
       latestPositionLabel={latestPositionLabel}
       freshnessWindowHours={freshnessWindowHours}
       monitoredRegionCount={monitoredRegionCount}

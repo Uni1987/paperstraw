@@ -110,7 +110,7 @@ export default async function CruisesPage() {
         <Suspense fallback={<DashboardMapSkeleton />}>
           <LazyCruiseVesselMap
             points={data.mapPoints}
-            mapWeighting={data.mapWeighting}
+            mapMode={data.mapMode}
             latestPositionLabel={data.sourceStatus.latestPositionRelative}
             freshnessWindowHours={data.sourceStatus.freshnessWindowHours}
             monitoredRegionCount={data.sourceStatus.activeRegionCount}

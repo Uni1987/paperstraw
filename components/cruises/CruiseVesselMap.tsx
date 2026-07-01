@@ -1,8 +1,15 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { Map as MapLibreMap, MapGeoJSONFeature, StyleSpecification } from "maplibre-gl";
-import type { CruiseMapPoint, CruiseMapWeighting } from "@/lib/cruises/queries";
+import type { Map as MapLibreMap, MapGeoJSONFeature } from "maplibre-gl";
+import type { CruiseMapMode, CruiseMapPoint } from "@/lib/cruises/queries";
+import {
+  PAPERSTRAW_CARTO_VECTOR_SOURCE_ID,
+  PAPERSTRAW_HEATMAP_COLORS,
+  PAPERSTRAW_LEGEND_GRADIENT_CLASS,
+  paperStrawActivityDensityHeatmapColorExpression,
+  paperStrawDarkRasterStyle
+} from "@/lib/maps/paperStrawMapTheme";
 
 type TooltipState = {
   x: number;
@@ -22,17 +29,31 @@ const heatmapLayerId = "cruise-vessels-density-heatmap";
 const pointGlowLayerId = "cruise-vessels-point-glow";
 const pointCoreLayerId = "cruise-vessels-point-core";
 const interactiveLayerIds = [pointCoreLayerId];
-const cartoVectorSourceId = "carto-vector";
+const cartoVectorSourceId = PAPERSTRAW_CARTO_VECTOR_SOURCE_ID;
+
+function getClientCruiseMapCopy(mode: CruiseMapMode) {
+  if (mode === "emissions") {
+    return {
+      subtitle: "Estimated cruise emissions from monitored AIS regions.",
+      legendTitle: "Estimated cruise emissions"
+    };
+  }
+
+  return {
+    subtitle: "Latest AIS vessel positions from monitored cruise regions.",
+    legendTitle: "Live cruise vessel activity"
+  };
+}
 
 export function CruiseVesselMap({
   points,
-  mapWeighting,
+  mapMode,
   latestPositionLabel,
   freshnessWindowHours,
   monitoredRegionCount
 }: {
   points: CruiseMapPoint[];
-  mapWeighting: CruiseMapWeighting;
+  mapMode: CruiseMapMode;
   latestPositionLabel: string;
   freshnessWindowHours: number;
   monitoredRegionCount: number;
@@ -42,9 +63,8 @@ export function CruiseVesselMap({
   const [tooltip, setTooltip] = useState<TooltipState>(null);
   const [mapReady, setMapReady] = useState(false);
   const [dataVisible, setDataVisible] = useState(true);
-  const maxIntensity = useMemo(() => Math.max(...points.map((point) => point.intensity), 1), [points]);
-  const geojson = useMemo(() => buildVesselGeoJson(points, maxIntensity), [points, maxIntensity]);
-  const copy = getMapCopy(mapWeighting);
+  const geojson = useMemo(() => buildVesselGeoJson(points), [points]);
+  const copy = getClientCruiseMapCopy(mapMode);
 
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return;
@@ -56,7 +76,7 @@ export function CruiseVesselMap({
 
       const map = new maplibregl.Map({
         container: containerRef.current,
-        style: darkRasterStyle(isMobileViewport()),
+        style: paperStrawDarkRasterStyle(isMobileViewport(), cartoVectorSourceId),
         center: [8, 24],
         zoom: isMobileViewport() ? 0.15 : 1.25,
         minZoom: isMobileViewport() ? -0.6 : 0.6,
@@ -127,7 +147,7 @@ export function CruiseVesselMap({
   return (
     <div className="relative overflow-hidden rounded-2xl border border-white/10 bg-[#030807] shadow-2xl shadow-black/35">
       <div className="absolute left-4 top-4 z-10 max-w-[16rem] md:left-5 md:top-5 md:max-w-md">
-        <p className="text-sm font-semibold uppercase tracking-[0.14em] text-white">World cruise activity & emissions</p>
+        <p className="text-sm font-semibold uppercase tracking-[0.14em] text-white">World cruise activity</p>
         <p className="mt-2 hidden text-sm leading-5 text-white/58 sm:block">{copy.subtitle}</p>
       </div>
 
@@ -152,7 +172,7 @@ export function CruiseVesselMap({
 
       <div className="absolute bottom-3 left-3 z-10 rounded-xl border border-white/15 bg-[#07100f]/94 p-2.5 shadow-2xl backdrop-blur md:bottom-5 md:left-5 md:p-4">
         <p className="text-[0.68rem] font-semibold uppercase tracking-[0.14em] text-white/74">{copy.legendTitle}</p>
-        <div className="mt-2.5 h-2.5 w-28 rounded-full bg-gradient-to-r from-violet-700 via-fuchsia-600 via-orange-500 to-yellow-100 shadow-[0_0_22px_rgba(217,164,65,0.42)] md:mt-3 md:h-3 md:w-44" />
+        <div className={`mt-2.5 h-2.5 w-28 rounded-full ${PAPERSTRAW_LEGEND_GRADIENT_CLASS} md:mt-3 md:h-3 md:w-44`} />
         <div className="mt-2 flex justify-between text-[0.65rem] font-semibold uppercase tracking-[0.12em] text-white/62">
           <span>Low</span>
           <span>High</span>
@@ -239,27 +259,11 @@ function addVesselLayers(map: MapLibreMap) {
     type: "heatmap",
     source: sourceId,
     paint: {
-      "heatmap-weight": ["interpolate", ["linear"], ["get", "intensityScore"], 0, 0.18, 1, 1],
-      "heatmap-intensity": ["interpolate", ["linear"], ["zoom"], 0, 0.95, 2, 1.35, 5, 0.8],
-      "heatmap-radius": ["interpolate", ["linear"], ["zoom"], 0, 11, 2, 19, 5, 34],
-      "heatmap-opacity": ["interpolate", ["linear"], ["zoom"], 0, 0.92, 3.5, 0.78, 5.2, 0.22, 6, 0],
-      "heatmap-color": [
-        "interpolate",
-        ["linear"],
-        ["heatmap-density"],
-        0,
-        "rgba(91,33,182,0)",
-        0.18,
-        "rgba(91,33,182,0.55)",
-        0.38,
-        "rgba(219,39,119,0.7)",
-        0.58,
-        "rgba(249,115,22,0.82)",
-        0.78,
-        "rgba(250,204,21,0.92)",
-        1,
-        "rgba(255,247,194,0.98)"
-      ]
+      "heatmap-weight": ["get", "activityWeight"],
+      "heatmap-intensity": ["interpolate", ["linear"], ["zoom"], 0, 0.2, 2, 0.32, 3.5, 0.26, 5.2, 0.14],
+      "heatmap-radius": ["interpolate", ["linear"], ["zoom"], 0, 3.6, 2, 6.4, 4.2, 10.5, 6, 13],
+      "heatmap-opacity": ["interpolate", ["linear"], ["zoom"], 0, 0.44, 2.8, 0.4, 4.8, 0.18, 5.9, 0],
+      "heatmap-color": paperStrawActivityDensityHeatmapColorExpression()
     }
   } as never);
 
@@ -268,22 +272,10 @@ function addVesselLayers(map: MapLibreMap) {
     type: "circle",
     source: sourceId,
     paint: {
-      "circle-color": [
-        "interpolate",
-        ["linear"],
-        ["get", "intensityScore"],
-        0,
-        "#5B21B6",
-        0.35,
-        "#DB2777",
-        0.62,
-        "#F97316",
-        1,
-        "#FFF7C2"
-      ],
-      "circle-radius": ["interpolate", ["linear"], ["zoom"], 2.8, 0, 4.2, 4.5, 6.5, 8.5],
-      "circle-blur": 1.1,
-      "circle-opacity": ["interpolate", ["linear"], ["zoom"], 2.8, 0, 4.2, 0.24, 6.2, 0.46]
+      "circle-color": PAPERSTRAW_HEATMAP_COLORS.glow,
+      "circle-radius": ["interpolate", ["linear"], ["zoom"], 0, 0.85, 2.5, 1.25, 4.5, 2.9, 6.5, 5.2],
+      "circle-blur": 1.15,
+      "circle-opacity": ["interpolate", ["linear"], ["zoom"], 0, 0.11, 2.5, 0.17, 4.5, 0.28, 6.2, 0.4]
     }
   } as never);
 
@@ -292,16 +284,16 @@ function addVesselLayers(map: MapLibreMap) {
     type: "circle",
     source: sourceId,
     paint: {
-      "circle-color": "#F7D77A",
-      "circle-radius": ["interpolate", ["linear"], ["zoom"], 2.8, 0, 4, 1.4, 6.5, 2.9],
-      "circle-opacity": ["interpolate", ["linear"], ["zoom"], 2.8, 0, 4, 0.62, 6.5, 0.92],
+      "circle-color": PAPERSTRAW_HEATMAP_COLORS.peak,
+      "circle-radius": ["interpolate", ["linear"], ["zoom"], 0, 0.32, 2.5, 0.55, 4, 0.95, 6.5, 2.1],
+      "circle-opacity": ["interpolate", ["linear"], ["zoom"], 0, 0.16, 2.5, 0.28, 4, 0.58, 6.5, 0.9],
       "circle-stroke-color": "rgba(255,255,255,0.28)",
       "circle-stroke-width": 0.5
     }
   } as never);
 }
 
-function buildVesselGeoJson(points: CruiseMapPoint[], maxIntensity: number) {
+function buildVesselGeoJson(points: CruiseMapPoint[]) {
   return {
     type: "FeatureCollection" as const,
     features: points.map((point) => ({
@@ -318,8 +310,7 @@ function buildVesselGeoJson(points: CruiseMapPoint[], maxIntensity: number) {
         speedOverGround: point.speedOverGround,
         destination: point.destination,
         timestamp: point.timestamp.toISOString(),
-        intensity: point.intensity,
-        intensityScore: Math.log1p(point.intensity) / Math.log1p(maxIntensity),
+        activityWeight: point.activityWeight,
         estimatedCo2Tonnes: point.estimatedCo2Tonnes
       }
     }))
@@ -343,25 +334,6 @@ function featureToTooltip(feature: MapGeoJSONFeature, x: number, y: number): Too
   };
 }
 
-function getMapCopy(weighting: CruiseMapWeighting) {
-  if (weighting === "co2") {
-    return {
-      subtitle: "Live AIS vessel positions, weighted by available estimated cruise emissions.",
-      legendTitle: "Estimated cruise emissions intensity"
-    };
-  }
-  if (weighting === "mixed") {
-    return {
-      subtitle: "Live AIS positions with CO2 weighting where daily ship estimates exist; remaining vessels use density weighting.",
-      legendTitle: "Mixed cruise activity and emissions intensity"
-    };
-  }
-  return {
-    subtitle: "Live AIS vessel activity from monitored cruise regions.",
-    legendTitle: "Live cruise vessel activity"
-  };
-}
-
 function fitWorld(map: MapLibreMap, duration: number) {
   map.fitBounds(
     [
@@ -377,71 +349,6 @@ function fitWorld(map: MapLibreMap, duration: number) {
 
 function isMobileViewport() {
   return typeof window !== "undefined" && window.matchMedia("(max-width: 767px)").matches;
-}
-
-function darkRasterStyle(isMobile: boolean): StyleSpecification {
-  return {
-    version: 8 as const,
-    sources: {
-      "carto-dark": {
-        type: "raster",
-        tiles: [
-          "https://a.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}.png",
-          "https://b.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}.png",
-          "https://c.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}.png"
-        ],
-        tileSize: 256,
-        attribution: "Basemap by CARTO"
-      },
-      [cartoVectorSourceId]: {
-        type: "vector",
-        tiles: ["https://basemaps.cartocdn.com/vector/carto.streets/v1/{z}/{x}/{y}.mvt"],
-        maxzoom: 14,
-        attribution: "Basemap by CARTO"
-      }
-    },
-    layers: [
-      {
-        id: "background",
-        type: "background",
-        paint: { "background-color": "#030807" }
-      },
-      {
-        id: "carto-dark",
-        type: "raster",
-        source: "carto-dark",
-        paint: {
-          "raster-opacity": isMobile ? 0.72 : 0.64,
-          "raster-contrast": isMobile ? -0.04 : -0.1,
-          "raster-saturation": isMobile ? -0.75 : -0.82,
-          "raster-brightness-min": 0,
-          "raster-brightness-max": isMobile ? 0.78 : 0.69
-        }
-      },
-      {
-        id: "water-contrast",
-        type: "fill",
-        source: cartoVectorSourceId,
-        "source-layer": "water",
-        paint: {
-          "fill-color": "#020706",
-          "fill-opacity": isMobile ? 0.3 : 0.18,
-          "fill-outline-color": isMobile ? "rgba(255,255,255,0.18)" : "rgba(255,255,255,0.1)"
-        }
-      },
-      {
-        id: "geography-boundaries",
-        type: "line",
-        source: cartoVectorSourceId,
-        "source-layer": "boundary",
-        paint: {
-          "line-color": "rgba(220,238,232,0.72)",
-          "line-opacity": isMobile ? 0.34 : 0.22,
-          "line-width": ["interpolate", ["linear"], ["zoom"], 0, isMobile ? 0.34 : 0.26, 4, isMobile ? 0.64 : 0.46, 7, isMobile ? 0.9 : 0.68]
-        }
-      }
-    ]
-  };
 }
 
 function formatDateTime(value: Date) {

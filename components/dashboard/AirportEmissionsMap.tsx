@@ -1,8 +1,15 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { Map as MapLibreMap, MapGeoJSONFeature, StyleSpecification } from "maplibre-gl";
+import type { Map as MapLibreMap, MapGeoJSONFeature } from "maplibre-gl";
 import type { AirportEmissionPoint } from "@/lib/dashboard/report";
+import {
+  PAPERSTRAW_CARTO_VECTOR_SOURCE_ID,
+  PAPERSTRAW_LEGEND_GRADIENT_CLASS,
+  paperStrawDarkRasterStyle,
+  paperStrawScoreColorExpression,
+  paperStrawValueColorExpression
+} from "@/lib/maps/paperStrawMapTheme";
 
 type TooltipState = {
   x: number;
@@ -34,7 +41,7 @@ const clusterCoreLayerId = "airport-emissions-cluster-core";
 const pointGlowLayerId = "airport-emissions-point-glow";
 const pointCoreLayerId = "airport-emissions-point-core";
 const interactiveLayerIds = [clusterCoreLayerId, pointCoreLayerId];
-const cartoVectorSourceId = "carto-vector";
+const cartoVectorSourceId = PAPERSTRAW_CARTO_VECTOR_SOURCE_ID;
 
 export function AirportEmissionsMap({ airports }: { airports: AirportEmissionPoint[] }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -57,7 +64,7 @@ export function AirportEmissionsMap({ airports }: { airports: AirportEmissionPoi
 
       const map = new maplibregl.Map({
         container: containerRef.current,
-        style: darkRasterStyle(isMobile),
+        style: paperStrawDarkRasterStyle(isMobile, cartoVectorSourceId),
         center: initialView.center,
         zoom: initialView.zoom,
         minZoom: initialView.minZoom,
@@ -174,7 +181,7 @@ export function AirportEmissionsMap({ airports }: { airports: AirportEmissionPoi
 
       <div className="absolute bottom-3 left-3 z-10 rounded-xl border border-white/15 bg-[#07100f]/94 p-2.5 shadow-2xl backdrop-blur md:bottom-5 md:left-5 md:bg-[#07100f]/90 md:p-4">
         <p className="text-[0.68rem] font-semibold uppercase tracking-[0.14em] text-white/74">CO2 emissions tonnes</p>
-        <div className="mt-2.5 h-2.5 w-28 rounded-full bg-gradient-to-r from-violet-700 via-orange-500 to-yellow-100 shadow-[0_0_22px_rgba(217,164,65,0.42)] md:mt-3 md:h-3 md:w-44" />
+        <div className={`mt-2.5 h-2.5 w-28 rounded-full ${PAPERSTRAW_LEGEND_GRADIENT_CLASS} md:mt-3 md:h-3 md:w-44`} />
         <div className="mt-2 flex justify-between text-[0.65rem] font-semibold uppercase tracking-[0.12em] text-white/62">
           <span>Low</span>
           <span>High</span>
@@ -232,21 +239,7 @@ export function AirportEmissionsMap({ airports }: { airports: AirportEmissionPoi
 function addEmissionLayers(map: MapLibreMap, maxCo2Kg: number, isMobile: boolean) {
   const glowScale = isMobile ? 0.88 : 1;
   const glowOpacityScale = isMobile ? 0.86 : 1;
-  const colorExpression = [
-    "interpolate",
-    ["linear"],
-    ["get", "emissionScore"],
-    0,
-    "#5B21B6",
-    0.28,
-    "#DB2777",
-    0.52,
-    "#F97316",
-    0.78,
-    "#FACC15",
-    1,
-    "#FFF7C2"
-  ];
+  const colorExpression = paperStrawScoreColorExpression("emissionScore");
 
   map.addLayer({
     id: rawGlowLayerId,
@@ -277,21 +270,7 @@ function addEmissionLayers(map: MapLibreMap, maxCo2Kg: number, isMobile: boolean
     source: sourceId,
     filter: ["has", "point_count"],
     paint: {
-      "circle-color": [
-        "interpolate",
-        ["linear"],
-        ["get", "totalCo2Kg"],
-        0,
-        "#5B21B6",
-        maxCo2Kg * 0.08,
-        "#DB2777",
-        maxCo2Kg * 0.22,
-        "#F97316",
-        maxCo2Kg * 0.48,
-        "#FACC15",
-        maxCo2Kg,
-        "#FFF7C2"
-      ],
+      "circle-color": paperStrawValueColorExpression("totalCo2Kg", maxCo2Kg),
       "circle-radius": ["interpolate", ["linear"], ["get", "totalCo2Kg"], 0, 10, maxCo2Kg, 34],
       "circle-blur": 1,
       "circle-opacity": 0.32 * glowOpacityScale
@@ -415,73 +394,6 @@ function featureToTooltip(feature: MapGeoJSONFeature, x: number, y: number): Too
     title: "Private jet emissions hotspot",
     detail: "Aggregated airport activity within this map cell",
     totalCo2Kg: Number(properties.totalCo2Kg ?? 0)
-  };
-}
-
-function darkRasterStyle(isMobile: boolean): StyleSpecification {
-  return {
-    version: 8 as const,
-    sources: {
-      "carto-dark": {
-        type: "raster",
-        tiles: [
-          "https://a.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}.png",
-          "https://b.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}.png",
-          "https://c.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}.png"
-        ],
-        tileSize: 256,
-        attribution: "Basemap by CARTO"
-      },
-      [cartoVectorSourceId]: {
-        type: "vector",
-        tiles: ["https://basemaps.cartocdn.com/vector/carto.streets/v1/{z}/{x}/{y}.mvt"],
-        maxzoom: 14,
-        attribution: "Basemap by CARTO"
-      }
-    },
-    layers: [
-      {
-        id: "background",
-        type: "background",
-        paint: {
-          "background-color": "#030807"
-        }
-      },
-      {
-        id: "carto-dark",
-        type: "raster",
-        source: "carto-dark",
-        paint: {
-          "raster-opacity": isMobile ? 0.72 : 0.64,
-          "raster-contrast": isMobile ? -0.04 : -0.1,
-          "raster-saturation": isMobile ? -0.75 : -0.82,
-          "raster-brightness-min": 0,
-          "raster-brightness-max": isMobile ? 0.78 : 0.69
-        }
-      },
-      {
-        id: "water-contrast",
-        type: "fill",
-        source: cartoVectorSourceId,
-        "source-layer": "water",
-        paint: {
-          "fill-color": "#020706",
-          "fill-opacity": isMobile ? 0.3 : 0.18,
-          "fill-outline-color": isMobile ? "rgba(255,255,255,0.18)" : "rgba(255,255,255,0.1)"
-        }
-      },
-      {
-        id: "geography-boundaries",
-        type: "line",
-        source: cartoVectorSourceId,
-        "source-layer": "boundary",
-        paint: {
-          "line-color": "rgba(220,238,232,0.72)",
-          "line-opacity": isMobile ? 0.34 : 0.22,
-          "line-width": ["interpolate", ["linear"], ["zoom"], 0, isMobile ? 0.34 : 0.26, 4, isMobile ? 0.64 : 0.46, 7, isMobile ? 0.9 : 0.68]
-        }
-      }
-    ]
   };
 }
 
