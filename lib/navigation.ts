@@ -1,5 +1,6 @@
 export const publicSidebarNavigation = [
   { href: "/", label: "Overview" },
+  { href: "/cruises", label: "Cruises" },
   { href: "/comparisons", label: "Comparisons" },
   { href: "/data", label: "Data" },
   { href: "/methodology", label: "Methodology" },
@@ -14,6 +15,7 @@ export const publicDesktopNavigation = [
 
 export const publicMobileNavigation = [
   { href: "/", label: "Overview" },
+  { href: "/cruises", label: "Cruises" },
   { href: "/comparisons", label: "Comparisons" },
   { href: "/data", label: "Data" },
   { href: "/methodology", label: "Methodology" },

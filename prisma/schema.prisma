@@ -126,3 +126,86 @@ model AggregateRollup {
   @@unique([period, group, key, periodStart])
   @@index([period, group, periodStart])
 }
+
+model CruiseShip {
+  id             String   @id @default(cuid())
+  imo            String?  @unique
+  mmsi           String?  @unique
+  name           String
+  operator       String?
+  shipType       String?  @map("ship_type")
+  destination    String?
+  grossTonnage   Decimal? @map("gross_tonnage")
+  length         Decimal?
+  width          Decimal?
+  source         String
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+  positions      CruisePosition[]
+  annualEmissions CruiseEmissionsAnnual[]
+  dailyEstimates CruiseEmissionsDailyEstimate[]
+
+  @@index([name])
+  @@index([operator])
+  @@map("cruise_ships")
+}
+
+model CruisePosition {
+  id                 String    @id @default(cuid())
+  shipId             String    @map("ship_id")
+  mmsi               String
+  latitude           Decimal
+  longitude          Decimal
+  speedOverGround    Decimal?  @map("speed_over_ground")
+  courseOverGround   Decimal?  @map("course_over_ground")
+  heading            Int?
+  navigationalStatus String?   @map("navigational_status")
+  destination        String?
+  timestamp          DateTime
+  rawPayload         Json?     @map("raw_payload")
+  ship               CruiseShip @relation(fields: [shipId], references: [id], onDelete: Cascade)
+
+  @@index([mmsi, timestamp])
+  @@index([shipId, timestamp])
+  @@unique([mmsi, timestamp, latitude, longitude])
+  @@map("cruise_positions")
+}
+
+model CruiseEmissionsAnnual {
+  id                 String    @id @default(cuid())
+  shipId             String    @map("ship_id")
+  imo                String
+  reportingYear      Int       @map("reporting_year")
+  annualCo2Tonnes    Decimal   @map("annual_co2_tonnes")
+  annualFuelTonnes   Decimal?  @map("annual_fuel_tonnes")
+  distanceNm         Decimal?  @map("distance_nm")
+  timeAtSeaHours     Decimal?  @map("time_at_sea_hours")
+  source             String
+  rawPayload         Json?     @map("raw_payload")
+  ship               CruiseShip @relation(fields: [shipId], references: [id], onDelete: Cascade)
+
+  @@unique([shipId, reportingYear])
+  @@index([imo])
+  @@index([reportingYear])
+  @@map("cruise_emissions_annual")
+}
+
+model CruiseEmissionsDailyEstimate {
+  id                  String    @id @default(cuid())
+  shipId              String    @map("ship_id")
+  date                DateTime
+  estimatedCo2Tonnes  Decimal   @map("estimated_co2_tonnes")
+  estimatedFuelTonnes Decimal?  @map("estimated_fuel_tonnes")
+  estimatedNoxKg      Decimal?  @map("estimated_nox_kg")
+  estimatedSoxKg      Decimal?  @map("estimated_sox_kg")
+  distanceNm          Decimal   @map("distance_nm")
+  hoursUnderway       Decimal   @map("hours_underway")
+  confidenceScore     Decimal   @map("confidence_score")
+  methodVersion       String    @map("method_version")
+  ship                CruiseShip @relation(fields: [shipId], references: [id], onDelete: Cascade)
+
+  @@unique([shipId, date, methodVersion])
+  @@index([date])
+  @@index([shipId, date])
+  @@map("cruise_emissions_daily_estimates")
+}

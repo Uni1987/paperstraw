@@ -619,6 +619,14 @@ OURAIRPORTS_INCLUDE_HELIPORTS=false
 Use `ADSB_LOL_DAILY_URL` only if you have a specific ADSB.lol export/API URL to use instead of the built-in public type
 snapshot path. Use `GITHUB_TOKEN` for historical archive backfills if GitHub rate limits become a problem.
 
+Cruise module variables are optional and disabled by default:
+
+```bash
+ENABLE_CRUISES=false
+ENABLE_AISSTREAM_INGESTION=false
+AISSTREAM_API_KEY=""
+```
+
 After deployment:
 
 - Open Vercel project settings and confirm the environment variables are set for Production.
@@ -655,6 +663,117 @@ CRON_SECRET="replace-with-a-long-random-token"
 
 Unauthenticated requests receive `401 Unauthorized` with a Basic Auth challenge. `/api/cron/*` also accepts
 `Authorization: Bearer $CRON_SECRET` for scheduler integrations.
+
+## Cruise Ship Emissions Module
+
+PaperStraw can also track aggregate cruise ship emissions using free/open sources first. This module is feature flagged so
+the private jet dashboard remains unchanged while cruise ingestion is tested.
+
+Enable the public cruise pages after deploying the cruise migration:
+
+```bash
+ENABLE_CRUISES=true
+```
+
+AIS ingestion is separate and disabled by default:
+
+```bash
+ENABLE_AISSTREAM_INGESTION=false
+AISSTREAM_API_KEY="your-aisstream-key"
+AISSTREAM_LOG_LEVEL="info"
+AISSTREAM_BOUNDING_BOXES=""
+```
+
+The AIS worker connects to:
+
+```txt
+wss://stream.aisstream.io/v0/stream
+```
+
+Create a free AISStream account at https://aisstream.io, copy the API key, and set `AISSTREAM_API_KEY` in `.env` or in
+the environment where the worker runs.
+
+The built-in cruise regions are:
+
+- Mediterranean
+- Caribbean
+- North Sea
+- Baltic Sea
+- Alaska
+- Norwegian Fjords
+- US East Coast
+
+To override the regions, set `AISSTREAM_BOUNDING_BOXES` to JSON:
+
+```json
+[
+  {
+    "name": "Example Region",
+    "boundingBox": [[30.0, -6.5], [46.5, 37.0]]
+  }
+]
+```
+
+Only relevant vessels are persisted: passenger/cruise-like AIS ship types or ships already known from imported MRV data by
+IMO or MMSI. Cargo, tanker, fishing, military, corrupt, implausibly fast, duplicate, and impossible-jump messages are
+ignored. The worker reconnects automatically with exponential backoff and logs status once per minute.
+
+Import EMSA THETIS-MRV annual emissions from a CSV/manual export:
+
+```bash
+pnpm cruises:import-mrv --file path/to/thetis-mrv.csv
+```
+
+The import matches ships by IMO, upserts `cruise_ships`, and writes annual CO2 and fuel records to
+`cruise_emissions_annual`. It is idempotent and safe to rerun with corrected CSV data.
+
+Run AIS ingestion locally:
+
+```bash
+ENABLE_AISSTREAM_INGESTION=true
+pnpm cruises:ingest-ais
+```
+
+In PowerShell:
+
+```powershell
+$env:ENABLE_AISSTREAM_INGESTION="true"
+$env:AISSTREAM_API_KEY="your-aisstream-key"
+pnpm cruises:ingest-ais
+```
+
+The worker runs continuously until stopped with `Ctrl+C`.
+
+Leave `ENABLE_AISSTREAM_INGESTION=false` in production unless you explicitly want a long-running AIS worker in that
+environment. Vercel serverless functions are not a good place for persistent WebSocket workers; run the AIS worker from a
+machine or service designed for long-running processes.
+
+Expected database growth depends on region coverage and cruise traffic. As a starting estimate, a handful of busy cruise
+regions can store thousands to tens of thousands of position rows per day after filtering. Monitor
+`cruise_positions`, Neon storage, and network transfer before expanding bounding boxes.
+
+Troubleshooting:
+
+- If the worker exits immediately, confirm `ENABLE_AISSTREAM_INGESTION=true`.
+- If authentication fails, confirm `AISSTREAM_API_KEY` is set and current.
+- If no rows are stored, import MRV data first or confirm AIS messages include passenger/cruise ship type values.
+- If reconnects are frequent, check local network stability and AISStream service status.
+- Use `AISSTREAM_LOG_LEVEL=debug` to see filtered-message reasons during development.
+
+Cruise estimates:
+
+- use EMSA THETIS-MRV annual CO2 as the baseline when available
+- estimate daily/YTD emissions from observed AIS underway time and distance
+- fall back to lower-confidence size/speed heuristics when MRV data is unavailable
+- store a `confidence_score` and method version for every daily estimate
+- are always presented as estimates, not official real-time emissions
+
+Cruise pages:
+
+- `/cruises`
+- `/cruises/[shipId]`
+
+Source attribution is shown for AISStream.io and EMSA THETIS-MRV.
 
 ## Methodology And Ethics
 
