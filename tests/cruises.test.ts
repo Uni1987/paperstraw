@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { getPositionQualityIssue, messageDataToString } from "@/lib/cruises/aisstream";
+import {
+  getPositionQualityIssue,
+  messageDataToString,
+  resolveCruiseShipIdentity,
+  type CruiseShipIdentityInput,
+  type CruiseShipIdentityRecord,
+  type CruiseShipIdentityRepository
+} from "@/lib/cruises/aisstream";
 import { estimateCruiseDailyEmissions, haversineNm } from "@/lib/cruises/estimation";
 import { parseMrvCsv } from "@/lib/cruises/mrv";
 
@@ -97,6 +104,65 @@ describe("AIS websocket payload parsing", () => {
   });
 });
 
+describe("AIS cruise ship identity resolution", () => {
+  it("updates the IMO record when the same IMO arrives with a new safe MMSI", async () => {
+    const repo = new FakeCruiseShipRepository([{ id: "ship-1", imo: "1234567", mmsi: null, shipType: "Passenger ship" }]);
+
+    const result = await resolveCruiseShipIdentity(repo, identity({ imo: "1234567", mmsi: "244123456" }));
+
+    expect(result.ship.id).toBe("ship-1");
+    expect(result.conflicts).toEqual([]);
+    expect(repo.get("ship-1")?.mmsi).toBe("244123456");
+  });
+
+  it("updates the MMSI record when a new safe IMO arrives", async () => {
+    const repo = new FakeCruiseShipRepository([{ id: "ship-1", imo: null, mmsi: "244123456", shipType: "Passenger ship" }]);
+
+    const result = await resolveCruiseShipIdentity(repo, identity({ imo: "1234567", mmsi: "244123456" }));
+
+    expect(result.ship.id).toBe("ship-1");
+    expect(result.conflicts).toEqual([]);
+    expect(repo.get("ship-1")?.imo).toBe("1234567");
+  });
+
+  it("keeps processing when an incoming IMO belongs to another ship", async () => {
+    const repo = new FakeCruiseShipRepository([
+      { id: "imo-owner", imo: "1234567", mmsi: "111111111", shipType: "Passenger ship" },
+      { id: "mmsi-owner", imo: null, mmsi: "244123456", shipType: "Passenger ship" }
+    ]);
+
+    const result = await resolveCruiseShipIdentity(repo, identity({ imo: "7654321", mmsi: "244123456" }));
+
+    expect(result.ship.id).toBe("mmsi-owner");
+    expect(result.conflicts).toEqual([]);
+    expect(repo.get("mmsi-owner")?.imo).toBe("7654321");
+
+    const conflicting = await resolveCruiseShipIdentity(repo, identity({ imo: "1234567", mmsi: "244123456" }));
+    expect(conflicting.ship.id).toBe("imo-owner");
+    expect(conflicting.conflicts[0]).toContain("MMSI 244123456 already belongs to ship mmsi-owner");
+    expect(repo.get("imo-owner")?.mmsi).toBe("111111111");
+  });
+
+  it("uses MMSI when IMO is missing", async () => {
+    const repo = new FakeCruiseShipRepository([{ id: "ship-1", imo: null, mmsi: "244123456", shipType: "Passenger ship" }]);
+
+    const result = await resolveCruiseShipIdentity(repo, identity({ imo: null, mmsi: "244123456" }));
+
+    expect(result.ship.id).toBe("ship-1");
+    expect(result.action).toBe("updated");
+  });
+
+  it("creates by valid IMO when MMSI is missing", async () => {
+    const repo = new FakeCruiseShipRepository([]);
+
+    const result = await resolveCruiseShipIdentity(repo, identity({ imo: "1234567", mmsi: null }));
+
+    expect(result.action).toBe("created");
+    expect(repo.get(result.ship.id)?.imo).toBe("1234567");
+    expect(repo.get(result.ship.id)?.mmsi).toBeNull();
+  });
+});
+
 describe("EMSA THETIS-MRV parser", () => {
   it("normalizes common MRV CSV headers", () => {
     const rows = parseMrvCsv(
@@ -115,3 +181,69 @@ describe("EMSA THETIS-MRV parser", () => {
     });
   });
 });
+
+function identity(overrides: Partial<CruiseShipIdentityInput>): CruiseShipIdentityInput {
+  return {
+    imo: null,
+    mmsi: null,
+    name: "Example Cruise",
+    shipType: "Passenger ship",
+    destination: "TEST",
+    source: "AISStream.io",
+    ...overrides
+  };
+}
+
+class FakeCruiseShipRepository implements CruiseShipIdentityRepository {
+  private ships = new Map<string, CruiseShipIdentityRecord & { name?: string | null; destination?: string | null }>();
+  private counter = 0;
+
+  constructor(seed: CruiseShipIdentityRecord[]) {
+    for (const ship of seed) this.ships.set(ship.id, { ...ship });
+  }
+
+  get(id: string) {
+    return this.ships.get(id);
+  }
+
+  async findByImo(imo: string) {
+    return [...this.ships.values()].find((ship) => ship.imo === imo) ?? null;
+  }
+
+  async findByMmsi(mmsi: string) {
+    return [...this.ships.values()].find((ship) => ship.mmsi === mmsi) ?? null;
+  }
+
+  async create(data: CruiseShipIdentityInput & { name: string }) {
+    if (data.imo && (await this.findByImo(data.imo))) throw Object.assign(new Error("duplicate imo"), { code: "P2002" });
+    if (data.mmsi && (await this.findByMmsi(data.mmsi))) throw Object.assign(new Error("duplicate mmsi"), { code: "P2002" });
+    this.counter += 1;
+    const id = `created-${this.counter}`;
+    this.ships.set(id, {
+      id,
+      imo: data.imo,
+      mmsi: data.mmsi,
+      shipType: data.shipType ?? null,
+      name: data.name,
+      destination: data.destination ?? null
+    });
+    return { id };
+  }
+
+  async update(id: string, data: Partial<CruiseShipIdentityInput>) {
+    const existing = this.ships.get(id);
+    if (!existing) throw new Error(`Unknown ship ${id}`);
+    const imoOwner = data.imo ? await this.findByImo(data.imo) : null;
+    const mmsiOwner = data.mmsi ? await this.findByMmsi(data.mmsi) : null;
+    if (imoOwner && imoOwner.id !== id) throw Object.assign(new Error("duplicate imo"), { code: "P2002" });
+    if (mmsiOwner && mmsiOwner.id !== id) throw Object.assign(new Error("duplicate mmsi"), { code: "P2002" });
+    this.ships.set(id, {
+      ...existing,
+      ...data,
+      imo: data.imo === undefined ? existing.imo : data.imo,
+      mmsi: data.mmsi === undefined ? existing.mmsi : data.mmsi,
+      shipType: data.shipType === undefined ? existing.shipType : data.shipType
+    });
+    return { id };
+  }
+}

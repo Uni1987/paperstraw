@@ -48,12 +48,46 @@ type NormalizedPosition = {
   dedupeKey: string;
 };
 
+export type CruiseShipIdentityInput = {
+  imo: string | null;
+  mmsi: string | null;
+  name?: string | null;
+  shipType?: string | null;
+  destination?: string | null;
+  length?: number | null;
+  width?: number | null;
+  source: string;
+};
+
+export type CruiseShipIdentityRecord = {
+  id: string;
+  imo: string | null;
+  mmsi: string | null;
+  shipType: string | null;
+};
+
+export type CruiseShipIdentityRepository = {
+  findByImo: (imo: string) => Promise<CruiseShipIdentityRecord | null>;
+  findByMmsi: (mmsi: string) => Promise<CruiseShipIdentityRecord | null>;
+  create: (data: CruiseShipIdentityInput & { name: string }) => Promise<{ id: string }>;
+  update: (id: string, data: Partial<CruiseShipIdentityInput>) => Promise<{ id: string }>;
+};
+
+type CruiseShipIdentityResolution = {
+  ship: { id: string };
+  action: "created" | "updated";
+  conflicts: string[];
+};
+
 type AisWorkerStats = {
   connected: boolean;
   shipsTracked: Set<string>;
   messagesReceived: number;
   positionsStored: number;
   filteredMessages: number;
+  identityConflicts: number;
+  shipsCreated: number;
+  shipsUpdated: number;
   reconnectCount: number;
   lastConnectedAt: Date | null;
   lastError: string | null;
@@ -72,6 +106,9 @@ const stats: AisWorkerStats = {
   messagesReceived: 0,
   positionsStored: 0,
   filteredMessages: 0,
+  identityConflicts: 0,
+  shipsCreated: 0,
+  shipsUpdated: 0,
   reconnectCount: 0,
   lastConnectedAt: null,
   lastError: null
@@ -205,33 +242,22 @@ export async function handleAisMessage(payload: AisMessage): Promise<PersistedPo
   if (qualityIssue) return { persisted: false, reason: qualityIssue };
   if (isDuplicatePosition(position.dedupeKey)) return { persisted: false, reason: "duplicate-message" };
 
-  const existingShip = await findKnownCruiseShip(position);
-  if (!existingShip && !looksLikePassengerShip(position.shipType)) {
+  const knownShip = await findKnownCruiseShipByIdentity(position);
+  if (!knownShip && !looksLikePassengerShip(position.shipType)) {
     return { persisted: false, reason: "not-passenger-or-known-cruise-ship" };
   }
 
-  if (existingShip) {
-    const duplicateOrJumpIssue = await getDatabasePositionIssue(existingShip.id, position);
+  const identity = await resolveCruiseShipIdentity(defaultCruiseShipIdentityRepository, identityInputFromPosition(position));
+  recordIdentityResolution(identity);
+
+  if (identity.ship) {
+    const duplicateOrJumpIssue = await getDatabasePositionIssue(identity.ship.id, position);
     if (duplicateOrJumpIssue) return { persisted: false, reason: duplicateOrJumpIssue };
   }
 
-  const ship = existingShip
-    ? await updateKnownShip(existingShip.id, position)
-    : await prisma.cruiseShip.create({
-        data: {
-          imo: position.imo,
-          mmsi: position.mmsi,
-          name: position.shipName || `MMSI ${position.mmsi}`,
-          shipType: position.shipType ?? "Passenger ship",
-          destination: position.destination,
-          source: CRUISE_AIS_SOURCE
-        },
-        select: { id: true }
-      });
-
   await prisma.cruisePosition.create({
     data: {
-      shipId: ship.id,
+      shipId: identity.ship.id,
       mmsi: position.mmsi,
       latitude: position.latitude,
       longitude: position.longitude,
@@ -248,7 +274,7 @@ export async function handleAisMessage(payload: AisMessage): Promise<PersistedPo
     throw error;
   });
 
-  return { persisted: true, shipId: ship.id };
+  return { persisted: true, shipId: identity.ship.id };
 }
 
 async function upsertShipFromStaticData(payload: AisMessage) {
@@ -258,14 +284,14 @@ async function upsertShipFromStaticData(payload: AisMessage) {
   if (!mmsi && !imo) return null;
 
   const shipType = stringifyOptional(readValue(staticData, "Type", "ShipType"));
-  const existing = await findKnownCruiseShip({ mmsi: mmsi ?? "", imo, shipType });
+  const existing = await findKnownCruiseShipByIdentity({ mmsi: mmsi ?? "", imo, shipType });
   if (!existing && !looksLikePassengerShip(shipType)) return null;
 
   const name = String(readValue(staticData, "Name", "ShipName") ?? payload.MetaData?.ShipName ?? "").trim();
   const destination = stringifyOptional(readValue(staticData, "Destination"));
   const dimensions = extractDimensions(staticData);
 
-  const data = {
+  const data: CruiseShipIdentityInput = {
     imo,
     mmsi,
     name: name || undefined,
@@ -276,59 +302,174 @@ async function upsertShipFromStaticData(payload: AisMessage) {
     source: CRUISE_AIS_SOURCE
   };
 
-  const ship = existing
-    ? await prisma.cruiseShip.update({
-        where: { id: existing.id },
-        data: compactUpdate(data),
-        select: { id: true }
-      })
-    : await prisma.cruiseShip.create({
-        data: {
-          imo,
-          mmsi,
-          name: name || `MMSI ${mmsi}`,
-          shipType: shipType ?? "Passenger ship",
-          destination,
-          length: dimensions.length,
-          width: dimensions.width,
-          source: CRUISE_AIS_SOURCE
-        },
-        select: { id: true }
-      });
+  const identity = await resolveCruiseShipIdentity(defaultCruiseShipIdentityRepository, data);
+  recordIdentityResolution(identity);
 
   logDebug(`AIS static/voyage data updated for ${name || mmsi || imo}.`);
-  return ship.id;
+  return identity.ship.id;
 }
 
-async function findKnownCruiseShip(position: Pick<NormalizedPosition, "mmsi" | "imo" | "shipType">) {
-  const or = [{ mmsi: position.mmsi }, position.imo ? { imo: position.imo } : undefined].filter(Boolean) as Array<{
-    mmsi?: string;
-    imo?: string;
-  }>;
-  if (!or.length) return null;
+export async function resolveCruiseShipIdentity(
+  repository: CruiseShipIdentityRepository,
+  input: CruiseShipIdentityInput
+): Promise<CruiseShipIdentityResolution> {
+  const imo = isValidImo(input.imo) ? input.imo : null;
+  const mmsi = isValidMmsi(input.mmsi) ? input.mmsi : null;
+  const conflicts: string[] = [];
 
-  const ship = await prisma.cruiseShip.findFirst({
-    where: { OR: or },
-    select: { id: true, name: true, mmsi: true, imo: true, shipType: true }
+  if (imo) {
+    const byImo = await repository.findByImo(imo);
+    if (byImo) {
+      const update = await buildSafeIdentityUpdate(repository, byImo, { ...input, imo, mmsi }, conflicts);
+      return {
+        ship: await safeUpdateCruiseShip(repository, byImo.id, update, conflicts),
+        action: "updated",
+        conflicts
+      };
+    }
+  }
+
+  if (mmsi) {
+    const byMmsi = await repository.findByMmsi(mmsi);
+    if (byMmsi) {
+      const update = await buildSafeIdentityUpdate(repository, byMmsi, { ...input, imo, mmsi }, conflicts);
+      return {
+        ship: await safeUpdateCruiseShip(repository, byMmsi.id, update, conflicts),
+        action: "updated",
+        conflicts
+      };
+    }
+  }
+
+  return {
+    ship: await safeCreateCruiseShip(repository, {
+      ...input,
+      imo,
+      mmsi,
+      name: input.name?.trim() || fallbackShipName(imo, mmsi)
+    }),
+    action: "created",
+    conflicts
+  };
+}
+
+async function buildSafeIdentityUpdate(
+  repository: CruiseShipIdentityRepository,
+  target: CruiseShipIdentityRecord,
+  input: CruiseShipIdentityInput,
+  conflicts: string[]
+) {
+  const update: Partial<CruiseShipIdentityInput> = compactUpdate({
+    name: input.name?.trim() || undefined,
+    shipType: input.shipType,
+    destination: input.destination,
+    length: input.length,
+    width: input.width,
+    source: input.source
   });
+
+  if (input.imo && target.imo !== input.imo) {
+    const owner = await repository.findByImo(input.imo);
+    if (owner && owner.id !== target.id) {
+      conflicts.push(`IMO ${input.imo} already belongs to ship ${owner.id}; keeping ship ${target.id} unchanged`);
+    } else {
+      update.imo = input.imo;
+    }
+  }
+
+  if (input.mmsi && target.mmsi !== input.mmsi) {
+    const owner = await repository.findByMmsi(input.mmsi);
+    if (owner && owner.id !== target.id) {
+      conflicts.push(`MMSI ${input.mmsi} already belongs to ship ${owner.id}; keeping ship ${target.id} unchanged`);
+    } else {
+      update.mmsi = input.mmsi;
+    }
+  }
+
+  return update;
+}
+
+async function safeUpdateCruiseShip(
+  repository: CruiseShipIdentityRepository,
+  id: string,
+  update: Partial<CruiseShipIdentityInput>,
+  conflicts: string[]
+) {
+  try {
+    return await repository.update(id, update);
+  } catch (error) {
+    if (isUniqueConstraintError(error)) {
+      conflicts.push(`Unique identity conflict while updating ship ${id}; skipped conflicting metadata`);
+      return { id };
+    }
+    throw error;
+  }
+}
+
+async function safeCreateCruiseShip(repository: CruiseShipIdentityRepository, data: CruiseShipIdentityInput & { name: string }) {
+  try {
+    return await repository.create(data);
+  } catch (error) {
+    if (!isUniqueConstraintError(error)) throw error;
+    const existingByImo = data.imo ? await repository.findByImo(data.imo) : null;
+    const existingByMmsi = data.mmsi ? await repository.findByMmsi(data.mmsi) : null;
+    const existing = existingByImo ?? existingByMmsi;
+    if (existing) return { id: existing.id };
+    throw error;
+  }
+}
+
+async function findKnownCruiseShipByIdentity(position: Pick<NormalizedPosition, "mmsi" | "imo" | "shipType">) {
+  const imo = isValidImo(position.imo) ? position.imo : null;
+  const mmsi = isValidMmsi(position.mmsi) ? position.mmsi : null;
+  const ship = (imo ? await defaultCruiseShipIdentityRepository.findByImo(imo) : null) ?? (mmsi ? await defaultCruiseShipIdentityRepository.findByMmsi(mmsi) : null);
   if (!ship) return null;
   if (looksLikePassengerShip(ship.shipType) || looksLikePassengerShip(position.shipType)) return ship;
   return ship.imo || ship.mmsi ? ship : null;
 }
 
-async function updateKnownShip(shipId: string, position: NormalizedPosition) {
-  return prisma.cruiseShip.update({
-    where: { id: shipId },
-    data: compactUpdate({
-      imo: position.imo,
-      mmsi: position.mmsi,
-      name: position.shipName || undefined,
-      shipType: position.shipType,
-      destination: position.destination,
-      source: CRUISE_AIS_SOURCE
+function identityInputFromPosition(position: NormalizedPosition): CruiseShipIdentityInput {
+  return {
+    imo: position.imo,
+    mmsi: position.mmsi,
+    name: position.shipName || undefined,
+    shipType: position.shipType ?? "Passenger ship",
+    destination: position.destination,
+    source: CRUISE_AIS_SOURCE
+  };
+}
+
+const defaultCruiseShipIdentityRepository: CruiseShipIdentityRepository = {
+  findByImo: (imo) =>
+    prisma.cruiseShip.findUnique({
+      where: { imo },
+      select: { id: true, imo: true, mmsi: true, shipType: true }
     }),
-    select: { id: true }
-  });
+  findByMmsi: (mmsi) =>
+    prisma.cruiseShip.findUnique({
+      where: { mmsi },
+      select: { id: true, imo: true, mmsi: true, shipType: true }
+    }),
+  create: (data) =>
+    prisma.cruiseShip.create({
+      data,
+      select: { id: true }
+    }),
+  update: (id, data) =>
+    prisma.cruiseShip.update({
+      where: { id },
+      data: compactUpdate(data) as Prisma.CruiseShipUpdateInput,
+      select: { id: true }
+    })
+};
+
+function recordIdentityResolution(identity: CruiseShipIdentityResolution) {
+  if (identity.action === "created") stats.shipsCreated += 1;
+  if (identity.action === "updated") stats.shipsUpdated += 1;
+  if (identity.conflicts.length) {
+    stats.identityConflicts += identity.conflicts.length;
+    for (const conflict of identity.conflicts) logWarn(`AIS identity conflict: ${conflict}`);
+  }
 }
 
 function extractPosition(payload: AisMessage): NormalizedPosition | null {
@@ -428,6 +569,20 @@ function looksLikePassengerShip(value: unknown) {
   return text.includes("passenger") || text.includes("cruise");
 }
 
+function isValidImo(value: string | null | undefined): value is string {
+  return typeof value === "string" && /^\d{7}$/.test(value) && value !== "0000000";
+}
+
+function isValidMmsi(value: string | null | undefined): value is string {
+  return typeof value === "string" && /^\d{9}$/.test(value) && value !== "000000000";
+}
+
+function fallbackShipName(imo: string | null, mmsi: string | null) {
+  if (imo) return `IMO ${imo}`;
+  if (mmsi) return `MMSI ${mmsi}`;
+  return "Unknown cruise ship";
+}
+
 function isDuplicatePosition(key: string) {
   const now = Date.now();
   for (const [existingKey, timestamp] of recentMessageKeys.entries()) {
@@ -448,6 +603,9 @@ function startStatsLogger() {
         `messagesReceived=${stats.messagesReceived}`,
         `positionsStored=${stats.positionsStored}`,
         `filteredMessages=${stats.filteredMessages}`,
+        `identityConflicts=${stats.identityConflicts}`,
+        `shipsCreated=${stats.shipsCreated}`,
+        `shipsUpdated=${stats.shipsUpdated}`,
         `reconnectCount=${stats.reconnectCount}`,
         `lastConnectedAt=${stats.lastConnectedAt?.toISOString() ?? "never"}`,
         `lastError=${stats.lastError ?? "none"}`
