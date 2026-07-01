@@ -4,13 +4,14 @@ import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
-import { publicDesktopNavigation, publicMobileNavigation } from "@/lib/navigation";
+import { getPublicMobileNavigation, isPublicNavGroup, publicDesktopNavigation } from "@/lib/navigation";
 
-export function SiteHeader() {
+export function SiteHeader({ cruisesEnabled }: { cruisesEnabled: boolean }) {
   const [open, setOpen] = useState(false);
   const pathname = usePathname();
   const isProductHome = pathname === "/" || pathname?.startsWith("/dashboard");
   const isAdmin = pathname?.startsWith("/admin");
+  const mobileNavigation = getPublicMobileNavigation({ cruisesEnabled });
 
   return (
     <header className={`sticky top-0 z-50 border-b border-white/10 bg-charcoal/82 backdrop-blur ${isAdmin ? "" : "lg:hidden"}`}>
@@ -64,16 +65,34 @@ export function SiteHeader() {
           }`}
         >
           <div className="mt-4 grid gap-1 border-t border-white/10 pt-3 text-sm font-medium text-white/76">
-            {publicMobileNavigation.map((item) => (
-              <Link
-                key={item.href}
-                href={item.href}
-                className="rounded-md px-3 py-3 transition hover:bg-white/10 hover:text-white"
-                onClick={() => setOpen(false)}
-              >
-                {item.label}
-              </Link>
-            ))}
+            {mobileNavigation.map((item) =>
+              isPublicNavGroup(item) ? (
+                <div key={item.label} className="py-1">
+                  <p className="px-3 pb-1 text-[0.68rem] font-semibold uppercase tracking-[0.18em] text-white/38">{item.label}</p>
+                  <div className="grid gap-1">
+                    {item.children.map((child) => (
+                      <Link
+                        key={child.href}
+                        href={child.href}
+                        className="rounded-md px-6 py-2.5 text-[0.82rem] transition hover:bg-white/10 hover:text-white"
+                        onClick={() => setOpen(false)}
+                      >
+                        {child.label}
+                      </Link>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  className="rounded-md px-3 py-3 transition hover:bg-white/10 hover:text-white"
+                  onClick={() => setOpen(false)}
+                >
+                  {item.label}
+                </Link>
+              )
+            )}
           </div>
         </div>
       </nav>

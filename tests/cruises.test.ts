@@ -16,6 +16,11 @@ import {
   paperStrawScoreColorExpression
 } from "@/lib/maps/paperStrawMapTheme";
 import {
+  classifyCruiseScope,
+  type CruiseScopeAuditCategory,
+  type CruiseScopeAuditVessel
+} from "@/lib/cruises/scopeAudit";
+import {
   CRUISE_POSITION_FRESHNESS_WINDOW_MS,
   buildCruiseActivityMapPoints,
   dedupeCruiseEstimateRows,
@@ -170,6 +175,82 @@ describe("AISStream cruise region configuration", () => {
 
   it("defines valid default bounding boxes", () => {
     expect(() => validateCruiseRegions(CRUISE_REGIONS)).not.toThrow();
+  });
+});
+
+describe("cruise scope audit classifier", () => {
+  it("classifies large ocean cruise ships with strong metadata as likely ocean cruise", () => {
+    const result = classifyCruiseScope(
+      auditVessel({
+        name: "MSC WORLD EUROPA",
+        operator: "MSC Cruises",
+        shipType: "Passenger/Cruise Ship",
+        imo: "9837420",
+        mmsi: "215123456",
+        grossTonnage: 215000,
+        length: 333,
+        width: 47,
+        hasMrvRecord: true
+      })
+    );
+
+    expect(result.category).toBe("LIKELY_OCEAN_CRUISE");
+    expect(result.evidence).toEqual(expect.arrayContaining(["MRV annual emissions record available", "dimensions/tonnage are consistent with mainstream ocean cruise scale"]));
+  });
+
+  it("classifies expedition cruise ships without mainstream scale as likely when evidence is strong", () => {
+    const result = classifyCruiseScope(
+      auditVessel({
+        name: "PONANT EXPEDITION",
+        operator: "Ponant",
+        shipType: "Passenger ship",
+        imo: "9812345",
+        mmsi: "228123456",
+        grossTonnage: 9900,
+        length: 131,
+        width: 18,
+        hasMrvRecord: true
+      })
+    );
+
+    expect(result.category).toBe("LIKELY_OCEAN_CRUISE");
+  });
+
+  it("does not treat AIS passenger type alone as likely ocean cruise", () => {
+    const result = classifyCruiseScope(auditVessel({ shipType: "60", imo: null, name: "UNKNOWN PASSENGER" }));
+
+    expect(result.category).toBe("INSUFFICIENT_METADATA");
+    expect(result.evidence.some((item) => item.includes("passenger AIS/type signal"))).toBe(true);
+  });
+
+  it.each([
+    ["ferry", { name: "CITY FERRY", shipType: "Passenger ship", operator: "Harbor Ferries" }],
+    ["RoPax", { name: "BALTIC ROPAX", shipType: "Passenger/RoRo Cargo Ship", operator: "Baltic RoPax" }],
+    ["river passenger", { name: "RIVER QUEEN", shipType: "Passenger ship", destination: "River terminal" }],
+    ["high-speed craft", { name: "FAST CAT 1", shipType: "High Speed Passenger Craft", operator: "Fast Ferry" }],
+    ["misleading passenger ferry metadata", { name: "SEA SHUTTLE", shipType: "Passenger ship", operator: "Commuter Ferry", imo: "1234567" }]
+  ])("classifies %s fixtures as likely non-cruise passenger", (_label, overrides) => {
+    const result = classifyCruiseScope(auditVessel(overrides));
+
+    expect(result.category).toBe("LIKELY_NON_CRUISE_PASSENGER");
+    expect(result.evidence).toEqual(expect.arrayContaining(["ferry/RoPax/commuter/river/day-vessel/service-like signal detected"]));
+  });
+
+  it("classifies sparse vessel metadata as insufficient", () => {
+    const result = classifyCruiseScope(auditVessel({ name: "MMSI 244000001", imo: null, mmsi: "244000001", shipType: null }));
+
+    expect(result.category).toBe("INSUFFICIENT_METADATA");
+  });
+
+  it("keeps audit classification read-only and returns evidence labels", () => {
+    const vessel = auditVessel({ name: "CITY FERRY", shipType: "Passenger ship", operator: "Harbor Ferries" });
+    const before = JSON.stringify(vessel);
+    const result = classifyCruiseScope(vessel);
+    const categories: CruiseScopeAuditCategory[] = ["LIKELY_OCEAN_CRUISE", "POSSIBLE_OCEAN_CRUISE", "LIKELY_NON_CRUISE_PASSENGER", "INSUFFICIENT_METADATA"];
+
+    expect(JSON.stringify(vessel)).toBe(before);
+    expect(categories).toContain(result.category);
+    expect(result.evidence.length).toBeGreaterThan(0);
   });
 });
 
@@ -438,6 +519,23 @@ function estimateRow(overrides: {
   return {
     estimatedFuelTonnes: 0,
     distanceNm: 0,
+    ...overrides
+  };
+}
+
+function auditVessel(overrides: Partial<CruiseScopeAuditVessel>): CruiseScopeAuditVessel {
+  return {
+    name: "TEST VESSEL",
+    imo: "1234567",
+    mmsi: "244123456",
+    operator: null,
+    shipType: "Passenger ship",
+    grossTonnage: null,
+    length: null,
+    width: null,
+    destination: null,
+    hasMrvRecord: false,
+    hasStaticPayload: false,
     ...overrides
   };
 }

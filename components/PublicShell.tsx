@@ -2,6 +2,8 @@ import Image from "next/image";
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { PublicSidebarNav } from "@/components/PublicSidebarNav";
+import { isCruisesEnabled } from "@/lib/cruises/config";
+import { getPublicSidebarNavigation } from "@/lib/navigation";
 
 export function PublicShell({
   children,
@@ -21,6 +23,8 @@ export function PublicShell({
 }
 
 function PublicSidebar({ footer }: { footer?: ReactNode }) {
+  const sidebarNavigation = getPublicSidebarNavigation({ cruisesEnabled: isCruisesEnabled() });
+
   return (
     <aside className="sticky top-0 hidden h-screen w-64 shrink-0 border-r border-white/10 bg-[#08100f] p-6 lg:block">
       <Link href="/" className="flex items-center gap-3">
@@ -31,7 +35,7 @@ function PublicSidebar({ footer }: { footer?: ReactNode }) {
         </div>
       </Link>
 
-      <PublicSidebarNav />
+      <PublicSidebarNav items={sidebarNavigation} />
 
       {footer ? <div className="absolute bottom-6 left-6 right-6">{footer}</div> : null}
     </aside>
