@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Map as MapLibreMap, MapGeoJSONFeature, StyleSpecification } from "maplibre-gl";
-import type { CruiseMapPoint } from "@/lib/cruises/queries";
+import type { CruiseMapPoint, CruiseMapWeighting } from "@/lib/cruises/queries";
 
 type TooltipState = {
   x: number;
@@ -14,31 +14,37 @@ type TooltipState = {
   destination: string | null;
   timestamp: string;
   shipId: string;
+  estimatedCo2Tonnes: number | null;
 } | null;
 
 const sourceId = "cruise-vessels";
-const clusterGlowLayerId = "cruise-vessels-cluster-glow";
-const clusterCoreLayerId = "cruise-vessels-cluster-core";
+const heatmapLayerId = "cruise-vessels-density-heatmap";
 const pointGlowLayerId = "cruise-vessels-point-glow";
 const pointCoreLayerId = "cruise-vessels-point-core";
-const interactiveLayerIds = [clusterCoreLayerId, pointCoreLayerId];
+const interactiveLayerIds = [pointCoreLayerId];
 const cartoVectorSourceId = "carto-vector";
 
 export function CruiseVesselMap({
   points,
+  mapWeighting,
   latestPositionLabel,
-  freshnessWindowHours
+  freshnessWindowHours,
+  monitoredRegionCount
 }: {
   points: CruiseMapPoint[];
+  mapWeighting: CruiseMapWeighting;
   latestPositionLabel: string;
   freshnessWindowHours: number;
+  monitoredRegionCount: number;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const [tooltip, setTooltip] = useState<TooltipState>(null);
   const [mapReady, setMapReady] = useState(false);
   const [dataVisible, setDataVisible] = useState(true);
-  const geojson = useMemo(() => buildVesselGeoJson(points), [points]);
+  const maxIntensity = useMemo(() => Math.max(...points.map((point) => point.intensity), 1), [points]);
+  const geojson = useMemo(() => buildVesselGeoJson(points, maxIntensity), [points, maxIntensity]);
+  const copy = getMapCopy(mapWeighting);
 
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return;
@@ -66,10 +72,7 @@ export function CruiseVesselMap({
         if (disposed) return;
         map.addSource(sourceId, {
           type: "geojson",
-          data: geojson,
-          cluster: true,
-          clusterMaxZoom: 4,
-          clusterRadius: 30
+          data: geojson
         } as never);
         addVesselLayers(map);
         fitWorld(map, 0);
@@ -91,18 +94,6 @@ export function CruiseVesselMap({
       map.on("click", interactiveLayerIds, async (event) => {
         const feature = event.features?.[0];
         if (!feature) return;
-
-        if (feature.properties?.cluster) {
-          const source = map.getSource(sourceId) as unknown as {
-            getClusterExpansionZoom: (clusterId: number) => Promise<number>;
-          };
-          const clusterId = Number(feature.properties.cluster_id);
-          const coordinates = (feature.geometry as { coordinates?: [number, number] }).coordinates;
-          if (!coordinates) return;
-          const zoom = await source.getClusterExpansionZoom(clusterId);
-          map.easeTo({ center: coordinates, zoom: Math.min(zoom + 0.4, 8), duration: 650 });
-          return;
-        }
 
         const shipId = String(feature.properties?.shipId ?? "");
         if (shipId) window.location.href = `/cruises/${encodeURIComponent(shipId)}`;
@@ -127,7 +118,7 @@ export function CruiseVesselMap({
     const map = mapRef.current;
     if (!map) return;
     const visibility = visible ? "visible" : "none";
-    [clusterGlowLayerId, clusterCoreLayerId, pointGlowLayerId, pointCoreLayerId].forEach((layerId) => {
+    [heatmapLayerId, pointGlowLayerId, pointCoreLayerId].forEach((layerId) => {
       if (map.getLayer(layerId)) map.setLayoutProperty(layerId, "visibility", visibility);
     });
     setDataVisible(visible);
@@ -136,10 +127,8 @@ export function CruiseVesselMap({
   return (
     <div className="relative overflow-hidden rounded-2xl border border-white/10 bg-[#030807] shadow-2xl shadow-black/35">
       <div className="absolute left-4 top-4 z-10 max-w-[16rem] md:left-5 md:top-5 md:max-w-md">
-        <p className="text-sm font-semibold uppercase tracking-[0.14em] text-white">World cruise AIS positions</p>
-        <p className="mt-2 hidden text-sm leading-5 text-white/58 sm:block">
-          Latest vessel position per ship from monitored cruise regions.
-        </p>
+        <p className="text-sm font-semibold uppercase tracking-[0.14em] text-white">World cruise activity & emissions</p>
+        <p className="mt-2 hidden text-sm leading-5 text-white/58 sm:block">{copy.subtitle}</p>
       </div>
 
       <div ref={containerRef} className="h-[24rem] w-full md:h-[36rem]" />
@@ -162,15 +151,20 @@ export function CruiseVesselMap({
       ) : null}
 
       <div className="absolute bottom-3 left-3 z-10 rounded-xl border border-white/15 bg-[#07100f]/94 p-2.5 shadow-2xl backdrop-blur md:bottom-5 md:left-5 md:p-4">
-        <p className="text-[0.68rem] font-semibold uppercase tracking-[0.14em] text-white/74">Cruise vessel positions</p>
-        <div className="mt-2.5 flex items-center gap-2">
-          <span className="h-2.5 w-2.5 rounded-full bg-paper shadow-[0_0_14px_rgba(217,164,65,0.8)]" />
-          <span className="text-xs text-white/62">{points.length.toLocaleString("en-US")} latest vessel positions</span>
+        <p className="text-[0.68rem] font-semibold uppercase tracking-[0.14em] text-white/74">{copy.legendTitle}</p>
+        <div className="mt-2.5 h-2.5 w-28 rounded-full bg-gradient-to-r from-violet-700 via-fuchsia-600 via-orange-500 to-yellow-100 shadow-[0_0_22px_rgba(217,164,65,0.42)] md:mt-3 md:h-3 md:w-44" />
+        <div className="mt-2 flex justify-between text-[0.65rem] font-semibold uppercase tracking-[0.12em] text-white/62">
+          <span>Low</span>
+          <span>High</span>
         </div>
         <p className="mt-2 text-[0.68rem] leading-4 text-white/46">
+          Distinct vessels: {points.length.toLocaleString("en-US")}
+          <br />
           Last AIS position: {latestPositionLabel}
           <br />
           Freshness window: {freshnessWindowHours} hours
+          <br />
+          Monitored regions: {monitoredRegionCount.toLocaleString("en-US")}
         </p>
       </div>
 
@@ -226,6 +220,12 @@ export function CruiseVesselMap({
             Destination: {tooltip.destination ?? "Unknown"}
             <br />
             Updated: {tooltip.timestamp}
+            {tooltip.estimatedCo2Tonnes !== null ? (
+              <>
+                <br />
+                Estimated CO2 today: {tooltip.estimatedCo2Tonnes.toLocaleString("en-US", { maximumFractionDigits: 1 })} t
+              </>
+            ) : null}
           </p>
         </div>
       ) : null}
@@ -235,29 +235,31 @@ export function CruiseVesselMap({
 
 function addVesselLayers(map: MapLibreMap) {
   map.addLayer({
-    id: clusterGlowLayerId,
-    type: "circle",
+    id: heatmapLayerId,
+    type: "heatmap",
     source: sourceId,
-    filter: ["has", "point_count"],
     paint: {
-      "circle-color": "#D9A441",
-      "circle-radius": ["interpolate", ["linear"], ["get", "point_count"], 1, 10, 20, 24, 100, 38],
-      "circle-blur": 1,
-      "circle-opacity": 0.34
-    }
-  } as never);
-
-  map.addLayer({
-    id: clusterCoreLayerId,
-    type: "circle",
-    source: sourceId,
-    filter: ["has", "point_count"],
-    paint: {
-      "circle-color": "rgba(217,164,65,0.58)",
-      "circle-radius": ["interpolate", ["linear"], ["get", "point_count"], 1, 4, 20, 9, 100, 14],
-      "circle-opacity": 0.8,
-      "circle-stroke-color": "rgba(255,255,255,0.25)",
-      "circle-stroke-width": 0.7
+      "heatmap-weight": ["interpolate", ["linear"], ["get", "intensityScore"], 0, 0.18, 1, 1],
+      "heatmap-intensity": ["interpolate", ["linear"], ["zoom"], 0, 0.95, 2, 1.35, 5, 0.8],
+      "heatmap-radius": ["interpolate", ["linear"], ["zoom"], 0, 11, 2, 19, 5, 34],
+      "heatmap-opacity": ["interpolate", ["linear"], ["zoom"], 0, 0.92, 3.5, 0.78, 5.2, 0.22, 6, 0],
+      "heatmap-color": [
+        "interpolate",
+        ["linear"],
+        ["heatmap-density"],
+        0,
+        "rgba(91,33,182,0)",
+        0.18,
+        "rgba(91,33,182,0.55)",
+        0.38,
+        "rgba(219,39,119,0.7)",
+        0.58,
+        "rgba(249,115,22,0.82)",
+        0.78,
+        "rgba(250,204,21,0.92)",
+        1,
+        "rgba(255,247,194,0.98)"
+      ]
     }
   } as never);
 
@@ -265,12 +267,23 @@ function addVesselLayers(map: MapLibreMap) {
     id: pointGlowLayerId,
     type: "circle",
     source: sourceId,
-    filter: ["!", ["has", "point_count"]],
     paint: {
-      "circle-color": "#D9A441",
-      "circle-radius": 10,
-      "circle-blur": 1.2,
-      "circle-opacity": 0.42
+      "circle-color": [
+        "interpolate",
+        ["linear"],
+        ["get", "intensityScore"],
+        0,
+        "#5B21B6",
+        0.35,
+        "#DB2777",
+        0.62,
+        "#F97316",
+        1,
+        "#FFF7C2"
+      ],
+      "circle-radius": ["interpolate", ["linear"], ["zoom"], 2.8, 0, 4.2, 4.5, 6.5, 8.5],
+      "circle-blur": 1.1,
+      "circle-opacity": ["interpolate", ["linear"], ["zoom"], 2.8, 0, 4.2, 0.24, 6.2, 0.46]
     }
   } as never);
 
@@ -278,18 +291,17 @@ function addVesselLayers(map: MapLibreMap) {
     id: pointCoreLayerId,
     type: "circle",
     source: sourceId,
-    filter: ["!", ["has", "point_count"]],
     paint: {
       "circle-color": "#F7D77A",
-      "circle-radius": 3.6,
-      "circle-opacity": 0.94,
-      "circle-stroke-color": "rgba(255,255,255,0.34)",
+      "circle-radius": ["interpolate", ["linear"], ["zoom"], 2.8, 0, 4, 1.4, 6.5, 2.9],
+      "circle-opacity": ["interpolate", ["linear"], ["zoom"], 2.8, 0, 4, 0.62, 6.5, 0.92],
+      "circle-stroke-color": "rgba(255,255,255,0.28)",
       "circle-stroke-width": 0.5
     }
   } as never);
 }
 
-function buildVesselGeoJson(points: CruiseMapPoint[]) {
+function buildVesselGeoJson(points: CruiseMapPoint[], maxIntensity: number) {
   return {
     type: "FeatureCollection" as const,
     features: points.map((point) => ({
@@ -305,7 +317,10 @@ function buildVesselGeoJson(points: CruiseMapPoint[]) {
         mmsi: point.mmsi,
         speedOverGround: point.speedOverGround,
         destination: point.destination,
-        timestamp: point.timestamp.toISOString()
+        timestamp: point.timestamp.toISOString(),
+        intensity: point.intensity,
+        intensityScore: Math.log1p(point.intensity) / Math.log1p(maxIntensity),
+        estimatedCo2Tonnes: point.estimatedCo2Tonnes
       }
     }))
   };
@@ -313,19 +328,6 @@ function buildVesselGeoJson(points: CruiseMapPoint[]) {
 
 function featureToTooltip(feature: MapGeoJSONFeature, x: number, y: number): TooltipState {
   const properties = feature.properties ?? {};
-  if (properties.cluster) {
-    return {
-      x,
-      y,
-      name: `${Number(properties.point_count ?? 0).toLocaleString("en-US")} vessel cluster`,
-      operator: "Zoom in for individual cruise ships",
-      mmsi: "Cluster",
-      speedOverGround: null,
-      destination: null,
-      timestamp: "",
-      shipId: ""
-    };
-  }
 
   return {
     x,
@@ -336,7 +338,27 @@ function featureToTooltip(feature: MapGeoJSONFeature, x: number, y: number): Too
     speedOverGround: properties.speedOverGround === null ? null : Number(properties.speedOverGround),
     destination: properties.destination ? String(properties.destination) : null,
     timestamp: formatDateTime(new Date(String(properties.timestamp))),
-    shipId: String(properties.shipId ?? "")
+    shipId: String(properties.shipId ?? ""),
+    estimatedCo2Tonnes: properties.estimatedCo2Tonnes === null || properties.estimatedCo2Tonnes === undefined ? null : Number(properties.estimatedCo2Tonnes)
+  };
+}
+
+function getMapCopy(weighting: CruiseMapWeighting) {
+  if (weighting === "co2") {
+    return {
+      subtitle: "Live AIS vessel positions, weighted by available estimated cruise emissions.",
+      legendTitle: "Estimated cruise emissions intensity"
+    };
+  }
+  if (weighting === "mixed") {
+    return {
+      subtitle: "Live AIS positions with CO2 weighting where daily ship estimates exist; remaining vessels use density weighting.",
+      legendTitle: "Mixed cruise activity and emissions intensity"
+    };
+  }
+  return {
+    subtitle: "Live AIS vessel activity from monitored cruise regions.",
+    legendTitle: "Live cruise vessel activity"
   };
 }
 
@@ -431,4 +453,3 @@ function formatDateTime(value: Date) {
     minute: "2-digit"
   });
 }
-

@@ -110,8 +110,10 @@ export default async function CruisesPage() {
         <Suspense fallback={<DashboardMapSkeleton />}>
           <LazyCruiseVesselMap
             points={data.mapPoints}
+            mapWeighting={data.mapWeighting}
             latestPositionLabel={data.sourceStatus.latestPositionRelative}
             freshnessWindowHours={data.sourceStatus.freshnessWindowHours}
+            monitoredRegionCount={data.sourceStatus.activeRegionCount}
           />
         </Suspense>
       </section>
@@ -234,4 +236,3 @@ function formatDate(value: Date) {
     year: "numeric"
   });
 }
-

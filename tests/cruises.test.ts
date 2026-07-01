@@ -12,7 +12,9 @@ import { estimateCruiseDailyEmissions, haversineNm } from "@/lib/cruises/estimat
 import { parseMrvCsv } from "@/lib/cruises/mrv";
 import {
   CRUISE_POSITION_FRESHNESS_WINDOW_MS,
+  applyCruiseMapIntensity,
   dedupeCruiseEstimateRows,
+  estimateCruiseMapPayloadBytes,
   getCruiseDataStatus,
   selectLatestCruisePositionPerShip,
   summarizeCruiseEstimateRows
@@ -195,6 +197,7 @@ describe("cruise dashboard query helpers", () => {
     );
 
     expect(points).toHaveLength(2);
+    expect(new Set(points.map((point) => point.shipId)).size).toBe(points.length);
     expect(points.find((point) => point.shipId === "ship-1")?.latitude).toBe(41);
   });
 
@@ -239,6 +242,49 @@ describe("cruise dashboard query helpers", () => {
 
     expect(dedupeCruiseEstimateRows(rows)).toHaveLength(3);
     expect(summarizeCruiseEstimateRows(rows).co2Tonnes).toBe(275);
+  });
+
+  it("uses density weighting when no trusted daily CO2 estimate exists", () => {
+    const result = applyCruiseMapIntensity([position({ shipId: "ship-1" })], []);
+
+    expect(result.weighting).toBe("density");
+    expect(result.points[0]).toMatchObject({ intensity: 1, estimatedCo2Tonnes: null });
+  });
+
+  it("uses CO2 weighting only when a real estimate exists for the mapped ship", () => {
+    const date = new Date("2026-07-01T00:00:00Z");
+    const result = applyCruiseMapIntensity(
+      [position({ shipId: "ship-1" })],
+      [estimateRow({ shipId: "ship-1", date, methodVersion: "v1", estimatedCo2Tonnes: 42.5 })]
+    );
+
+    expect(result.weighting).toBe("co2");
+    expect(result.points[0]).toMatchObject({ intensity: 42.5, estimatedCo2Tonnes: 42.5 });
+  });
+
+  it("labels mixed map weighting when only some ships have daily estimates", () => {
+    const date = new Date("2026-07-01T00:00:00Z");
+    const result = applyCruiseMapIntensity(
+      [position({ shipId: "ship-1" }), position({ shipId: "ship-2" })],
+      [estimateRow({ shipId: "ship-1", date, methodVersion: "v1", estimatedCo2Tonnes: 42.5 })]
+    );
+
+    expect(result.weighting).toBe("mixed");
+    expect(result.points.find((point) => point.shipId === "ship-2")).toMatchObject({ intensity: 1, estimatedCo2Tonnes: null });
+  });
+
+  it("keeps the cruise map payload compact for several thousand vessels", () => {
+    const points = Array.from({ length: 3000 }, (_, index) =>
+      position({
+        shipId: `ship-${index}`,
+        latitude: -55 + ((index * 0.13) % 120),
+        longitude: -170 + ((index * 0.29) % 340),
+        intensity: 1,
+        estimatedCo2Tonnes: null
+      })
+    );
+
+    expect(estimateCruiseMapPayloadBytes(points)).toBeLessThan(1_500_000);
   });
 });
 
@@ -346,7 +392,9 @@ function positionBase() {
     longitude: 4,
     speedOverGround: 14,
     destination: "TEST",
-    timestamp: new Date("2026-07-01T11:00:00Z")
+    timestamp: new Date("2026-07-01T11:00:00Z"),
+    intensity: 1,
+    estimatedCo2Tonnes: null
   };
 }
 

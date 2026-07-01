@@ -25,12 +25,15 @@ export type CruiseMapPoint = {
   mmsi: string;
   latitude: number;
   longitude: number;
+  intensity: number;
+  estimatedCo2Tonnes: number | null;
   speedOverGround: number | null;
   destination: string | null;
   timestamp: Date;
 };
 
 export type CruisePositionRow = CruiseMapPoint;
+export type CruiseMapWeighting = "density" | "co2" | "mixed";
 
 export type CruiseEstimateInputRow = {
   shipId: string;
@@ -85,6 +88,7 @@ export const getCruiseDashboardData = reactCache(async () => {
 
   const todayTotals = summarizeCruiseEstimateRows(todayEstimateRows);
   const ytdTotals = summarizeCruiseEstimateRows(ytdEstimateRows);
+  const mapIntensity = applyCruiseMapIntensity(positions, todayEstimateRows);
   const [topToday, topYtd] = await Promise.all([
     hydrateCruiseRankRows(rankCruiseEstimateRows(todayEstimateRows, 100)),
     hydrateCruiseRankRows(rankCruiseEstimateRows(ytdEstimateRows, 100))
@@ -105,7 +109,8 @@ export const getCruiseDashboardData = reactCache(async () => {
       hasTodayEstimates: todayTotals.rows > 0,
       hasYtdEstimates: ytdTotals.rows > 0
     },
-    mapPoints: positions,
+    mapPoints: mapIntensity.points,
+    mapWeighting: mapIntensity.weighting,
     topToday,
     topYtd,
     operators,
@@ -196,7 +201,9 @@ async function getLatestCruisePositions(recentSince: Date, now = new Date()): Pr
       longitude: Number(row.longitude),
       speedOverGround: row.speedOverGround ? Number(row.speedOverGround) : null,
       destination: row.destination,
-      timestamp: row.timestamp
+      timestamp: row.timestamp,
+      intensity: 1,
+      estimatedCo2Tonnes: null
     })),
     now,
     CRUISE_POSITION_FRESHNESS_WINDOW_MS
@@ -305,6 +312,56 @@ export function selectLatestCruisePositionPerShip(rows: CruisePositionRow[], now
     }
   }
   return [...latestByShip.values()].sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
+}
+
+export function applyCruiseMapIntensity(points: CruiseMapPoint[], estimateRows: CruiseEstimateInputRow[]): { points: CruiseMapPoint[]; weighting: CruiseMapWeighting } {
+  const estimatesByShip = new Map<string, number>();
+  for (const row of dedupeCruiseEstimateRows(estimateRows)) {
+    const value = Number(row.estimatedCo2Tonnes ?? 0);
+    if (Number.isFinite(value) && value > 0) estimatesByShip.set(row.shipId, value);
+  }
+
+  if (!estimatesByShip.size) {
+    return {
+      weighting: "density",
+      points: points.map((point) => ({ ...point, intensity: 1, estimatedCo2Tonnes: null }))
+    };
+  }
+
+  let estimatedPoints = 0;
+  const weightedPoints = points.map((point) => {
+    const estimatedCo2Tonnes = estimatesByShip.get(point.shipId) ?? null;
+    if (estimatedCo2Tonnes !== null) estimatedPoints += 1;
+    return {
+      ...point,
+      estimatedCo2Tonnes,
+      intensity: estimatedCo2Tonnes ?? 1
+    };
+  });
+
+  return {
+    weighting: estimatedPoints === points.length ? "co2" : "mixed",
+    points: weightedPoints
+  };
+}
+
+export function estimateCruiseMapPayloadBytes(points: CruiseMapPoint[]) {
+  return new TextEncoder().encode(
+    JSON.stringify(
+      points.map((point) => ({
+        shipId: point.shipId,
+        latitude: point.latitude,
+        longitude: point.longitude,
+        intensity: point.intensity,
+        estimatedCo2Tonnes: point.estimatedCo2Tonnes,
+        name: point.name,
+        operator: point.operator,
+        speedOverGround: point.speedOverGround,
+        destination: point.destination,
+        timestamp: point.timestamp.toISOString()
+      }))
+    )
+  ).length;
 }
 
 export function summarizeCruiseEstimateRows(rows: CruiseEstimateInputRow[]) {
