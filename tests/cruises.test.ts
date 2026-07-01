@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { getPositionQualityIssue } from "@/lib/cruises/aisstream";
+import { getPositionQualityIssue, messageDataToString } from "@/lib/cruises/aisstream";
 import { estimateCruiseDailyEmissions, haversineNm } from "@/lib/cruises/estimation";
 import { parseMrvCsv } from "@/lib/cruises/mrv";
 
@@ -79,6 +79,21 @@ describe("AIS position cleanup", () => {
         timestamp: new Date("2026-07-01T00:00:00Z")
       })
     ).toBeNull();
+  });
+});
+
+describe("AIS websocket payload parsing", () => {
+  it("normalizes string, Buffer, ArrayBuffer, Blob-like, and data-wrapped payloads", async () => {
+    const json = '{"MessageType":"PositionReport"}';
+    const buffer = Buffer.from(json, "utf8");
+    const arrayBuffer = buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
+    const blobLike = { text: async () => json };
+
+    await expect(messageDataToString(json)).resolves.toBe(json);
+    await expect(messageDataToString(buffer)).resolves.toBe(json);
+    await expect(messageDataToString(arrayBuffer)).resolves.toBe(json);
+    await expect(messageDataToString(blobLike)).resolves.toBe(json);
+    await expect(messageDataToString({ data: blobLike })).resolves.toBe(json);
   });
 });
 

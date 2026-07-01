@@ -31,7 +31,7 @@ model Flight {
   originCountryCode String?
   destinationCountryCode String?
   attributionSource String?
-  attributionConfidence Decimal?
+  attributionConfidence Decimal? @db.Decimal
   departureAt       DateTime
   arrivalAt         DateTime?
   distanceKm        Decimal

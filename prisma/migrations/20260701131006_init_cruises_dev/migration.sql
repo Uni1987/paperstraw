@@ -1,0 +1,2 @@
+-- RenameIndex
+ALTER INDEX "cruise_emissions_daily_estimates_ship_id_date_method_version_ke" RENAME TO "cruise_emissions_daily_estimates_ship_id_date_method_versio_key";

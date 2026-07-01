@@ -669,6 +669,11 @@ Unauthenticated requests receive `401 Unauthorized` with a Basic Auth challenge.
 PaperStraw can also track aggregate cruise ship emissions using free/open sources first. This module is feature flagged so
 the private jet dashboard remains unchanged while cruise ingestion is tested.
 
+Develop cruise changes on the `feature/cruises` branch and use a separate `DATABASE_URL` or Neon branch for cruise
+testing. Before applying migrations, inspect the generated SQL and confirm it only creates cruise-related tables and
+indexes. Never apply cruise migrations directly to production first; apply them to a Neon branch or disposable database,
+verify the migration, then promote deliberately.
+
 Enable the public cruise pages after deploying the cruise migration:
 
 ```bash

@@ -1,8 +1,13 @@
 import { loadProjectEnv, requireEnv } from "@/lib/env/loadProjectEnv";
 import { runAisStreamWorker } from "@/lib/cruises/aisstream";
 
-loadProjectEnv();
-requireEnv("DATABASE_URL");
+async function main() {
+  loadProjectEnv();
+  requireEnv("DATABASE_URL");
+  await runAisStreamWorker();
+}
 
-await runAisStreamWorker();
-
+main().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});

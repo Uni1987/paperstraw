@@ -151,7 +151,22 @@ async function connectOnce(apiKey: string, boundingBoxes: Array<[[number, number
 
 async function handleSocketMessage(event: MessageEvent) {
   stats.messagesReceived += 1;
-  const payload = JSON.parse(String(event.data)) as AisMessage;
+  const payloadText = await messageDataToString(event);
+  if (!payloadText) {
+    stats.filteredMessages += 1;
+    logWarn(`AISStream message skipped: unreadable payload type=${describePayloadType(event)}`);
+    return;
+  }
+
+  let payload: AisMessage;
+  try {
+    payload = JSON.parse(payloadText) as AisMessage;
+  } catch {
+    stats.filteredMessages += 1;
+    logWarn(`AISStream message skipped: invalid JSON type=${describePayloadType(event)} preview="${previewPayload(payloadText)}"`);
+    return;
+  }
+
   const result = await handleAisMessage(payload);
   if (!result.persisted) {
     stats.filteredMessages += 1;
@@ -164,6 +179,16 @@ async function handleSocketMessage(event: MessageEvent) {
     stats.shipsTracked.add(result.shipId);
     await estimateAndStoreCruiseDailyEmissions(result.shipId);
   }
+}
+
+export async function messageDataToString(input: unknown): Promise<string | null> {
+  if (typeof input === "string") return input;
+  if (typeof Buffer !== "undefined" && Buffer.isBuffer(input)) return input.toString("utf8");
+  if (input instanceof ArrayBuffer) return new TextDecoder().decode(input);
+  if (ArrayBuffer.isView(input)) return new TextDecoder().decode(input);
+  if (isBlobLike(input)) return input.text();
+  if (isDataWrapper(input)) return messageDataToString(input.data);
+  return null;
 }
 
 export async function handleAisMessage(payload: AisMessage): Promise<PersistedPosition> {
@@ -476,6 +501,29 @@ function isUniqueConstraintError(error: unknown) {
   return typeof error === "object" && error !== null && "code" in error && (error as { code?: string }).code === "P2002";
 }
 
+function isBlobLike(value: unknown): value is { text: () => Promise<string> } {
+  return typeof value === "object" && value !== null && "text" in value && typeof (value as { text?: unknown }).text === "function";
+}
+
+function isDataWrapper(value: unknown): value is { data: unknown } {
+  return typeof value === "object" && value !== null && "data" in value;
+}
+
+function describePayloadType(value: unknown): string {
+  const data = isDataWrapper(value) ? value.data : value;
+  if (typeof data === "string") return "string";
+  if (typeof Buffer !== "undefined" && Buffer.isBuffer(data)) return "Buffer";
+  if (data instanceof ArrayBuffer) return "ArrayBuffer";
+  if (ArrayBuffer.isView(data)) return data.constructor.name;
+  if (isBlobLike(data)) return data.constructor?.name ?? "Blob";
+  if (data === null) return "null";
+  return typeof data;
+}
+
+function previewPayload(value: string) {
+  return value.slice(0, 200).replace(/\s+/g, " ").trim();
+}
+
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -489,10 +537,13 @@ function logInfo(message: string) {
   if (level === "debug" || level === "info") console.log(message);
 }
 
+function logWarn(message: string) {
+  console.warn(message);
+}
+
 function logError(message: string, error: unknown) {
   const level = getAisStreamLogLevel();
   if (level === "error" || level === "warn" || level === "info" || level === "debug") {
     console.error(message, error);
   }
 }
-
