@@ -1,6 +1,6 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
-import { DataReportCharts } from "@/components/DataReportCharts";
+import { LazyDataReportCharts } from "@/components/LazyDataReportCharts";
 import { PublicShell } from "@/components/PublicShell";
 import { getDataReport } from "@/lib/data/report";
 import { formatCo2, formatKm } from "@/lib/format";
@@ -138,7 +138,7 @@ export default async function DataPage() {
           <HealthCard label="Latest success" value={formatDateTime(report.importHealth.latestSuccessfulImportAt)} />
         </div>
         <div className="mt-6">
-          <DataReportCharts flightsPerDay={report.flightsPerDay} importsPerDay={report.importsPerDay} />
+          <LazyDataReportCharts flightsPerDay={report.flightsPerDay} importsPerDay={report.importsPerDay} />
         </div>
         <div className="mt-6 grid gap-5 lg:grid-cols-2">
           <RecentImportLogs logs={report.importHealth.recentImportLogs} />

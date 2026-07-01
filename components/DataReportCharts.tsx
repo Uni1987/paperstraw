@@ -13,13 +13,15 @@ import {
 } from "recharts";
 import type { DataSeriesPoint } from "@/lib/data/report";
 
+export type DataReportChartsProps = {
+  flightsPerDay: DataSeriesPoint[];
+  importsPerDay: DataSeriesPoint[];
+};
+
 export function DataReportCharts({
   flightsPerDay,
   importsPerDay
-}: {
-  flightsPerDay: DataSeriesPoint[];
-  importsPerDay: DataSeriesPoint[];
-}) {
+}: DataReportChartsProps) {
   return (
     <div className="grid gap-5 lg:grid-cols-2">
       <ReportChart title="Flights per day" description="Imported aggregate flight records by departure date.">

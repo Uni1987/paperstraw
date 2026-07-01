@@ -19,17 +19,7 @@ export async function getAwarenessDashboardData(now = new Date()): Promise<Aware
     const rollupWindowStart = new Date(yearStart);
     rollupWindowStart.setDate(rollupWindowStart.getDate() - 1);
     const aggregateRollup = (prisma as unknown as { aggregateRollup?: { findMany: Function } }).aggregateRollup;
-    const rollups = aggregateRollup
-      ? ((await aggregateRollup.findMany({
-          where: {
-            periodStart: {
-              gte: rollupWindowStart,
-              lt: nextYearStart
-            }
-          },
-          orderBy: { periodStart: "asc" }
-        })) as StoredAggregateRollup[])
-      : [];
+    const rollups = aggregateRollup ? await getDashboardRollups(aggregateRollup, rollupWindowStart, nextYearStart) : [];
     const yearGlobalRollup = findCurrentYearRollup(rollups, now);
     if (yearGlobalRollup && Number(yearGlobalRollup.flights) > 0) {
       return buildAwarenessDashboardDataFromRollups(rollups, now);
@@ -39,6 +29,62 @@ export async function getAwarenessDashboardData(now = new Date()): Promise<Aware
   } catch {
     return getDemoAwarenessData();
   }
+}
+
+async function getDashboardRollups(
+  aggregateRollup: { findMany: Function },
+  rollupWindowStart: Date,
+  nextYearStart: Date
+): Promise<StoredAggregateRollup[]> {
+  const yearGroupWhere = {
+    period: AggregatePeriods.YEAR,
+    periodStart: {
+      gte: rollupWindowStart,
+      lt: nextYearStart
+    },
+    estimatedCo2Kg: {
+      gt: 0
+    }
+  };
+
+  const [globalRollups, topCountries, topAirports, aircraftTypes] = await Promise.all([
+    aggregateRollup.findMany({
+      where: {
+        group: AggregateGroups.GLOBAL,
+        periodStart: {
+          gte: rollupWindowStart,
+          lt: nextYearStart
+        }
+      },
+      orderBy: { periodStart: "asc" }
+    }),
+    aggregateRollup.findMany({
+      where: {
+        ...yearGroupWhere,
+        group: AggregateGroups.COUNTRY
+      },
+      orderBy: { estimatedCo2Kg: "desc" },
+      take: 6
+    }),
+    aggregateRollup.findMany({
+      where: {
+        ...yearGroupWhere,
+        group: AggregateGroups.AIRPORT
+      },
+      orderBy: { estimatedCo2Kg: "desc" },
+      take: 6
+    }),
+    aggregateRollup.findMany({
+      where: {
+        ...yearGroupWhere,
+        group: AggregateGroups.AIRCRAFT_TYPE
+      },
+      orderBy: { estimatedCo2Kg: "desc" },
+      take: 6
+    })
+  ]);
+
+  return [...globalRollups, ...topCountries, ...topAirports, ...aircraftTypes] as StoredAggregateRollup[];
 }
 
 export function buildAwarenessDashboardDataFromRollups(rollups: StoredAggregateRollup[], now = new Date()): AwarenessDashboardData {

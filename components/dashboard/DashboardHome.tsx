@@ -1,13 +1,14 @@
+import { Suspense } from "react";
 import { PublicShell } from "@/components/PublicShell";
-import { AirportEmissionsMap } from "@/components/dashboard/AirportEmissionsMap";
-import { DashboardVisuals } from "@/components/dashboard/DashboardVisuals";
+import { DashboardMapSkeleton } from "@/components/dashboard/DashboardSkeletons";
+import { LazyAirportEmissionsMap, LazyDashboardVisuals } from "@/components/dashboard/LazyDashboardVisuals";
 import { StatCard } from "@/components/dashboard/StatCard";
-import { getVisualDashboardReport } from "@/lib/dashboard/report";
+import { getDashboardAirportEmissionPoints, getVisualDashboardReport } from "@/lib/dashboard/report";
 import type { ImportFreshness } from "@/lib/ingestion/freshness";
 
 export async function DashboardHome() {
   const report = await getVisualDashboardReport();
-  const { awareness, freshness, attributionQuality, comparisons, aggregateCounts, airportEmissionPoints } = report;
+  const { awareness, freshness, attributionQuality, comparisons, aggregateCounts } = report;
 
   const statCards = [
     {
@@ -64,42 +65,35 @@ export async function DashboardHome() {
         ))}
       </section>
 
-      <section className="mt-4 md:hidden">
-        <AirportEmissionsMap airports={airportEmissionPoints} />
-      </section>
-
       <section className="mt-6 hidden gap-4 md:grid md:grid-cols-2 xl:grid-cols-5">
         {statCards.map((card) => (
           <StatCard key={card.label} {...card} />
         ))}
       </section>
 
-      <section className="mt-5 space-y-4 md:hidden">
-        <DashboardVisuals
-          monthlySeries={awareness.monthlySeries}
-          topAirports={awareness.topAirports}
-          topCountries={awareness.topCountries}
-          aircraftTypes={awareness.aircraftTypes}
-          comparisons={comparisons}
-          totalCo2Kg={awareness.yearCo2Kg}
-          airportEmissionPoints={airportEmissionPoints}
-          showMap={false}
-        />
+      <section className="mt-4 md:mt-6">
+        <Suspense fallback={<DashboardMapSkeleton />}>
+          <DashboardMapSection />
+        </Suspense>
       </section>
 
-      <section className="mt-6 hidden space-y-4 md:block">
-        <DashboardVisuals
+      <section className="mt-5 space-y-4 md:mt-4">
+        <LazyDashboardVisuals
           monthlySeries={awareness.monthlySeries}
           topAirports={awareness.topAirports}
           topCountries={awareness.topCountries}
           aircraftTypes={awareness.aircraftTypes}
           comparisons={comparisons}
           totalCo2Kg={awareness.yearCo2Kg}
-          airportEmissionPoints={airportEmissionPoints}
         />
       </section>
     </PublicShell>
   );
+}
+
+async function DashboardMapSection() {
+  const airportEmissionPoints = await getDashboardAirportEmissionPoints();
+  return <LazyAirportEmissionsMap airports={airportEmissionPoints} />;
 }
 
 function DataStatusWidget({ freshness }: { freshness: ImportFreshness }) {

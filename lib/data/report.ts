@@ -1,3 +1,4 @@
+import { unstable_cache } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { getAwarenessDashboardData } from "@/lib/awareness/aggregates";
 import { getAttributionQualityReport, type AttributionQualityReport } from "@/lib/data/attributionQuality";
@@ -60,7 +61,11 @@ type FlightSummaryRow = {
   flights: bigint;
 };
 
-export async function getDataReport(): Promise<DataReport> {
+export const getDataReport = unstable_cache(getDataReportUncached, ["data-report-v2"], {
+  revalidate: 300
+});
+
+async function getDataReportUncached(): Promise<DataReport> {
   const [
     dashboard,
     flightSummary,

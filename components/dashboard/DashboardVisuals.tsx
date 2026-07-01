@@ -16,13 +16,11 @@ import {
 } from "recharts";
 import { Car, House, TreePine } from "lucide-react";
 import type { ReactNode } from "react";
-import { AirportEmissionsMap } from "@/components/dashboard/AirportEmissionsMap";
 import { DashboardCard } from "@/components/dashboard/DashboardCard";
 import { dashboardGridRowClass } from "@/components/dashboard/dashboardGrid";
 import type { AwarenessRankPoint, AwarenessSeriesPoint } from "@/lib/awareness/types";
 import type { ComparisonCardData } from "@/lib/comparisons";
 import { buildAircraftCategoryBreakdown, buildCountryBreakdown, type DonutBreakdownPoint } from "@/lib/dashboard/breakdowns";
-import type { AirportEmissionPoint } from "@/lib/dashboard/report";
 import { formatCompactNumber } from "@/lib/format";
 
 const countryColors = ["#8B5CF6", "#3B82F6", "#22C55E", "#D9A441", "#F97316", "#EC4899"];
@@ -36,8 +34,6 @@ type VisualsProps = {
   aircraftTypes: AwarenessRankPoint[];
   comparisons: ComparisonCardData[];
   totalCo2Kg: number;
-  airportEmissionPoints: AirportEmissionPoint[];
-  showMap?: boolean;
 };
 
 export function DashboardVisuals({
@@ -46,14 +42,10 @@ export function DashboardVisuals({
   topCountries,
   aircraftTypes,
   comparisons,
-  totalCo2Kg,
-  airportEmissionPoints,
-  showMap = true
+  totalCo2Kg
 }: VisualsProps) {
   return (
     <>
-      {showMap ? <AirportEmissionsMap airports={airportEmissionPoints} /> : null}
-
       <DashboardGridRow>
         <EmissionsTimelineChart data={monthlySeries} />
         <TopAirportsChart data={topAirports} />

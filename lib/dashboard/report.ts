@@ -1,3 +1,4 @@
+import { unstable_cache } from "next/cache";
 import { getAwarenessDashboardData } from "@/lib/awareness/aggregates";
 import { AggregateGroups, AggregatePeriods } from "@/lib/awareness/rollupConstants";
 import { resolveAirport } from "@/lib/airports/ourAirports";
@@ -17,14 +18,21 @@ export type AirportEmissionPoint = {
   flights: number;
 };
 
-export async function getVisualDashboardReport() {
+export const getVisualDashboardReport = unstable_cache(getVisualDashboardReportUncached, ["visual-dashboard-report-v2"], {
+  revalidate: 300
+});
+
+export const getDashboardAirportEmissionPoints = unstable_cache(getAirportEmissionPoints, ["dashboard-airport-emission-points-v2"], {
+  revalidate: 300
+});
+
+async function getVisualDashboardReportUncached() {
   const period = getDashboardYearToDatePeriod(new Date());
-  const [awareness, freshness, attributionQuality, aggregateCounts, airportEmissionPoints] = await Promise.all([
+  const [awareness, freshness, attributionQuality, aggregateCounts] = await Promise.all([
     getAwarenessDashboardData(period.now),
     getImportFreshness(),
     getAttributionQualityReport({ from: period.yearStart, to: period.nextYearStart }),
-    getAggregateCounts(period),
-    getAirportEmissionPoints()
+    getAggregateCounts(period)
   ]);
 
   const co2Tons = awareness.yearCo2Kg / 1000;
@@ -37,7 +45,6 @@ export async function getVisualDashboardReport() {
     freshness,
     attributionQuality,
     comparisons,
-    airportEmissionPoints,
     aggregateCounts: {
       airports: aggregateCounts.airports || awareness.topAirports.length,
       countries: aggregateCounts.countries || awareness.topCountries.length
