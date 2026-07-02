@@ -809,6 +809,50 @@ Cruise pages:
 
 Source attribution is shown for AISStream.io and EMSA THETIS-MRV.
 
+## Cruise Verification Workflow
+
+PaperStraw's cruise module treats AIS records as candidate vessel data, not public-ready cruise scope verification.
+
+Workflow:
+
+1. AISStream ingestion produces passenger-vessel candidates in `cruise_ships` and `cruise_positions`.
+2. Candidates are not automatically public-eligible.
+3. Curated registry imports define exact IMO-level `ACCEPT` and `EXCLUDE` decisions.
+4. Registry reconciliation creates transparent verification states.
+5. Only `VERIFIED_OCEAN_CRUISE` vessels may later be used for public cruise maps, emissions totals, rankings, and dashboard claims.
+6. Review queue exports help identify unresolved candidates for manual verification.
+
+Strict verification rule:
+
+`VERIFIED_OCEAN_CRUISE` requires an exact IMO match against a curated registry entry with `registry_decision=ACCEPT`.
+
+AIS passenger type, vessel names, dimensions, speed patterns, MRV passenger classification, or text containing "cruise" are useful evidence, but they must never verify a vessel by themselves.
+
+THETIS-MRV is useful for annual CO2/fuel baselines and IMO-level evidence. An MRV match may enrich a review record, but it is not sufficient to verify leisure ocean-cruise scope without an exact curated registry match.
+
+Curated registry commands:
+
+```bash
+pnpm cruises:import-registry -- --file data/cruises/verified-ocean-cruise-registry.csv --dry-run
+pnpm cruises:import-registry -- --file data/cruises/verified-ocean-cruise-registry.csv --apply
+```
+
+Reconciliation commands:
+
+```bash
+pnpm cruises:registry:reconcile -- --dry-run
+pnpm cruises:registry:reconcile -- --apply
+pnpm cruises:registry:reconcile -- --dry-run --output data/cruises/reconciliation-report.json
+```
+
+Review queue export:
+
+```bash
+pnpm cruises:export-review-queue -- --output data/cruises/review-queue.csv
+```
+
+Do not apply registry imports or reconciliation against Neon production until the registry and migration have been tested on `cruises-dev`.
+
 ## Methodology And Ethics
 
 - Emissions are estimates: `distance_km * kg_CO2_per_km`.

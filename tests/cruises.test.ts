@@ -21,6 +21,11 @@ import {
   type CruiseScopeAuditVessel
 } from "@/lib/cruises/scopeAudit";
 import {
+  needsCruiseReviewQueue,
+  parseRegistryCsv,
+  reconcileCruiseCandidate
+} from "@/lib/cruises/registry";
+import {
   CRUISE_POSITION_FRESHNESS_WINDOW_MS,
   buildCruiseActivityMapPoints,
   dedupeCruiseEstimateRows,
@@ -251,6 +256,110 @@ describe("cruise scope audit classifier", () => {
     expect(JSON.stringify(vessel)).toBe(before);
     expect(categories).toContain(result.category);
     expect(result.evidence.length).toBeGreaterThan(0);
+  });
+});
+
+describe("verified ocean cruise registry", () => {
+  it("accepts a valid registry entry in dry-run parsing", () => {
+    const parsed = parseRegistryCsv(
+      [
+        "imo,canonical_name,operator,operator_group,vessel_segment,registry_decision,active_status,source_name,source_url,source_checked_at,notes",
+        "9837420,MSC World Europa,MSC Cruises,MSC,OCEAN_CRUISE,ACCEPT,ACTIVE,Example Registry,https://example.test/msc-world-europa,2026-07-02,verified"
+      ].join("\n")
+    );
+
+    expect(parsed.errors).toEqual([]);
+    expect(parsed.rows).toHaveLength(1);
+    expect(parsed.rows[0]).toMatchObject({ imo: "9837420", registryDecision: "ACCEPT" });
+  });
+
+  it("rejects invalid IMO registry rows", () => {
+    const parsed = parseRegistryCsv(
+      [
+        "imo,canonical_name,operator,operator_group,vessel_segment,registry_decision,active_status,source_name,source_url,source_checked_at,notes",
+        "1234560,Invalid IMO,Operator,,OCEAN_CRUISE,ACCEPT,ACTIVE,Source,https://example.test,2026-07-02,"
+      ].join("\n")
+    );
+
+    expect(parsed.errors.join(" ")).toContain("valid checksum");
+    expect(parsed.rows).toHaveLength(0);
+  });
+
+  it("rejects conflicting duplicate IMO decisions", () => {
+    const parsed = parseRegistryCsv(
+      [
+        "imo,canonical_name,operator,operator_group,vessel_segment,registry_decision,active_status,source_name,source_url,source_checked_at,notes",
+        "9837420,MSC World Europa,MSC Cruises,MSC,OCEAN_CRUISE,ACCEPT,ACTIVE,Source,https://example.test/a,2026-07-02,",
+        "9837420,MSC World Europa,MSC Cruises,MSC,OCEAN_CRUISE,EXCLUDE,ACTIVE,Source,https://example.test/b,2026-07-02,"
+      ].join("\n")
+    );
+
+    expect(parsed.errors.join(" ")).toContain("conflicting decisions");
+  });
+
+  it("verifies only exact ACCEPT registry IMO matches", () => {
+    const decision = reconcileCruiseCandidate(registryCandidate({ imo: "9837420", name: "Different Name" }), {
+      id: "registry-1",
+      imo: "9837420",
+      registryDecision: "ACCEPT",
+      sourceName: "Curated Registry"
+    });
+
+    expect(decision.verificationStatus).toBe("VERIFIED_OCEAN_CRUISE");
+    expect(decision.confidence).toBe("HIGH");
+    expect(decision.decisionSource).toBe("curated_registry_exact_imo_accept");
+  });
+
+  it("excludes exact EXCLUDE registry IMO matches", () => {
+    const decision = reconcileCruiseCandidate(registryCandidate({ imo: "9137363", name: "WSF PUYALLUP" }), {
+      id: "registry-2",
+      imo: "9137363",
+      registryDecision: "EXCLUDE",
+      sourceName: "Curated Registry"
+    });
+
+    expect(decision.verificationStatus).toBe("EXCLUDED_NON_CRUISE");
+    expect(decision.confidence).toBe("HIGH");
+  });
+
+  it("never verifies passenger AIS type without a registry match", () => {
+    const decision = reconcileCruiseCandidate(registryCandidate({ imo: "9837420", shipType: "Passenger ship" }), null);
+
+    expect(decision.verificationStatus).toBe("REVIEW_REQUIRED");
+    expect(decision.verificationStatus).not.toBe("VERIFIED_OCEAN_CRUISE");
+  });
+
+  it("never verifies name-only matches", () => {
+    const decision = reconcileCruiseCandidate(registryCandidate({ imo: "9137363", name: "MSC World Europa" }), {
+      id: "registry-1",
+      imo: "9837420",
+      registryDecision: "ACCEPT",
+      sourceName: "Curated Registry"
+    });
+
+    expect(decision.verificationStatus).toBe("REVIEW_REQUIRED");
+  });
+
+  it("never verifies MRV-only matches or missing IMO candidates", () => {
+    expect(reconcileCruiseCandidate(registryCandidate({ imo: "9837420", hasMrvRecord: true }), null).verificationStatus).toBe("REVIEW_REQUIRED");
+    expect(reconcileCruiseCandidate(registryCandidate({ imo: null, hasMrvRecord: true }), null).verificationStatus).toBe("REVIEW_REQUIRED");
+  });
+
+  it("keeps dry-run reconciliation as a pure no-write decision helper", () => {
+    const candidate = registryCandidate({ imo: "9837420" });
+    const before = JSON.stringify(candidate);
+    const decision = reconcileCruiseCandidate(candidate, null);
+
+    expect(JSON.stringify(candidate)).toBe(before);
+    expect(decision.decisionSource).toBe("no_curated_registry_imo_match");
+  });
+
+  it("includes only unresolved statuses in the review queue", () => {
+    expect(needsCruiseReviewQueue(null)).toBe(true);
+    expect(needsCruiseReviewQueue("UNASSESSED")).toBe(true);
+    expect(needsCruiseReviewQueue("REVIEW_REQUIRED")).toBe(true);
+    expect(needsCruiseReviewQueue("VERIFIED_OCEAN_CRUISE")).toBe(false);
+    expect(needsCruiseReviewQueue("EXCLUDED_NON_CRUISE")).toBe(false);
   });
 });
 
@@ -536,6 +645,25 @@ function auditVessel(overrides: Partial<CruiseScopeAuditVessel>): CruiseScopeAud
     destination: null,
     hasMrvRecord: false,
     hasStaticPayload: false,
+    ...overrides
+  };
+}
+
+function registryCandidate(overrides: {
+  id?: string;
+  imo?: string | null;
+  mmsi?: string | null;
+  name?: string;
+  shipType?: string | null;
+  hasMrvRecord?: boolean;
+}) {
+  return {
+    id: "ship-1",
+    imo: "9837420",
+    mmsi: "215123456",
+    name: "Candidate Vessel",
+    shipType: "Passenger ship",
+    hasMrvRecord: false,
     ...overrides
   };
 }

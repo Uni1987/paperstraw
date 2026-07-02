@@ -144,6 +144,7 @@ model CruiseShip {
   positions      CruisePosition[]
   annualEmissions CruiseEmissionsAnnual[]
   dailyEstimates CruiseEmissionsDailyEstimate[]
+  verification   CruiseVesselVerification?
 
   @@index([name])
   @@index([operator])
@@ -208,4 +209,75 @@ model CruiseEmissionsDailyEstimate {
   @@index([date])
   @@index([shipId, date])
   @@map("cruise_emissions_daily_estimates")
+}
+
+enum CruiseVesselSegment {
+  OCEAN_CRUISE
+  EXPEDITION_CRUISE
+}
+
+enum CruiseRegistryDecision {
+  ACCEPT
+  EXCLUDE
+}
+
+enum CruiseVesselActiveStatus {
+  ACTIVE
+  RETIRED
+  UNKNOWN
+}
+
+enum CruiseVerificationStatus {
+  VERIFIED_OCEAN_CRUISE
+  REVIEW_REQUIRED
+  EXCLUDED_NON_CRUISE
+  UNASSESSED
+}
+
+enum CruiseVerificationConfidence {
+  HIGH
+  MEDIUM
+  LOW
+}
+
+model CruiseVesselRegistryEntry {
+  id               String                    @id @default(cuid())
+  imo              String                    @unique
+  canonicalName    String                    @map("canonical_name")
+  operator         String
+  operatorGroup    String?                   @map("operator_group")
+  vesselSegment    CruiseVesselSegment       @map("vessel_segment")
+  registryDecision CruiseRegistryDecision    @map("registry_decision")
+  activeStatus     CruiseVesselActiveStatus  @map("active_status")
+  sourceName       String                    @map("source_name")
+  sourceUrl        String                    @map("source_url")
+  sourceCheckedAt  DateTime                  @map("source_checked_at")
+  notes            String?
+  evidence         Json?
+  createdAt        DateTime                  @default(now()) @map("created_at")
+  updatedAt        DateTime                  @updatedAt @map("updated_at")
+  verifications    CruiseVesselVerification[]
+
+  @@index([registryDecision])
+  @@index([vesselSegment])
+  @@map("cruise_vessel_registry_entries")
+}
+
+model CruiseVesselVerification {
+  id                 String                         @id @default(cuid())
+  shipId             String                         @unique @map("ship_id")
+  registryEntryId    String?                        @map("registry_entry_id")
+  verificationStatus CruiseVerificationStatus       @map("verification_status")
+  confidence         CruiseVerificationConfidence
+  decisionSource     String                         @map("decision_source")
+  evidence           Json?
+  assessedAt         DateTime?                      @map("assessed_at")
+  createdAt          DateTime                       @default(now()) @map("created_at")
+  updatedAt          DateTime                       @updatedAt @map("updated_at")
+  ship               CruiseShip                     @relation(fields: [shipId], references: [id], onDelete: Cascade)
+  registryEntry      CruiseVesselRegistryEntry?     @relation(fields: [registryEntryId], references: [id], onDelete: SetNull)
+
+  @@index([verificationStatus])
+  @@index([registryEntryId])
+  @@map("cruise_vessel_verifications")
 }

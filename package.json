@@ -21,7 +21,10 @@
     "migrate:sqlite-to-postgres": "tsx scripts/migrate-sqlite-to-postgres.ts",
     "cruises:import-mrv": "tsx scripts/import-cruise-mrv.ts",
     "cruises:ingest-ais": "tsx scripts/ingest-cruise-ais.ts",
-    "cruises:audit-scope": "tsx scripts/audit-cruise-scope.ts"
+    "cruises:audit-scope": "tsx scripts/audit-cruise-scope.ts",
+    "cruises:import-registry": "tsx scripts/import-cruise-registry.ts",
+    "cruises:registry:reconcile": "tsx scripts/reconcile-cruise-registry.ts",
+    "cruises:export-review-queue": "tsx scripts/export-cruise-review-queue.ts"
   },
   "dependencies": {
     "@prisma/client": "^5.22.0",

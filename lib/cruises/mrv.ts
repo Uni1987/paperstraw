@@ -19,6 +19,8 @@ export function parseMrvCsv(content: string) {
 }
 
 export async function importCruiseMrvCsv(filePath: string): Promise<CruiseMrvImportResult> {
+  // MRV is emissions baseline evidence only. Passenger/MRV classification must not verify leisure
+  // ocean-cruise scope without an exact curated registry IMO match.
   const content = readFileSync(filePath, "utf8");
   const rows = parseMrvCsv(content);
   const result: CruiseMrvImportResult = {

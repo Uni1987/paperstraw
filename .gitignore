@@ -13,6 +13,9 @@
 backups/
 *.bak
 
+# Generated cruise review exports
+data/cruises/review-queue*.csv
+
 # Node artifacts
 node_modules/
 .next/
