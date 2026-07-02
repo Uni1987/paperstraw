@@ -32,6 +32,8 @@ import {
   estimateCruiseMapPayloadBytes,
   getCruiseDataStatus,
   getCruiseMapCopy,
+  filterPublicCruiseRowsByVerifiedShipIds,
+  isPublicVerifiedOceanCruise,
   selectLatestCruisePositionPerShip,
   summarizeCruiseEstimateRows
 } from "@/lib/cruises/queries";
@@ -380,6 +382,56 @@ describe("AIS websocket payload parsing", () => {
 
 describe("cruise dashboard query helpers", () => {
   const now = new Date("2026-07-01T12:00:00Z");
+
+  it("allows only high-confidence verified ocean cruises from exact ACCEPT registry IMO matches", () => {
+    expect(
+      isPublicVerifiedOceanCruise({
+        verificationStatus: "VERIFIED_OCEAN_CRUISE",
+        confidence: "HIGH",
+        registryDecision: "ACCEPT",
+        shipImo: "9837420",
+        registryImo: "9837420"
+      })
+    ).toBe(true);
+  });
+
+  it.each([
+    ["review required", "REVIEW_REQUIRED", "HIGH", "ACCEPT", "9837420", "9837420"],
+    ["unassessed", "UNASSESSED", "HIGH", "ACCEPT", "9837420", "9837420"],
+    ["excluded", "EXCLUDED_NON_CRUISE", "HIGH", "ACCEPT", "9837420", "9837420"],
+    ["missing verification", null, "HIGH", "ACCEPT", "9837420", "9837420"],
+    ["medium confidence", "VERIFIED_OCEAN_CRUISE", "MEDIUM", "ACCEPT", "9837420", "9837420"],
+    ["registry exclude", "VERIFIED_OCEAN_CRUISE", "HIGH", "EXCLUDE", "9837420", "9837420"],
+    ["name-only or mismatched IMO", "VERIFIED_OCEAN_CRUISE", "HIGH", "ACCEPT", "9837420", "9137363"],
+    ["missing IMO", "VERIFIED_OCEAN_CRUISE", "HIGH", "ACCEPT", null, "9837420"]
+  ])("excludes %s records from public cruise eligibility", (_label, verificationStatus, confidence, registryDecision, shipImo, registryImo) => {
+    expect(
+      isPublicVerifiedOceanCruise({
+        verificationStatus,
+        confidence,
+        registryDecision,
+        shipImo,
+        registryImo
+      })
+    ).toBe(false);
+  });
+
+  it("filters public cruise rows to verified ship ids for totals, map data and rankings", () => {
+    const rows = [
+      { shipId: "verified", value: 10 },
+      { shipId: "review-required", value: 20 },
+      { shipId: "unassessed", value: 30 },
+      { shipId: "excluded", value: 40 },
+      { shipId: "no-verification", value: 50 }
+    ];
+
+    expect(filterPublicCruiseRowsByVerifiedShipIds(rows, ["verified"])).toEqual([{ shipId: "verified", value: 10 }]);
+    expect(filterPublicCruiseRowsByVerifiedShipIds(rows, [])).toEqual([]);
+  });
+
+  it("empty registry produces no public cruise rows", () => {
+    expect(filterPublicCruiseRowsByVerifiedShipIds([{ shipId: "candidate", value: 1 }], [])).toHaveLength(0);
+  });
 
   it("selects one latest marker per ship when many AIS positions exist", () => {
     const points = selectLatestCruisePositionPerShip(

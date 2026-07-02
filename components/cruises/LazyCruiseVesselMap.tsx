@@ -17,13 +17,17 @@ export function LazyCruiseVesselMap({
   mapMode,
   latestPositionLabel,
   freshnessWindowHours,
-  monitoredRegionCount
+  monitoredRegionCount,
+  emptyStateTitle,
+  emptyStateDescription
 }: {
   points: CruiseMapPoint[];
   mapMode: CruiseMapMode;
   latestPositionLabel: string;
   freshnessWindowHours: number;
   monitoredRegionCount: number;
+  emptyStateTitle?: string;
+  emptyStateDescription?: string;
 }) {
   return (
     <DynamicCruiseVesselMap
@@ -32,6 +36,8 @@ export function LazyCruiseVesselMap({
       latestPositionLabel={latestPositionLabel}
       freshnessWindowHours={freshnessWindowHours}
       monitoredRegionCount={monitoredRegionCount}
+      emptyStateTitle={emptyStateTitle}
+      emptyStateDescription={emptyStateDescription}
     />
   );
 }

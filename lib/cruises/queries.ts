@@ -51,8 +51,17 @@ export type CruiseDataStatus = {
   latestPositionRelative: string;
   currentlyTracked: number;
   activeRegionCount: number;
-  status: "Healthy" | "Awaiting data" | "Stale";
+  status: "Healthy" | "Awaiting data" | "Stale" | "Verification in progress";
   freshnessWindowHours: number;
+  publicCoverage: string;
+};
+
+export type PublicCruiseEligibilityRecord = {
+  verificationStatus: string | null | undefined;
+  confidence: string | null | undefined;
+  registryDecision: string | null | undefined;
+  shipImo: string | null | undefined;
+  registryImo: string | null | undefined;
 };
 
 type CruisePositionSqlRow = {
@@ -76,14 +85,15 @@ export const getCruiseDashboardData = reactCache(async () => {
   tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
   const yearStart = new Date(Date.UTC(now.getUTCFullYear(), 0, 1));
   const recentSince = new Date(now.getTime() - CRUISE_POSITION_FRESHNESS_WINDOW_MS);
+  const verifiedShipIds = await getPublicVerifiedOceanCruiseShipIds();
 
   const [todayEstimateRows, ytdEstimateRows, positions, latestPosition, firstEstimate, annualCount] = await Promise.all([
-    getCruiseEstimateRows(todayStart, tomorrow),
-    getCruiseEstimateRows(yearStart, tomorrow),
-    getLatestCruisePositions(recentSince, now),
-    getLatestKnownCruisePosition(),
-    prisma.cruiseEmissionsDailyEstimate.aggregate({ _min: { date: true } }),
-    prisma.cruiseEmissionsAnnual.count()
+    getCruiseEstimateRows(todayStart, tomorrow, verifiedShipIds),
+    getCruiseEstimateRows(yearStart, tomorrow, verifiedShipIds),
+    getLatestCruisePositions(recentSince, now, verifiedShipIds),
+    getLatestKnownCruisePosition(verifiedShipIds),
+    getFirstCruiseEstimateDate(verifiedShipIds),
+    getCruiseAnnualRecordCount(verifiedShipIds)
   ]);
 
   const todayTotals = summarizeCruiseEstimateRows(todayEstimateRows);
@@ -120,11 +130,12 @@ export const getCruiseDashboardData = reactCache(async () => {
       source: "AISStream / EMSA THETIS-MRV",
       latestPositionAt,
       latestPositionExact: latestPositionAt ? formatDateTime(latestPositionAt) : null,
-      latestPositionRelative: formatRelativeTime(latestPositionAt, now),
+      latestPositionRelative: verifiedShipIds.length ? formatRelativeTime(latestPositionAt, now) : "No verified AIS positions yet",
       currentlyTracked: positions.length,
       activeRegionCount: CRUISE_REGIONS.length,
-      status: getCruiseDataStatus(latestPositionAt, now),
-      freshnessWindowHours: CRUISE_POSITION_FRESHNESS_WINDOW_HOURS
+      status: verifiedShipIds.length ? getCruiseDataStatus(latestPositionAt, now) : "Verification in progress",
+      freshnessWindowHours: CRUISE_POSITION_FRESHNESS_WINDOW_HOURS,
+      publicCoverage: verifiedShipIds.length ? `${verifiedShipIds.length.toLocaleString("en-US")} verified vessel(s)` : "No verified vessels yet"
     } satisfies CruiseDataStatus
   };
 });
@@ -137,6 +148,9 @@ export const getCruiseShipDetail = reactCache(async (shipId: string) => {
   const tomorrow = new Date(todayStart);
   tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
   const yearStart = new Date(Date.UTC(now.getUTCFullYear(), 0, 1));
+
+  const verified = await isPublicVerifiedOceanCruiseShipId(shipId);
+  if (!verified) return { enabled: true as const, ship: null };
 
   const [ship, latestPosition, today, ytd, annual] = await Promise.all([
     prisma.cruiseShip.findUnique({ where: { id: shipId } }),
@@ -170,7 +184,8 @@ export const getCruiseShipDetail = reactCache(async (shipId: string) => {
   };
 });
 
-async function getLatestCruisePositions(recentSince: Date, now = new Date()): Promise<CruiseMapPoint[]> {
+async function getLatestCruisePositions(recentSince: Date, now = new Date(), verifiedShipIds: string[]): Promise<CruiseMapPoint[]> {
+  if (!verifiedShipIds.length) return [];
   const rows = await prisma.$queryRaw<CruisePositionSqlRow[]>`
     SELECT DISTINCT ON (p.ship_id)
       p.ship_id AS "shipId",
@@ -186,6 +201,7 @@ async function getLatestCruisePositions(recentSince: Date, now = new Date()): Pr
     INNER JOIN cruise_ships s ON s.id = p.ship_id
     WHERE p.timestamp >= ${recentSince}
       AND p.timestamp <= ${now}
+      AND p.ship_id = ANY(${verifiedShipIds})
       AND p.latitude BETWEEN -90 AND 90
       AND p.longitude BETWEEN -180 AND 180
       AND NOT (p.latitude = 0 AND p.longitude = 0)
@@ -211,8 +227,10 @@ async function getLatestCruisePositions(recentSince: Date, now = new Date()): Pr
   );
 }
 
-async function getLatestKnownCruisePosition() {
+async function getLatestKnownCruisePosition(verifiedShipIds: string[]) {
+  if (!verifiedShipIds.length) return null;
   const rows = await prisma.cruisePosition.findMany({
+    where: { shipId: { in: verifiedShipIds } },
     orderBy: { timestamp: "desc" },
     take: 50,
     select: { timestamp: true, latitude: true, longitude: true }
@@ -221,9 +239,10 @@ async function getLatestKnownCruisePosition() {
   return row ? { timestamp: row.timestamp } : null;
 }
 
-async function getCruiseEstimateRows(start: Date, end: Date) {
+async function getCruiseEstimateRows(start: Date, end: Date, verifiedShipIds: string[]) {
+  if (!verifiedShipIds.length) return [];
   const rows = await prisma.cruiseEmissionsDailyEstimate.findMany({
-    where: { date: { gte: start, lt: end } },
+    where: { shipId: { in: verifiedShipIds }, date: { gte: start, lt: end } },
     select: {
       shipId: true,
       date: true,
@@ -235,6 +254,19 @@ async function getCruiseEstimateRows(start: Date, end: Date) {
   });
 
   return rows;
+}
+
+async function getFirstCruiseEstimateDate(verifiedShipIds: string[]) {
+  if (!verifiedShipIds.length) return { _min: { date: null } };
+  return prisma.cruiseEmissionsDailyEstimate.aggregate({
+    where: { shipId: { in: verifiedShipIds } },
+    _min: { date: true }
+  });
+}
+
+async function getCruiseAnnualRecordCount(verifiedShipIds: string[]) {
+  if (!verifiedShipIds.length) return 0;
+  return prisma.cruiseEmissionsAnnual.count({ where: { shipId: { in: verifiedShipIds } } });
 }
 
 function rankCruiseEstimateRows(rows: CruiseEstimateInputRow[], take: number): CruiseRankRow[] {
@@ -286,6 +318,62 @@ async function hydrateCruiseRankRows(rows: CruiseRankRow[]) {
       distanceNm: row.distanceNm
     };
   });
+}
+
+export async function getPublicVerifiedOceanCruiseShipIds() {
+  if (!(await cruiseVerificationTablesAvailable())) return [];
+  const rows = await prisma.$queryRaw<Array<{ id: string }>>`
+    SELECT s.id
+    FROM cruise_ships s
+    INNER JOIN cruise_vessel_verifications v ON v.ship_id = s.id
+    INNER JOIN cruise_vessel_registry_entries r ON r.id = v.registry_entry_id
+    WHERE v.verification_status = 'VERIFIED_OCEAN_CRUISE'
+      AND v.confidence = 'HIGH'
+      AND r.registry_decision = 'ACCEPT'
+      AND r.imo = s.imo
+  `;
+  return rows.map((row) => row.id);
+}
+
+async function isPublicVerifiedOceanCruiseShipId(shipId: string) {
+  if (!(await cruiseVerificationTablesAvailable())) return false;
+  const rows = await prisma.$queryRaw<Array<{ id: string }>>`
+    SELECT s.id
+    FROM cruise_ships s
+    INNER JOIN cruise_vessel_verifications v ON v.ship_id = s.id
+    INNER JOIN cruise_vessel_registry_entries r ON r.id = v.registry_entry_id
+    WHERE s.id = ${shipId}
+      AND v.verification_status = 'VERIFIED_OCEAN_CRUISE'
+      AND v.confidence = 'HIGH'
+      AND r.registry_decision = 'ACCEPT'
+      AND r.imo = s.imo
+    LIMIT 1
+  `;
+  return rows.length > 0;
+}
+
+async function cruiseVerificationTablesAvailable() {
+  const rows = await prisma.$queryRaw<Array<{ registry_exists: boolean; verification_exists: boolean }>>`
+    SELECT
+      to_regclass('public.cruise_vessel_registry_entries') IS NOT NULL AS registry_exists,
+      to_regclass('public.cruise_vessel_verifications') IS NOT NULL AS verification_exists
+  `;
+  return Boolean(rows[0]?.registry_exists && rows[0]?.verification_exists);
+}
+
+export function isPublicVerifiedOceanCruise(record: PublicCruiseEligibilityRecord) {
+  return (
+    record.verificationStatus === "VERIFIED_OCEAN_CRUISE" &&
+    record.confidence === "HIGH" &&
+    record.registryDecision === "ACCEPT" &&
+    Boolean(record.shipImo) &&
+    record.shipImo === record.registryImo
+  );
+}
+
+export function filterPublicCruiseRowsByVerifiedShipIds<T extends { shipId: string }>(rows: T[], verifiedShipIds: Iterable<string>) {
+  const verified = new Set(verifiedShipIds);
+  return rows.filter((row) => verified.has(row.shipId));
 }
 
 function buildOperatorRows(rows: CruiseRankRow[], take = 12) {

@@ -36,39 +36,40 @@ export default async function CruisesPage() {
     );
   }
 
+  const hasVerifiedVessels = data.sourceStatus.currentlyTracked > 0 || data.kpis.hasTodayEstimates || data.kpis.hasYtdEstimates || data.mapPoints.length > 0;
   const statCards = [
     {
       label: "Estimated CO2 today",
-      value: data.kpis.hasTodayEstimates ? `${formatTonnes(data.kpis.co2TodayTonnes)} t` : "Awaiting data",
-      detail: data.kpis.hasTodayEstimates ? "Estimated from stored AIS movement" : "No daily estimate has been written yet",
+      value: data.kpis.hasTodayEstimates ? `${formatTonnes(data.kpis.co2TodayTonnes)} t` : "Awaiting verified vessels",
+      detail: data.kpis.hasTodayEstimates ? "Estimated from verified cruise movement" : "Public totals require verified ocean-cruise identities",
       accent: "gold" as const,
       icon: "CO2"
     },
     {
       label: "Estimated CO2 YTD",
-      value: data.kpis.hasYtdEstimates ? `${formatTonnes(data.kpis.co2YtdTonnes)} t` : "Awaiting data",
-      detail: "Based on locally collected data",
+      value: data.kpis.hasYtdEstimates ? `${formatTonnes(data.kpis.co2YtdTonnes)} t` : "Awaiting verified vessels",
+      detail: data.kpis.hasYtdEstimates ? "Based on verified public cruise data" : "Candidate AIS data is not shown publicly",
       accent: "purple" as const,
       icon: "YT"
     },
     {
       label: "Ships currently tracked",
-      value: data.kpis.trackedShips.toLocaleString("en-US"),
-      detail: `Latest position within ${data.sourceStatus.freshnessWindowHours} hours`,
+      value: data.kpis.trackedShips > 0 ? data.kpis.trackedShips.toLocaleString("en-US") : "Awaiting verified vessels",
+      detail: data.kpis.trackedShips > 0 ? `Verified ships within ${data.sourceStatus.freshnessWindowHours} hours` : "No verified public vessels yet",
       accent: "blue" as const,
       icon: "SH"
     },
     {
       label: "Fuel burned today",
-      value: data.kpis.hasTodayEstimates ? `${formatTonnes(data.kpis.fuelTodayTonnes)} t` : "Awaiting data",
-      detail: "From the same daily estimates",
+      value: data.kpis.hasTodayEstimates ? `${formatTonnes(data.kpis.fuelTodayTonnes)} t` : "Awaiting verified vessels",
+      detail: data.kpis.hasTodayEstimates ? "From the same verified daily estimates" : "Held until registry verification is ready",
       accent: "pink" as const,
       icon: "FL"
     },
     {
       label: "Active AIS regions",
-      value: data.kpis.activeRegionCount.toLocaleString("en-US"),
-      detail: `${data.kpis.activeRegionCount.toLocaleString("en-US")} monitored cruise regions`,
+      value: hasVerifiedVessels ? data.kpis.activeRegionCount.toLocaleString("en-US") : "Awaiting verified vessels",
+      detail: hasVerifiedVessels ? `${data.kpis.activeRegionCount.toLocaleString("en-US")} monitored cruise regions` : "AIS candidates remain separate from public coverage",
       accent: "green" as const,
       icon: "RG"
     }
@@ -90,6 +91,16 @@ export default async function CruisesPage() {
           AISStream provides vessel movement data. EMSA THETIS-MRV annual disclosures provide an emissions baseline where
           available. Daily values are estimates, not official real-time emissions.
         </p>
+        {!hasVerifiedVessels ? (
+          <section className="mt-6 max-w-4xl rounded-2xl border border-paper/20 bg-paper/10 p-5">
+            <h2 className="text-xl font-semibold text-white">Verified cruise coverage is being prepared</h2>
+            <p className="mt-3 text-sm leading-6 text-white/64">
+              PaperStraw is validating vessel identities before publishing cruise emissions statistics. Live AIS candidate
+              data is collected separately and is not shown publicly until a vessel is verified as an ocean-going leisure
+              cruise ship.
+            </p>
+          </section>
+        ) : null}
       </header>
 
       <section className="-mx-4 mt-4 flex snap-x gap-3 overflow-x-auto px-4 pb-2 md:hidden">
@@ -114,13 +125,15 @@ export default async function CruisesPage() {
             latestPositionLabel={data.sourceStatus.latestPositionRelative}
             freshnessWindowHours={data.sourceStatus.freshnessWindowHours}
             monitoredRegionCount={data.sourceStatus.activeRegionCount}
+            emptyStateTitle="Verified cruise coverage is being prepared"
+            emptyStateDescription="Live AIS candidate data is collected separately and is not shown publicly until a vessel is verified as an ocean-going leisure cruise ship."
           />
         </Suspense>
       </section>
 
       <section className="mt-5 grid gap-4 md:mt-4 xl:grid-cols-2">
-        <CruiseRankingCard title="Top cruise emitters today" rows={data.topToday} emptyMessage="No daily cruise estimates yet." />
-        <CruiseRankingCard title="Top cruise emitters YTD" rows={data.topYtd} emptyMessage="No YTD cruise estimates yet." />
+        <CruiseRankingCard title="Top cruise emitters today" rows={data.topToday} emptyMessage="Awaiting verified ocean-cruise vessels." />
+        <CruiseRankingCard title="Top cruise emitters YTD" rows={data.topYtd} emptyMessage="Awaiting verified ocean-cruise vessels." />
       </section>
 
       <section className="mt-4 grid gap-4 xl:grid-cols-[1fr_0.85fr]">
@@ -128,8 +141,8 @@ export default async function CruisesPage() {
         <DashboardCard title="About these numbers" className={operatorRows.length ? "" : "xl:col-span-2"}>
           <div className="space-y-4 p-5 text-sm leading-6 text-white/60">
             <p>
-              Cruise positions are live AIS-derived movement observations. Emissions are stored daily estimates and are
-              separated from raw AIS position frequency to avoid inflating totals.
+              Public cruise statistics only include vessels verified through an exact curated registry IMO match. AIS
+              passenger-vessel candidates are collected separately and are not shown publicly until verified.
             </p>
             {data.ytdCollectionStart ? (
               <p className="rounded-xl border border-paper/20 bg-paper/10 px-4 py-3 text-paper/90">
@@ -137,8 +150,8 @@ export default async function CruisesPage() {
               </p>
             ) : null}
             <p>
-              Sources: AISStream vessel movement feed and EMSA THETIS-MRV public annual ship emissions data where an IMO
-              match exists.
+              Sources: curated ocean-cruise registry entries, AISStream vessel movement feed and EMSA THETIS-MRV public
+              annual ship emissions data where an IMO match exists.
             </p>
             <Link href="/methodology" className="inline-flex text-sm font-semibold text-paper hover:text-white">
               Read the methodology
@@ -159,8 +172,9 @@ function CruiseDataStatusWidget({ status }: { status: CruiseDataStatus }) {
       <p className={`text-[0.68rem] font-semibold uppercase tracking-[0.16em] ${statusTone}`}>Cruise data status</p>
       <div className="mt-4 space-y-3">
         <SidebarStatusRow label="Source" value={status.source} />
-        <SidebarStatusRow label="Last AIS position" value={status.latestPositionRelative} detail={status.latestPositionExact ?? undefined} />
-        <SidebarStatusRow label="Currently tracked" value={`${status.currentlyTracked.toLocaleString("en-US")} ships`} />
+        <SidebarStatusRow label="Public coverage" value={status.publicCoverage} />
+        <SidebarStatusRow label="Last verified AIS position" value={status.latestPositionRelative} detail={status.latestPositionExact ?? undefined} />
+        <SidebarStatusRow label="Currently tracked" value={`${status.currentlyTracked.toLocaleString("en-US")} verified ships`} />
         <SidebarStatusRow label="Coverage" value={`${status.activeRegionCount.toLocaleString("en-US")} monitored regions`} />
         <SidebarStatusRow label="Status" value={status.status} />
       </div>

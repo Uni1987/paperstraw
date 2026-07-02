@@ -50,13 +50,17 @@ export function CruiseVesselMap({
   mapMode,
   latestPositionLabel,
   freshnessWindowHours,
-  monitoredRegionCount
+  monitoredRegionCount,
+  emptyStateTitle = "Awaiting recent AIS positions",
+  emptyStateDescription = "The cruise worker is connected, but no recent vessel positions are available yet."
 }: {
   points: CruiseMapPoint[];
   mapMode: CruiseMapMode;
   latestPositionLabel: string;
   freshnessWindowHours: number;
   monitoredRegionCount: number;
+  emptyStateTitle?: string;
+  emptyStateDescription?: string;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
@@ -162,10 +166,8 @@ export function CruiseVesselMap({
       {mapReady && points.length === 0 ? (
         <div className="absolute inset-0 flex items-center justify-center bg-[#030807]/72 p-6 text-center backdrop-blur-[1px]">
           <div className="max-w-sm rounded-2xl border border-white/10 bg-[#07100f]/92 p-6 shadow-2xl">
-            <p className="text-lg font-semibold text-white">Awaiting recent AIS positions</p>
-            <p className="mt-3 text-sm leading-6 text-white/58">
-              The cruise worker is connected, but no recent vessel positions are available yet.
-            </p>
+            <p className="text-lg font-semibold text-white">{emptyStateTitle}</p>
+            <p className="mt-3 text-sm leading-6 text-white/58">{emptyStateDescription}</p>
           </div>
         </div>
       ) : null}
