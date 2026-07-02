@@ -830,11 +830,117 @@ AIS passenger type, vessel names, dimensions, speed patterns, MRV passenger clas
 
 THETIS-MRV is useful for annual CO2/fuel baselines and IMO-level evidence. An MRV match may enrich a review record, but it is not sufficient to verify leisure ocean-cruise scope without an exact curated registry match.
 
+Seed registry workflow:
+
+Use `data/cruises/verified-ocean-cruise-registry.csv` to build a small, manually verified seed list of roughly 20-30 major ocean cruise ships. Start with well-known ocean cruise vessels whose public identity can be verified from primary or high-quality sources. Do not copy large vessel directories into the registry, and do not accept any ship from name matching, AIS passenger type, MRV classification, dimensions, operator text, or route patterns alone.
+
+Before adding an `ACCEPT` row, a maintainer must verify:
+
+- one official operator or fleet source proving that the vessel belongs to an ocean-going leisure cruise fleet
+- one IMO identity source proving the exact seven-digit IMO for that same vessel
+- a valid IMO checksum
+- canonical vessel name, operator, vessel segment, active status, source URL, and source checked date
+
+`EXCLUDE` rows should document why a candidate is out of scope, such as ferry, RoPax, river cruise, water taxi, excursion vessel, high-speed passenger craft, yacht, cargo vessel, tanker, fishing vessel, military vessel, or another non-ocean-cruise category.
+
+Recommended seed workflow:
+
+1. Pick one candidate vessel from the local review queue or from an official operator fleet page.
+2. Verify ocean-cruise fleet membership from an official operator/fleet source.
+3. Verify the exact IMO from a separate IMO identity source.
+4. Add one row to `data/cruises/verified-ocean-cruise-registry.csv`.
+5. Run the validation report.
+6. Dry-run the registry import.
+7. Apply and reconcile only on `cruises-dev` after the CSV passes review.
+
+CSV validation report:
+
+```bash
+pnpm cruises:validate-registry -- --file data/cruises/verified-ocean-cruise-registry.csv
+```
+
+The report is read-only and shows `ACCEPT`/`EXCLUDE` counts, duplicate IMO conflicts, missing source URLs, missing source checked dates, invalid IMO format/checksum rows, missing names/operators, missing or invalid vessel segments, and active versus retired counts.
+
 Curated registry commands:
 
 ```bash
 pnpm cruises:import-registry -- --file data/cruises/verified-ocean-cruise-registry.csv --dry-run
 pnpm cruises:import-registry -- --file data/cruises/verified-ocean-cruise-registry.csv --apply
+```
+
+Registry status report:
+
+```bash
+pnpm cruises:registry:status
+```
+
+This command is read-only and reports registry entries, verified candidate matches, accepted registry entries not yet seen in AIS data, current public-eligible vessels, and candidate ships still awaiting review.
+
+Registry expansion manifest:
+
+`data/cruises/registry-expansion-manifest.csv` tracks the planned operator-by-operator registry expansion. It is a planning and coverage file only; it does not make any vessel public eligible.
+
+Manifest statuses:
+
+- `NOT_STARTED`
+- `RESEARCHING`
+- `READY_FOR_REVIEW`
+- `IMPORTED`
+- `NEEDS_MANUAL_SCOPE_DECISION`
+
+Manifest expected scope values:
+
+- `OCEAN_CRUISE`
+- `EXPEDITION_CRUISE`
+- `REVIEW_REQUIRED`
+
+Standard operator batch process:
+
+1. Select one operator from `data/cruises/registry-expansion-manifest.csv`.
+2. Verify official active-fleet membership from an operator, fleet, annual report, investor fleet list, or official company source.
+3. Verify exact IMO identity using an independent vessel identity source.
+4. Add only fully sourced rows to `data/cruises/verified-ocean-cruise-registry.csv`.
+5. Run selected-operator validation:
+
+```bash
+pnpm cruises:validate-registry -- --file data/cruises/verified-ocean-cruise-registry.csv --operator "MSC Cruises"
+```
+
+6. Review the CSV diff.
+7. Run import dry-run:
+
+```bash
+pnpm cruises:import-registry -- --file data/cruises/verified-ocean-cruise-registry.csv --dry-run
+```
+
+8. Apply the registry import only after manual review and only on the intended database.
+9. Run reconciliation dry-run:
+
+```bash
+pnpm cruises:registry:reconcile -- --dry-run
+```
+
+10. Apply reconciliation only after match counts are understood.
+11. Run the read-only coverage report:
+
+```bash
+pnpm cruises:registry:coverage
+pnpm cruises:registry:coverage -- --output data/cruises/registry-coverage-report.json
+```
+
+12. Commit the operator batch separately:
+
+```bash
+git commit -m "Add verified MSC Cruises registry batch"
+```
+
+The registry coverage command is read-only. It reports ACCEPT coverage by operator/group, AIS candidate matching, unmatched candidates, manifest operator status, public-eligible vessel counts, verified vessels with recent AIS positions, verified vessels with daily estimates, and a conservative dashboard-readiness label.
+
+Documentation-only CSV example. This row is fictional, intentionally uses a non-real placeholder identity, and must not be imported:
+
+```csv
+imo,canonical_name,operator,operator_group,vessel_segment,registry_decision,active_status,source_name,source_url,source_checked_at,notes
+0000000,Fictional Ocean Example,Fictional Cruise Line,Fictional Group,OCEAN_CRUISE,ACCEPT,ACTIVE,Documentation example only,https://example.invalid/not-a-real-source,2026-07-02,DO NOT USE - fictional placeholder row for format documentation only
 ```
 
 Reconciliation commands:

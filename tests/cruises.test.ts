@@ -21,10 +21,17 @@ import {
   type CruiseScopeAuditVessel
 } from "@/lib/cruises/scopeAudit";
 import {
+  buildOperatorRegistryValidationReport,
+  buildRegistryStatusSummary,
+  buildRegistryValidationReport,
   needsCruiseReviewQueue,
   parseRegistryCsv,
   reconcileCruiseCandidate
 } from "@/lib/cruises/registry";
+import {
+  buildRegistryCoverageReport,
+  parseRegistryExpansionManifest
+} from "@/lib/cruises/registryCoverage";
 import {
   CRUISE_POSITION_FRESHNESS_WINDOW_MS,
   buildCruiseActivityMapPoints,
@@ -297,6 +304,158 @@ describe("verified ocean cruise registry", () => {
     );
 
     expect(parsed.errors.join(" ")).toContain("conflicting decisions");
+  });
+
+  it("reports registry validation failures and active versus retired counts", () => {
+    const report = buildRegistryValidationReport(
+      [
+        "imo,canonical_name,operator,operator_group,vessel_segment,registry_decision,active_status,source_name,source_url,source_checked_at,notes",
+        "1234560,,Example Operator,,RIVER,ACCEPT,BROKEN,Source,,bad-date,",
+        "9837420,MSC World Europa,MSC Cruises,MSC,OCEAN_CRUISE,ACCEPT,ACTIVE,Source,https://example.test/a,2026-07-02,",
+        "9837420,MSC World Europa,MSC Cruises,MSC,OCEAN_CRUISE,EXCLUDE,RETIRED,Source,https://example.test/b,2026-07-02,"
+      ].join("\n")
+    );
+
+    expect(report.rowsRead).toBe(3);
+    expect(report.totalAcceptRows).toBe(2);
+    expect(report.totalExcludeRows).toBe(1);
+    expect(report.duplicateImoConflicts).toBe(1);
+    expect(report.missingSourceUrls).toBe(1);
+    expect(report.missingSourceCheckedDates).toBe(1);
+    expect(report.invalidImoRows).toBe(1);
+    expect(report.missingCanonicalNameRows).toBe(1);
+    expect(report.missingOperatorRows).toBe(0);
+    expect(report.missingOrInvalidVesselSegmentRows).toBe(1);
+    expect(report.activeStatusCounts).toMatchObject({ ACTIVE: 1, RETIRED: 1, UNKNOWN: 0 });
+    expect(report.invalidActiveStatusRows).toBe(1);
+    expect(report.validRowCount).toBe(1);
+  });
+
+  it("builds a read-only registry status summary", () => {
+    expect(
+      buildRegistryStatusSummary({
+        registryEntries: 20,
+        verifiedCandidateMatches: 12,
+        acceptedRegistryEntriesNotSeenInAis: 8,
+        currentPublicEligibleVessels: 12,
+        candidateShipsAwaitingReview: 140
+      })
+    ).toEqual({
+      registryEntries: 20,
+      verifiedCandidateMatches: 12,
+      acceptedRegistryEntriesNotSeenInAis: 8,
+      currentPublicEligibleVessels: 12,
+      candidateShipsAwaitingReview: 140
+    });
+  });
+
+  it("parses registry expansion manifest rows", () => {
+    const manifest = parseRegistryExpansionManifest(
+      [
+        "operator_group,operator,priority,expected_scope,registry_status,official_fleet_source,imo_identity_source,notes",
+        "Independent / other major operators,MSC Cruises,1,OCEAN_CRUISE,NOT_STARTED,,,Planned batch",
+        "Manual scope review,Hurtigruten Coastal Express,4,REVIEW_REQUIRED,NEEDS_MANUAL_SCOPE_DECISION,,,Manual scope required"
+      ].join("\n")
+    );
+
+    expect(manifest.errors).toEqual([]);
+    expect(manifest.entries).toHaveLength(2);
+    expect(manifest.entries[1]).toMatchObject({
+      operator: "Hurtigruten Coastal Express",
+      expectedScope: "REVIEW_REQUIRED",
+      registryStatus: "NEEDS_MANUAL_SCOPE_DECISION"
+    });
+  });
+
+  it("reports coverage for accepted, excluded and unmatched candidate ships", () => {
+    const report = buildRegistryCoverageReport({
+      manifestEntries: [
+        {
+          operatorGroup: "Group A",
+          operator: "Operator A",
+          priority: 1,
+          expectedScope: "OCEAN_CRUISE",
+          registryStatus: "IMPORTED",
+          officialFleetSource: null,
+          imoIdentitySource: null,
+          notes: null
+        },
+        {
+          operatorGroup: "Group B",
+          operator: "Operator B",
+          priority: 2,
+          expectedScope: "OCEAN_CRUISE",
+          registryStatus: "NOT_STARTED",
+          officialFleetSource: null,
+          imoIdentitySource: null,
+          notes: null
+        }
+      ],
+      registryEntries: [
+        {
+          imo: "9837420",
+          operator: "Operator A",
+          operatorGroup: "Group A",
+          registryDecision: "ACCEPT",
+          activeStatus: "ACTIVE",
+          vesselSegment: "OCEAN_CRUISE"
+        },
+        {
+          imo: "9137363",
+          operator: "Operator A",
+          operatorGroup: "Group A",
+          registryDecision: "EXCLUDE",
+          activeStatus: "ACTIVE",
+          vesselSegment: "OCEAN_CRUISE"
+        }
+      ],
+      candidateShips: [
+        { id: "accepted", imo: "9837420" },
+        { id: "excluded", imo: "9137363" },
+        { id: "unmatched", imo: "1234567" },
+        { id: "missing-imo", imo: null }
+      ],
+      publicEligibleShipIds: ["accepted"],
+      recentAisShipIds: ["accepted"],
+      dailyEstimateShipIds: []
+    });
+
+    expect(report.registryCoverage.totalAcceptEntries).toBe(1);
+    expect(report.registryCoverage.acceptEntriesByOperatorGroup).toEqual({ "Group A": 1 });
+    expect(report.aisCandidateCoverage.candidatesMatchedToAcceptedRegistryEntries).toBe(1);
+    expect(report.aisCandidateCoverage.candidatesMatchedToExcludedRegistryEntries).toBe(1);
+    expect(report.aisCandidateCoverage.unmatchedCandidates).toBe(2);
+    expect(report.operatorCoverage.rows.find((row) => row.operator === "Operator A")).toMatchObject({ acceptedShips: 1, matchedAisShips: 1 });
+    expect(report.operatorCoverage.operatorsWithZeroRegistryEntries).toContain("Operator B");
+    expect(report.publicDashboardReadiness.suitability).toBe("internal development only");
+  });
+
+  it("validates a selected operator batch and flags generic source URLs", () => {
+    const report = buildOperatorRegistryValidationReport(
+      [
+        "imo,canonical_name,operator,operator_group,vessel_segment,registry_decision,active_status,source_name,source_url,source_checked_at,notes",
+        "9837420,MSC World Europa,MSC Cruises,MSC Group,OCEAN_CRUISE,ACCEPT,ACTIVE,MSC fleet page,https://www.msccruises.com/fleet,2026-07-02,Official fleet source plus IMO identity source https://www.vesselfinder.com/vessels/details/9837420",
+        "9137363,Other Ship,Other Operator,Other Group,OCEAN_CRUISE,ACCEPT,ACTIVE,Source,https://example.test/ship,2026-07-02,Official fleet source plus IMO identity source"
+      ].join("\n"),
+      { operator: "MSC Cruises", operatorGroup: "MSC Group" }
+    );
+
+    expect(report.totalRows).toBe(1);
+    expect(report.validRows).toBe(1);
+    expect(report.operatorOrGroupMismatchRows).toBe(0);
+    expect(report.missingImoIdentityEvidenceRows).toBe(0);
+    expect(report.genericSourceUrlWarnings).toHaveLength(1);
+  });
+
+  it("reports an operator batch with no ships without creating errors", () => {
+    const report = buildOperatorRegistryValidationReport(
+      "imo,canonical_name,operator,operator_group,vessel_segment,registry_decision,active_status,source_name,source_url,source_checked_at,notes\n",
+      { operator: "MSC Cruises", operatorGroup: "MSC Group" }
+    );
+
+    expect(report.totalRows).toBe(0);
+    expect(report.validRows).toBe(0);
+    expect(report.errors).toEqual([]);
   });
 
   it("verifies only exact ACCEPT registry IMO matches", () => {

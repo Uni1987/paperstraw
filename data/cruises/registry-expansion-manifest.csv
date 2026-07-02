@@ -1,0 +1,34 @@
+operator_group,operator,priority,expected_scope,registry_status,official_fleet_source,imo_identity_source,notes
+Royal Caribbean Group,Royal Caribbean International,1,OCEAN_CRUISE,IMPORTED,https://www.royalcaribbean.com/cruise-ships,VesselFinder vessel detail pages,Initial curated batch prepared separately; keep future RCI additions in separate reviewed batches.
+Royal Caribbean Group,Celebrity Cruises,1,OCEAN_CRUISE,NOT_STARTED,,,Planned operator batch; exclude Royal Caribbean International and Silversea vessels from this batch.
+Royal Caribbean Group,Silversea Cruises,1,EXPEDITION_CRUISE,NOT_STARTED,,,Planned operator batch; manually distinguish ocean cruise and expedition cruise vessels.
+Carnival Corporation,Carnival Cruise Line,1,OCEAN_CRUISE,NOT_STARTED,,,Planned operator batch.
+Carnival Corporation,Princess Cruises,1,OCEAN_CRUISE,NOT_STARTED,,,Planned operator batch.
+Carnival Corporation,Holland America Line,1,OCEAN_CRUISE,NOT_STARTED,,,Planned operator batch.
+Carnival Corporation,Cunard,1,OCEAN_CRUISE,NOT_STARTED,,,Planned operator batch.
+Carnival Corporation,Costa Cruises,2,OCEAN_CRUISE,NOT_STARTED,,,Planned operator batch.
+Carnival Corporation,AIDA Cruises,2,OCEAN_CRUISE,NOT_STARTED,,,Planned operator batch.
+Carnival Corporation,P&O Cruises,2,OCEAN_CRUISE,NOT_STARTED,,,Planned operator batch; verify brand jurisdiction and operator naming carefully.
+Carnival Corporation,Seabourn,2,EXPEDITION_CRUISE,NOT_STARTED,,,Planned operator batch; manually distinguish ocean cruise and expedition cruise vessels.
+Norwegian Cruise Line Holdings,Norwegian Cruise Line,1,OCEAN_CRUISE,NOT_STARTED,,,Planned operator batch.
+Norwegian Cruise Line Holdings,Oceania Cruises,2,OCEAN_CRUISE,NOT_STARTED,,,Planned operator batch.
+Norwegian Cruise Line Holdings,Regent Seven Seas Cruises,2,OCEAN_CRUISE,NOT_STARTED,,,Planned operator batch.
+Independent / other major operators,MSC Cruises,1,OCEAN_CRUISE,NOT_STARTED,,,Planned operator batch.
+Independent / other major operators,Disney Cruise Line,1,OCEAN_CRUISE,NOT_STARTED,,,Planned operator batch.
+Independent / other major operators,Viking Ocean,2,OCEAN_CRUISE,NOT_STARTED,,,Planned operator batch; exclude river cruise vessels.
+Independent / other major operators,Virgin Voyages,2,OCEAN_CRUISE,NOT_STARTED,,,Planned operator batch.
+Independent / other major operators,Explora Journeys,2,OCEAN_CRUISE,NOT_STARTED,,,Planned operator batch.
+Independent / other major operators,Azamara,2,OCEAN_CRUISE,NOT_STARTED,,,Planned operator batch.
+Independent / other major operators,Windstar Cruises,3,OCEAN_CRUISE,NOT_STARTED,,,Planned operator batch; manually distinguish yachts/sailing cruise vessels from unrelated yacht traffic.
+Independent / other major operators,Ponant,3,EXPEDITION_CRUISE,NOT_STARTED,,,Planned operator batch; manually distinguish expedition cruise vessels from yacht-like or local passenger vessels.
+Independent / other major operators,HX Hurtigruten Expeditions,3,EXPEDITION_CRUISE,NEEDS_MANUAL_SCOPE_DECISION,,,Requires careful manual scope assessment; do not mix with Hurtigruten Coastal Express transport service.
+Independent / other major operators,Celestyal Cruises,3,OCEAN_CRUISE,NOT_STARTED,,,Planned operator batch.
+Independent / other major operators,Fred. Olsen Cruise Lines,3,OCEAN_CRUISE,NOT_STARTED,,,Planned operator batch.
+Independent / other major operators,Ambassador Cruise Line,3,OCEAN_CRUISE,NOT_STARTED,,,Planned operator batch.
+Independent / other major operators,Marella Cruises,3,OCEAN_CRUISE,NOT_STARTED,,,Planned operator batch.
+Independent / other major operators,TUI Cruises / Mein Schiff,2,OCEAN_CRUISE,NOT_STARTED,,,Planned operator batch; keep separate from TUI river or tour operations.
+Independent / other major operators,Hapag-Lloyd Cruises,3,EXPEDITION_CRUISE,NOT_STARTED,,,Planned operator batch; manually distinguish expedition cruise vessels.
+Manual scope review,Hurtigruten Coastal Express,4,REVIEW_REQUIRED,NEEDS_MANUAL_SCOPE_DECISION,,,Explicit manual scope assessment required; coastal transport/service route may be out of scope.
+Manual scope review,River cruise brands,4,REVIEW_REQUIRED,NEEDS_MANUAL_SCOPE_DECISION,,,Out-of-scope trap category; river cruise brands should not be accepted into the ocean-cruise registry without exceptional manual review.
+Manual scope review,Ferry-like passenger operators,4,REVIEW_REQUIRED,NEEDS_MANUAL_SCOPE_DECISION,,,Out-of-scope trap category; ferries RoPax and commuter passenger vessels must be excluded.
+Manual scope review,Mixed tourism/transport operators,4,REVIEW_REQUIRED,NEEDS_MANUAL_SCOPE_DECISION,,,Requires careful manual scope assessment where passenger tourism and public transport are mixed.
