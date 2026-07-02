@@ -3,6 +3,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { loadProjectEnv } from "@/lib/env/loadProjectEnv";
 import { buildRegistryCoverageReport, parseRegistryExpansionManifest, type CoverageCandidateShip, type CoverageRegistryEntry } from "@/lib/cruises/registryCoverage";
+import { parseRegistryCsv } from "@/lib/cruises/registry";
 import { prisma } from "@/lib/prisma";
 
 loadProjectEnv();
@@ -28,16 +29,18 @@ async function main() {
 
   const tables = await getTableStatus();
   const registryEntries = tables.registry_exists ? await getRegistryEntries() : [];
+  const proposedRegistryEntries = getProposedRegistryEntries();
   const candidateShips = tables.cruise_ships_exists ? await getCandidateShips() : [];
-  const publicEligibleShipIds = tables.cruise_ships_exists && tables.registry_exists && tables.verification_exists ? await getPublicEligibleShipIds() : [];
+  const publicEligibleShips = tables.cruise_ships_exists && tables.registry_exists && tables.verification_exists ? await getPublicEligibleShips() : [];
   const recentAisShipIds = tables.positions_exists && tables.registry_exists && tables.verification_exists ? await getRecentPublicEligibleAisShipIds() : [];
   const dailyEstimateShipIds = tables.estimates_exists && tables.registry_exists && tables.verification_exists ? await getPublicEligibleDailyEstimateShipIds() : [];
 
   const report = buildRegistryCoverageReport({
     manifestEntries: manifest.entries,
     registryEntries,
+    proposedRegistryEntries,
     candidateShips,
-    publicEligibleShipIds,
+    publicEligibleShips,
     recentAisShipIds,
     dailyEstimateShipIds
   });
@@ -111,16 +114,16 @@ async function getRegistryEntries(): Promise<CoverageRegistryEntry[]> {
 }
 
 async function getCandidateShips(): Promise<CoverageCandidateShip[]> {
-  const rows = await prisma.$queryRaw<Array<{ id: string; imo: string | null }>>`
-    SELECT id, imo
+  const rows = await prisma.$queryRaw<Array<{ id: string; imo: string | null; mmsi: string | null; name: string | null; operator: string | null }>>`
+    SELECT id, imo, mmsi, name, operator
     FROM cruise_ships
   `;
   return rows;
 }
 
-async function getPublicEligibleShipIds() {
-  const rows = await prisma.$queryRaw<Array<{ id: string }>>`
-    SELECT DISTINCT s.id
+async function getPublicEligibleShips() {
+  const rows = await prisma.$queryRaw<Array<{ id: string; imo: string | null; mmsi: string | null }>>`
+    SELECT DISTINCT s.id, s.imo, s.mmsi
     FROM cruise_ships s
     INNER JOIN cruise_vessel_verifications v ON v.ship_id = s.id
     INNER JOIN cruise_vessel_registry_entries r ON r.id = v.registry_entry_id
@@ -129,7 +132,19 @@ async function getPublicEligibleShipIds() {
       AND r.registry_decision = 'ACCEPT'
       AND r.imo = s.imo
   `;
-  return rows.map((row) => row.id);
+  return rows;
+}
+
+function getProposedRegistryEntries(): CoverageRegistryEntry[] {
+  const parsed = parseRegistryCsv(readFileSync(resolve(process.cwd(), "data/cruises/verified-ocean-cruise-registry.csv"), "utf8"));
+  return parsed.rows.map((row) => ({
+    imo: row.imo,
+    operator: row.operator,
+    operatorGroup: row.operatorGroup,
+    registryDecision: row.registryDecision,
+    activeStatus: row.activeStatus,
+    vesselSegment: row.vesselSegment
+  }));
 }
 
 async function getRecentPublicEligibleAisShipIds() {

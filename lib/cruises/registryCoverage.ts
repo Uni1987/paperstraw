@@ -2,9 +2,12 @@ import type { CruiseActiveStatus, CruiseRegistryDecision, CruiseVesselSegment } 
 
 export const REGISTRY_EXPANSION_STATUSES = ["NOT_STARTED", "RESEARCHING", "READY_FOR_REVIEW", "IMPORTED", "NEEDS_MANUAL_SCOPE_DECISION"] as const;
 export const REGISTRY_EXPANSION_SCOPES = ["OCEAN_CRUISE", "EXPEDITION_CRUISE", "REVIEW_REQUIRED"] as const;
+export const AISSTREAM_MMSI_FILTER_LIMIT = 50;
 
 export type RegistryExpansionStatus = (typeof REGISTRY_EXPANSION_STATUSES)[number];
 export type RegistryExpansionScope = (typeof REGISTRY_EXPANSION_SCOPES)[number];
+export type EffectiveRegistryStatus = RegistryExpansionStatus | "PROPOSED";
+export type RegistryCoverageConfidence = "COMPLETE" | "PARTIAL" | "UNKNOWN";
 
 export type RegistryExpansionManifestEntry = {
   operatorGroup: string;
@@ -29,6 +32,15 @@ export type CoverageRegistryEntry = {
 export type CoverageCandidateShip = {
   id: string;
   imo: string | null;
+  mmsi?: string | null;
+  name?: string | null;
+  operator?: string | null;
+};
+
+export type CoveragePublicEligibleShip = {
+  id: string;
+  imo: string | null;
+  mmsi: string | null;
 };
 
 export type RegistryCoverageReport = {
@@ -54,9 +66,12 @@ export type RegistryCoverageReport = {
     rows: Array<{
       operatorGroup: string;
       operator: string;
-      registryStatus: RegistryExpansionStatus;
-      acceptedShips: number;
+      manifestStatus: RegistryExpansionStatus;
+      effectiveRegistryStatus: EffectiveRegistryStatus;
+      importedAcceptedShips: number;
+      proposedAcceptedShips: number;
       matchedAisShips: number;
+      verifiedPublicShips: number;
     }>;
     operatorsWithZeroRegistryEntries: string[];
     operatorsWithRegistryEntriesButNoAisMatchYet: string[];
@@ -67,6 +82,37 @@ export type RegistryCoverageReport = {
     verifiedVesselsWithDailyEstimates: number;
     suitability: "internal development only" | "limited public beta" | "broad public reporting";
   };
+};
+
+export type RegistryCompletenessReport = {
+  rows: Array<{
+    operatorGroup: string;
+    operator: string;
+    manifestStatus: RegistryExpansionStatus;
+    effectiveRegistryStatus: EffectiveRegistryStatus;
+    importedAcceptedShips: number;
+    proposedNotImportedShips: number;
+    aisCandidateMatches: number;
+    verifiedPublicEligibleShips: number;
+    activeRegistryShipsNotYetSeenInAis: number;
+    candidateNameOrOperatorReviewSignals: number;
+    expectedFleetCount: number | null;
+    registryCoverageConfidence: RegistryCoverageConfidence;
+    confidenceReason: string;
+  }>;
+};
+
+export type VerifiedAisAllowlistReport = {
+  totalVerifiedRegistryAcceptEntries: number;
+  linkedRegistryEntries: number;
+  linkedEntriesWithMmsi: number;
+  linkedEntriesMissingMmsi: number;
+  distinctMmsisReadyForTracking: number;
+  providerMmsiFilterLimit: number;
+  providerSubscriptionBatchesRequired: number;
+  duplicateOrConflictingMmsis: Array<{ mmsi: string; imos: string[] }>;
+  mappings: Array<{ mmsi: string; imo: string; shipId: string }>;
+  shipsMissingMmsi: Array<{ imo: string; shipId: string }>;
 };
 
 type CsvRow = Record<string, string>;
@@ -97,20 +143,24 @@ export function parseRegistryExpansionManifest(content: string) {
 export function buildRegistryCoverageReport(input: {
   manifestEntries: RegistryExpansionManifestEntry[];
   registryEntries: CoverageRegistryEntry[];
+  proposedRegistryEntries?: CoverageRegistryEntry[];
   candidateShips: CoverageCandidateShip[];
-  publicEligibleShipIds: Iterable<string>;
+  publicEligibleShips?: CoveragePublicEligibleShip[];
+  publicEligibleShipIds?: Iterable<string>;
   recentAisShipIds: Iterable<string>;
   dailyEstimateShipIds: Iterable<string>;
 }): RegistryCoverageReport {
   const acceptEntries = input.registryEntries.filter((entry) => entry.registryDecision === "ACCEPT");
   const excludedEntries = input.registryEntries.filter((entry) => entry.registryDecision === "EXCLUDE");
+  const proposedAcceptEntries = (input.proposedRegistryEntries ?? []).filter((entry) => entry.registryDecision === "ACCEPT");
   const acceptedByImo = new Map(acceptEntries.map((entry) => [entry.imo, entry]));
   const excludedByImo = new Map(excludedEntries.map((entry) => [entry.imo, entry]));
-  const publicEligible = new Set(input.publicEligibleShipIds);
+  const publicEligibleShips = input.publicEligibleShips ?? [...(input.publicEligibleShipIds ?? [])].map((id) => ({ id, imo: null, mmsi: null }));
+  const publicEligible = new Set(publicEligibleShips.map((ship) => ship.id));
   const recentAis = new Set(input.recentAisShipIds);
   const dailyEstimates = new Set(input.dailyEstimateShipIds);
-  const acceptedMatchedShipIds = new Set<string>();
   const acceptedMatchedOperators = new Map<string, Set<string>>();
+  const verifiedPublicByOperator = new Map<string, Set<string>>();
 
   let candidatesMatchedToAcceptedRegistryEntries = 0;
   let candidatesMatchedToExcludedRegistryEntries = 0;
@@ -119,7 +169,6 @@ export function buildRegistryCoverageReport(input: {
   for (const ship of input.candidateShips) {
     if (ship.imo && acceptedByImo.has(ship.imo)) {
       candidatesMatchedToAcceptedRegistryEntries += 1;
-      acceptedMatchedShipIds.add(ship.id);
       const operator = acceptedByImo.get(ship.imo)?.operator ?? "Unknown";
       if (!acceptedMatchedOperators.has(operator)) acceptedMatchedOperators.set(operator, new Set());
       acceptedMatchedOperators.get(operator)?.add(ship.id);
@@ -130,15 +179,28 @@ export function buildRegistryCoverageReport(input: {
     }
   }
 
+  for (const ship of publicEligibleShips) {
+    const operator = ship.imo ? acceptedByImo.get(ship.imo)?.operator : null;
+    if (!operator) continue;
+    if (!verifiedPublicByOperator.has(operator)) verifiedPublicByOperator.set(operator, new Set());
+    verifiedPublicByOperator.get(operator)?.add(ship.id);
+  }
+
   const rows = input.manifestEntries.map((entry) => {
-    const acceptedShips = acceptEntries.filter((registryEntry) => registryEntry.operator === entry.operator).length;
+    const importedAcceptedShips = acceptEntries.filter((registryEntry) => registryEntry.operator === entry.operator).length;
+    const importedImos = new Set(acceptEntries.map((registryEntry) => registryEntry.imo));
+    const proposedAcceptedShips = proposedAcceptEntries.filter((registryEntry) => registryEntry.operator === entry.operator && !importedImos.has(registryEntry.imo)).length;
     const matchedAisShips = acceptedMatchedOperators.get(entry.operator)?.size ?? 0;
+    const verifiedPublicShips = verifiedPublicByOperator.get(entry.operator)?.size ?? 0;
     return {
       operatorGroup: entry.operatorGroup,
       operator: entry.operator,
-      registryStatus: entry.registryStatus,
-      acceptedShips,
-      matchedAisShips
+      manifestStatus: entry.registryStatus,
+      effectiveRegistryStatus: getEffectiveRegistryStatus(entry.registryStatus, importedAcceptedShips, proposedAcceptedShips),
+      importedAcceptedShips,
+      proposedAcceptedShips,
+      matchedAisShips,
+      verifiedPublicShips
     };
   });
   const verifiedWithRecentAis = [...publicEligible].filter((shipId) => recentAis.has(shipId)).length;
@@ -165,8 +227,8 @@ export function buildRegistryCoverageReport(input: {
     operatorCoverage: {
       operatorsInManifest: input.manifestEntries.length,
       rows,
-      operatorsWithZeroRegistryEntries: rows.filter((row) => row.acceptedShips === 0).map((row) => row.operator),
-      operatorsWithRegistryEntriesButNoAisMatchYet: rows.filter((row) => row.acceptedShips > 0 && row.matchedAisShips === 0).map((row) => row.operator)
+      operatorsWithZeroRegistryEntries: rows.filter((row) => row.importedAcceptedShips === 0 && row.proposedAcceptedShips === 0).map((row) => row.operator),
+      operatorsWithRegistryEntriesButNoAisMatchYet: rows.filter((row) => row.importedAcceptedShips > 0 && row.matchedAisShips === 0).map((row) => row.operator)
     },
     publicDashboardReadiness: {
       verifiedVesselsCurrentlyEligible: publicEligible.size,
@@ -177,10 +239,157 @@ export function buildRegistryCoverageReport(input: {
   };
 }
 
+export function buildRegistryCompletenessReport(input: {
+  manifestEntries: RegistryExpansionManifestEntry[];
+  registryEntries: CoverageRegistryEntry[];
+  proposedRegistryEntries: CoverageRegistryEntry[];
+  candidateShips: CoverageCandidateShip[];
+  publicEligibleShips: CoveragePublicEligibleShip[];
+}): RegistryCompletenessReport {
+  const importedAcceptEntries = input.registryEntries.filter((entry) => entry.registryDecision === "ACCEPT");
+  const importedAcceptedByImo = new Map(importedAcceptEntries.map((entry) => [entry.imo, entry]));
+  const proposedAcceptEntries = input.proposedRegistryEntries.filter((entry) => entry.registryDecision === "ACCEPT");
+  const proposedAcceptedByOperator = groupBy(proposedAcceptEntries.filter((entry) => !importedAcceptedByImo.has(entry.imo)), (entry) => entry.operator);
+  const importedAcceptedByOperator = groupBy(importedAcceptEntries, (entry) => entry.operator);
+  const candidateByImo = new Map(input.candidateShips.filter((ship) => ship.imo).map((ship) => [ship.imo as string, ship]));
+  const publicEligibleByImo = new Map(input.publicEligibleShips.filter((ship) => ship.imo).map((ship) => [ship.imo as string, ship]));
+
+  return {
+    rows: input.manifestEntries.map((entry) => {
+      const imported = importedAcceptedByOperator.get(entry.operator) ?? [];
+      const proposed = proposedAcceptedByOperator.get(entry.operator) ?? [];
+      const allKnownActive = [...imported, ...proposed].filter((registryEntry) => registryEntry.activeStatus === "ACTIVE");
+      const aisMatches = allKnownActive.filter((registryEntry) => candidateByImo.has(registryEntry.imo)).length;
+      const verifiedPublicEligibleShips = imported.filter((registryEntry) => publicEligibleByImo.has(registryEntry.imo)).length;
+      const reviewSignals = countNameOrOperatorReviewSignals(input.candidateShips, entry.operator, importedAcceptedByImo);
+      const confidence = getCompletenessConfidence(entry, imported.length, proposed.length);
+      return {
+        operatorGroup: entry.operatorGroup,
+        operator: entry.operator,
+        manifestStatus: entry.registryStatus,
+        effectiveRegistryStatus: getEffectiveRegistryStatus(entry.registryStatus, imported.length, proposed.length),
+        importedAcceptedShips: imported.length,
+        proposedNotImportedShips: proposed.length,
+        aisCandidateMatches: aisMatches,
+        verifiedPublicEligibleShips,
+        activeRegistryShipsNotYetSeenInAis: allKnownActive.length - aisMatches,
+        candidateNameOrOperatorReviewSignals: reviewSignals,
+        expectedFleetCount: extractExpectedFleetCount(entry.notes),
+        registryCoverageConfidence: confidence.confidence,
+        confidenceReason: confidence.reason
+      };
+    })
+  };
+}
+
+export function buildVerifiedAisAllowlistReport(input: {
+  registryEntries: CoverageRegistryEntry[];
+  publicEligibleShips: CoveragePublicEligibleShip[];
+  mmsiFilterLimit?: number;
+}): VerifiedAisAllowlistReport {
+  const acceptEntries = input.registryEntries.filter((entry) => entry.registryDecision === "ACCEPT");
+  const publicEligibleByImo = new Map(input.publicEligibleShips.filter((ship) => ship.imo).map((ship) => [ship.imo as string, ship]));
+  const linked = acceptEntries
+    .map((entry) => ({ entry, ship: publicEligibleByImo.get(entry.imo) ?? null }))
+    .filter((row) => row.ship);
+  const mappings = linked
+    .filter((row): row is { entry: CoverageRegistryEntry; ship: CoveragePublicEligibleShip } => Boolean(row.ship?.mmsi))
+    .map((row) => ({ imo: row.entry.imo, mmsi: row.ship.mmsi as string, shipId: row.ship.id }));
+  const shipsMissingMmsi = linked
+    .filter((row): row is { entry: CoverageRegistryEntry; ship: CoveragePublicEligibleShip } => Boolean(row.ship && !row.ship.mmsi))
+    .map((row) => ({ imo: row.entry.imo, shipId: row.ship.id }));
+  const byMmsi = groupBy(mappings, (row) => row.mmsi);
+  const duplicateOrConflictingMmsis = [...byMmsi.entries()]
+    .map(([mmsi, rows]) => ({ mmsi, imos: [...new Set(rows.map((row) => row.imo))] }))
+    .filter((row) => row.imos.length > 1);
+  const distinctMmsisReadyForTracking = new Set(mappings.map((row) => row.mmsi)).size;
+  const providerMmsiFilterLimit = input.mmsiFilterLimit ?? AISSTREAM_MMSI_FILTER_LIMIT;
+
+  return {
+    totalVerifiedRegistryAcceptEntries: acceptEntries.length,
+    linkedRegistryEntries: linked.length,
+    linkedEntriesWithMmsi: mappings.length,
+    linkedEntriesMissingMmsi: shipsMissingMmsi.length,
+    distinctMmsisReadyForTracking,
+    providerMmsiFilterLimit,
+    providerSubscriptionBatchesRequired: distinctMmsisReadyForTracking ? Math.ceil(distinctMmsisReadyForTracking / providerMmsiFilterLimit) : 0,
+    duplicateOrConflictingMmsis,
+    mappings,
+    shipsMissingMmsi
+  };
+}
+
+export function getEffectiveRegistryStatus(
+  manifestStatus: RegistryExpansionStatus,
+  importedAcceptedShips: number,
+  proposedAcceptedShips: number
+): EffectiveRegistryStatus {
+  if (manifestStatus === "NEEDS_MANUAL_SCOPE_DECISION") return "NEEDS_MANUAL_SCOPE_DECISION";
+  if (importedAcceptedShips > 0) return "IMPORTED";
+  if (proposedAcceptedShips > 0) return "PROPOSED";
+  return manifestStatus;
+}
+
 function getReadinessLabel(publicEligible: number, recentAis: number, dailyEstimates: number): RegistryCoverageReport["publicDashboardReadiness"]["suitability"] {
   if (publicEligible < 25 || recentAis === 0) return "internal development only";
   if (publicEligible < 200 || dailyEstimates === 0) return "limited public beta";
   return "broad public reporting";
+}
+
+function getCompletenessConfidence(
+  entry: RegistryExpansionManifestEntry,
+  importedAcceptedShips: number,
+  proposedAcceptedShips: number
+): { confidence: RegistryCoverageConfidence; reason: string } {
+  const expectedFleetCount = extractExpectedFleetCount(entry.notes);
+  const knownShips = importedAcceptedShips + proposedAcceptedShips;
+  if (expectedFleetCount === null) {
+    return {
+      confidence: "UNKNOWN",
+      reason: "No explicit expected fleet count is recorded in the manifest; completeness cannot be claimed."
+    };
+  }
+  if (knownShips >= expectedFleetCount) {
+    return {
+      confidence: "COMPLETE",
+      reason: `Known registry ships (${knownShips}) meet or exceed manifest expected fleet count (${expectedFleetCount}).`
+    };
+  }
+  return {
+    confidence: "PARTIAL",
+    reason: `Known registry ships (${knownShips}) are below manifest expected fleet count (${expectedFleetCount}).`
+  };
+}
+
+function extractExpectedFleetCount(notes: string | null) {
+  const match = notes?.match(/expected(?: fleet)? count\s*[:=]\s*(\d+)/i);
+  return match ? Number(match[1]) : null;
+}
+
+function countNameOrOperatorReviewSignals(
+  candidateShips: CoverageCandidateShip[],
+  operator: string,
+  importedAcceptedByImo: Map<string, CoverageRegistryEntry>
+) {
+  const terms = operator
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((term) => term.length >= 4 && !["cruise", "cruises", "line"].includes(term));
+  if (!terms.length) return 0;
+  return candidateShips.filter((ship) => {
+    if (ship.imo && importedAcceptedByImo.has(ship.imo)) return false;
+    const text = `${ship.name ?? ""} ${ship.operator ?? ""}`.toLowerCase();
+    return terms.some((term) => text.includes(term));
+  }).length;
+}
+
+function groupBy<T>(items: T[], getKey: (item: T) => string) {
+  const groups = new Map<string, T[]>();
+  for (const item of items) {
+    const key = getKey(item);
+    groups.set(key, [...(groups.get(key) ?? []), item]);
+  }
+  return groups;
 }
 
 function countBy<T>(items: T[], getKey: (item: T) => string) {

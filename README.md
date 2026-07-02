@@ -936,6 +936,37 @@ git commit -m "Add verified MSC Cruises registry batch"
 
 The registry coverage command is read-only. It reports ACCEPT coverage by operator/group, AIS candidate matching, unmatched candidates, manifest operator status, public-eligible vessel counts, verified vessels with recent AIS positions, verified vessels with daily estimates, and a conservative dashboard-readiness label.
 
+Registry completeness, AIS coverage, and public dashboard coverage are different:
+
+- Registry completeness means the curated IMO registry has enough verified active ships for each operator. Do not claim completeness unless the manifest includes an explicit expected fleet count or other documented completeness evidence.
+- AIS geographic coverage means the worker is receiving AIS messages in configured regions or future verified-vessel subscriptions. The current 19 corridor mode is discovery-oriented and does not provide complete global vessel coverage.
+- Public dashboard coverage means a ship is both registry-verified and public-eligible, and has enough recent AIS/emissions data for display.
+
+Global cruise tracking requires both:
+
+1. a sufficiently complete verified IMO registry;
+2. AIS coverage for verified MMSIs.
+
+Current public claims should remain conservative: use "tracked verified ocean cruises" rather than "all global cruise emissions" until registry completeness and verified-MMSI coverage are proven.
+
+Read-only coverage commands:
+
+```bash
+pnpm cruises:registry:coverage
+pnpm cruises:registry:completeness
+pnpm cruises:registry:completeness -- --operator "MSC Cruises"
+pnpm cruises:verified-ais-allowlist
+```
+
+Optional JSON outputs:
+
+```bash
+pnpm cruises:registry:completeness -- --output data/cruises/registry-completeness-report.json
+pnpm cruises:verified-ais-allowlist -- --output data/cruises/verified-ais-allowlist.json
+```
+
+The global AIS coverage design lives in `data/cruises/global-ais-coverage-plan.md`. AISStream supports `FiltersShipMMSI` with a documented maximum of 50 MMSI values per subscription, so a future verified-vessel mode must partition verified MMSIs across multiple connections and keep regional corridor discovery separate.
+
 Documentation-only CSV example. This row is fictional, intentionally uses a non-real placeholder identity, and must not be imported:
 
 ```csv

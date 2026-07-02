@@ -29,7 +29,11 @@ import {
   reconcileCruiseCandidate
 } from "@/lib/cruises/registry";
 import {
+  AISSTREAM_MMSI_FILTER_LIMIT,
+  buildRegistryCompletenessReport,
   buildRegistryCoverageReport,
+  buildVerifiedAisAllowlistReport,
+  getEffectiveRegistryStatus,
   parseRegistryExpansionManifest
 } from "@/lib/cruises/registryCoverage";
 import {
@@ -409,13 +413,31 @@ describe("verified ocean cruise registry", () => {
           vesselSegment: "OCEAN_CRUISE"
         }
       ],
+      proposedRegistryEntries: [
+        {
+          imo: "9837420",
+          operator: "Operator A",
+          operatorGroup: "Group A",
+          registryDecision: "ACCEPT",
+          activeStatus: "ACTIVE",
+          vesselSegment: "OCEAN_CRUISE"
+        },
+        {
+          imo: "9876957",
+          operator: "Operator B",
+          operatorGroup: "Group B",
+          registryDecision: "ACCEPT",
+          activeStatus: "ACTIVE",
+          vesselSegment: "OCEAN_CRUISE"
+        }
+      ],
       candidateShips: [
         { id: "accepted", imo: "9837420" },
         { id: "excluded", imo: "9137363" },
         { id: "unmatched", imo: "1234567" },
         { id: "missing-imo", imo: null }
       ],
-      publicEligibleShipIds: ["accepted"],
+      publicEligibleShips: [{ id: "accepted", imo: "9837420", mmsi: "215123456" }],
       recentAisShipIds: ["accepted"],
       dailyEstimateShipIds: []
     });
@@ -425,9 +447,159 @@ describe("verified ocean cruise registry", () => {
     expect(report.aisCandidateCoverage.candidatesMatchedToAcceptedRegistryEntries).toBe(1);
     expect(report.aisCandidateCoverage.candidatesMatchedToExcludedRegistryEntries).toBe(1);
     expect(report.aisCandidateCoverage.unmatchedCandidates).toBe(2);
-    expect(report.operatorCoverage.rows.find((row) => row.operator === "Operator A")).toMatchObject({ acceptedShips: 1, matchedAisShips: 1 });
-    expect(report.operatorCoverage.operatorsWithZeroRegistryEntries).toContain("Operator B");
+    expect(report.operatorCoverage.rows.find((row) => row.operator === "Operator A")).toMatchObject({
+      manifestStatus: "IMPORTED",
+      effectiveRegistryStatus: "IMPORTED",
+      importedAcceptedShips: 1,
+      proposedAcceptedShips: 0,
+      matchedAisShips: 1,
+      verifiedPublicShips: 1
+    });
+    expect(report.operatorCoverage.rows.find((row) => row.operator === "Operator B")).toMatchObject({
+      effectiveRegistryStatus: "PROPOSED",
+      importedAcceptedShips: 0,
+      proposedAcceptedShips: 1
+    });
+    expect(report.operatorCoverage.operatorsWithZeroRegistryEntries).not.toContain("Operator B");
     expect(report.publicDashboardReadiness.suitability).toBe("internal development only");
+  });
+
+  it("keeps effective status rules conservative", () => {
+    expect(getEffectiveRegistryStatus("NOT_STARTED", 1, 0)).toBe("IMPORTED");
+    expect(getEffectiveRegistryStatus("NOT_STARTED", 0, 2)).toBe("PROPOSED");
+    expect(getEffectiveRegistryStatus("NOT_STARTED", 0, 0)).toBe("NOT_STARTED");
+    expect(getEffectiveRegistryStatus("NEEDS_MANUAL_SCOPE_DECISION", 2, 2)).toBe("NEEDS_MANUAL_SCOPE_DECISION");
+  });
+
+  it("does not claim complete registry coverage without explicit fleet-count evidence", () => {
+    const report = buildRegistryCompletenessReport({
+      manifestEntries: [
+        {
+          operatorGroup: "Group A",
+          operator: "Operator A",
+          priority: 1,
+          expectedScope: "OCEAN_CRUISE",
+          registryStatus: "NOT_STARTED",
+          officialFleetSource: null,
+          imoIdentitySource: null,
+          notes: null
+        },
+        {
+          operatorGroup: "Group B",
+          operator: "Operator B",
+          priority: 2,
+          expectedScope: "OCEAN_CRUISE",
+          registryStatus: "NOT_STARTED",
+          officialFleetSource: null,
+          imoIdentitySource: null,
+          notes: "expected fleet count: 1"
+        }
+      ],
+      registryEntries: [],
+      proposedRegistryEntries: [
+        {
+          imo: "9837420",
+          operator: "Operator A",
+          operatorGroup: "Group A",
+          registryDecision: "ACCEPT",
+          activeStatus: "ACTIVE",
+          vesselSegment: "OCEAN_CRUISE"
+        },
+        {
+          imo: "9876957",
+          operator: "Operator B",
+          operatorGroup: "Group B",
+          registryDecision: "ACCEPT",
+          activeStatus: "ACTIVE",
+          vesselSegment: "OCEAN_CRUISE"
+        }
+      ],
+      candidateShips: [{ id: "candidate", imo: "9837420", name: "Operator A Ship", operator: null }],
+      publicEligibleShips: []
+    });
+
+    expect(report.rows.find((row) => row.operator === "Operator A")).toMatchObject({
+      effectiveRegistryStatus: "PROPOSED",
+      registryCoverageConfidence: "UNKNOWN"
+    });
+    expect(report.rows.find((row) => row.operator === "Operator B")).toMatchObject({
+      registryCoverageConfidence: "COMPLETE"
+    });
+  });
+
+  it("builds a verified AIS allowlist from public-eligible ships only", () => {
+    const report = buildVerifiedAisAllowlistReport({
+      registryEntries: [
+        {
+          imo: "9837420",
+          operator: "Operator A",
+          operatorGroup: "Group A",
+          registryDecision: "ACCEPT",
+          activeStatus: "ACTIVE",
+          vesselSegment: "OCEAN_CRUISE"
+        },
+        {
+          imo: "9876957",
+          operator: "Operator A",
+          operatorGroup: "Group A",
+          registryDecision: "ACCEPT",
+          activeStatus: "ACTIVE",
+          vesselSegment: "OCEAN_CRUISE"
+        },
+        {
+          imo: "9137363",
+          operator: "Operator A",
+          operatorGroup: "Group A",
+          registryDecision: "EXCLUDE",
+          activeStatus: "ACTIVE",
+          vesselSegment: "OCEAN_CRUISE"
+        }
+      ],
+      publicEligibleShips: [
+        { id: "eligible-with-mmsi", imo: "9837420", mmsi: "215123456" },
+        { id: "eligible-missing-mmsi", imo: "9876957", mmsi: null },
+        { id: "unverified-ship", imo: "0000001", mmsi: "999999999" }
+      ],
+      mmsiFilterLimit: AISSTREAM_MMSI_FILTER_LIMIT
+    });
+
+    expect(report.totalVerifiedRegistryAcceptEntries).toBe(2);
+    expect(report.linkedRegistryEntries).toBe(2);
+    expect(report.linkedEntriesWithMmsi).toBe(1);
+    expect(report.linkedEntriesMissingMmsi).toBe(1);
+    expect(report.distinctMmsisReadyForTracking).toBe(1);
+    expect(report.mappings).toEqual([{ imo: "9837420", mmsi: "215123456", shipId: "eligible-with-mmsi" }]);
+    expect(report.shipsMissingMmsi).toEqual([{ imo: "9876957", shipId: "eligible-missing-mmsi" }]);
+  });
+
+  it("flags conflicting MMSI mappings in the verified AIS allowlist", () => {
+    const report = buildVerifiedAisAllowlistReport({
+      registryEntries: [
+        {
+          imo: "9837420",
+          operator: "Operator A",
+          operatorGroup: "Group A",
+          registryDecision: "ACCEPT",
+          activeStatus: "ACTIVE",
+          vesselSegment: "OCEAN_CRUISE"
+        },
+        {
+          imo: "9876957",
+          operator: "Operator A",
+          operatorGroup: "Group A",
+          registryDecision: "ACCEPT",
+          activeStatus: "ACTIVE",
+          vesselSegment: "OCEAN_CRUISE"
+        }
+      ],
+      publicEligibleShips: [
+        { id: "ship-1", imo: "9837420", mmsi: "215123456" },
+        { id: "ship-2", imo: "9876957", mmsi: "215123456" }
+      ],
+      mmsiFilterLimit: 50
+    });
+
+    expect(report.duplicateOrConflictingMmsis).toEqual([{ mmsi: "215123456", imos: ["9837420", "9876957"] }]);
   });
 
   it("validates a selected operator batch and flags generic source URLs", () => {

@@ -25,7 +25,9 @@
     "cruises:import-registry": "tsx scripts/import-cruise-registry.ts",
     "cruises:validate-registry": "tsx scripts/validate-cruise-registry.ts",
     "cruises:registry:coverage": "tsx scripts/cruise-registry-coverage.ts",
+    "cruises:registry:completeness": "tsx scripts/cruise-registry-completeness.ts",
     "cruises:registry:status": "tsx scripts/cruise-registry-status.ts",
+    "cruises:verified-ais-allowlist": "tsx scripts/cruise-verified-ais-allowlist.ts",
     "cruises:registry:reconcile": "tsx scripts/reconcile-cruise-registry.ts",
     "cruises:export-review-queue": "tsx scripts/export-cruise-review-queue.ts"
   },
