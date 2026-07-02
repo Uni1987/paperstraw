@@ -319,6 +319,26 @@ export function buildVerifiedAisAllowlistReport(input: {
   };
 }
 
+export function getVerifiedAisSubscriptionMmsis(report: VerifiedAisAllowlistReport): string[] {
+  const conflicting = new Set(report.duplicateOrConflictingMmsis.map((row) => row.mmsi));
+  return [
+    ...new Set(
+      report.mappings
+        .map((row) => row.mmsi)
+        .filter((mmsi) => isValidMmsi(mmsi) && !conflicting.has(mmsi))
+    )
+  ].sort();
+}
+
+export function splitMmsiBatches(mmsis: string[], limit = AISSTREAM_MMSI_FILTER_LIMIT): string[][] {
+  if (!Number.isInteger(limit) || limit <= 0) throw new Error("MMSI batch limit must be a positive integer.");
+  const batches: string[][] = [];
+  for (let index = 0; index < mmsis.length; index += limit) {
+    batches.push(mmsis.slice(index, index + limit));
+  }
+  return batches;
+}
+
 export function getEffectiveRegistryStatus(
   manifestStatus: RegistryExpansionStatus,
   importedAcceptedShips: number,
@@ -402,6 +422,10 @@ function countBy<T>(items: T[], getKey: (item: T) => string) {
 
 function roundPercentage(value: number) {
   return Math.round(value * 10) / 10;
+}
+
+function isValidMmsi(value: string | null | undefined): value is string {
+  return typeof value === "string" && /^\d{9}$/.test(value) && value !== "000000000";
 }
 
 function normalizeManifestRow(row: CsvRow): RegistryExpansionManifestEntry {

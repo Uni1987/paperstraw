@@ -2,6 +2,9 @@ export const AISSTREAM_ENDPOINT = "wss://stream.aisstream.io/v0/stream";
 export const CRUISE_MRV_SOURCE = "EMSA THETIS-MRV";
 export const CRUISE_AIS_SOURCE = "AISStream.io";
 export const CRUISE_ESTIMATION_METHOD_VERSION = "cruise-ais-mrv-v1";
+export const CRUISE_AIS_INGEST_MODES = ["discovery", "verified-global", "hybrid"] as const;
+
+export type CruiseAisIngestMode = (typeof CRUISE_AIS_INGEST_MODES)[number];
 
 export type CruiseRegion = {
   id: string;
@@ -179,6 +182,15 @@ export function getAisStreamApiKey() {
 export function getAisStreamLogLevel() {
   const level = process.env.AISSTREAM_LOG_LEVEL?.toLowerCase().trim();
   return level === "debug" || level === "info" || level === "warn" || level === "error" ? level : "info";
+}
+
+export function getCruiseAisIngestMode(override?: string | null): CruiseAisIngestMode {
+  return parseCruiseAisIngestMode(override?.trim() || process.env.CRUISE_AIS_INGEST_MODE?.trim() || "discovery");
+}
+
+export function parseCruiseAisIngestMode(value: string): CruiseAisIngestMode {
+  if ((CRUISE_AIS_INGEST_MODES as readonly string[]).includes(value)) return value as CruiseAisIngestMode;
+  throw new Error(`Invalid CRUISE_AIS_INGEST_MODE "${value}". Supported values: ${CRUISE_AIS_INGEST_MODES.join(", ")}.`);
 }
 
 export function getCruiseRegions(): CruiseRegion[] {

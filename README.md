@@ -686,6 +686,7 @@ AIS ingestion is separate and disabled by default:
 ENABLE_AISSTREAM_INGESTION=false
 AISSTREAM_API_KEY="your-aisstream-key"
 AISSTREAM_LOG_LEVEL="info"
+CRUISE_AIS_INGEST_MODE="discovery"
 AISSTREAM_BOUNDING_BOXES=""
 ```
 
@@ -768,12 +769,37 @@ ENABLE_AISSTREAM_INGESTION=true
 pnpm cruises:ingest-ais
 ```
 
+AIS ingestion modes:
+
+- `discovery`: default mode. Uses the configured regional cruise corridor bounding boxes and collects passenger/cruise-like candidate vessels for future registry matching.
+- `verified-global`: uses the verified AIS allowlist and AISStream `FiltersShipMMSI` to track verified public-eligible cruise ships globally. It refuses to start if no verified MMSIs are available.
+- `hybrid`: runs both discovery corridors and verified global MMSI-filtered subscriptions. If no verified MMSIs are available, it continues with discovery only and logs a warning.
+
+The default remains `discovery` so existing development behavior does not silently change. Set `CRUISE_AIS_INGEST_MODE=hybrid` for current local cruise-development testing when you want both candidate discovery and verified global tracking.
+
+Mode commands:
+
+```bash
+pnpm cruises:ingest-ais -- --mode discovery
+pnpm cruises:ingest-ais -- --mode verified-global
+pnpm cruises:ingest-ais -- --mode hybrid
+pnpm cruises:verified-ais-allowlist
+pnpm cruises:registry:reconcile -- --apply
+```
+
+For a short startup validation without leaving the worker running:
+
+```bash
+pnpm cruises:ingest-ais -- --mode verified-global --max-runtime-ms 10000
+```
+
 In PowerShell:
 
 ```powershell
 $env:ENABLE_AISSTREAM_INGESTION="true"
 $env:AISSTREAM_API_KEY="your-aisstream-key"
-pnpm cruises:ingest-ais
+$env:CRUISE_AIS_INGEST_MODE="hybrid"
+pnpm cruises:ingest-ais -- --mode hybrid
 ```
 
 The worker runs continuously until stopped with `Ctrl+C`.
@@ -781,6 +807,8 @@ The worker runs continuously until stopped with `Ctrl+C`.
 Leave `ENABLE_AISSTREAM_INGESTION=false` in production unless you explicitly want a long-running AIS worker in that
 environment. Vercel serverless functions are not a good place for persistent WebSocket workers; run the AIS worker from a
 machine or service designed for long-running processes.
+
+Do not deploy the hybrid worker to Railway or production until registry completeness has been reviewed, coverage reporting is understood, cruise emissions estimation has been validated, and public dashboard copy has been approved. Hybrid mode does not mean complete worldwide cruise coverage: verified-global covers only registry-linked verified ships with known MMSIs, while discovery corridors remain regional candidate collection.
 
 Expected database growth depends on region coverage and cruise traffic. As a starting estimate, a handful of busy cruise
 regions can store thousands to tens of thousands of position rows per day after filtering. Monitor

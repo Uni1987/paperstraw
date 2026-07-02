@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  buildSubscriptionPayload,
+  buildVerifiedGlobalConnectionConfigs,
+  getEmptyAllowlistStartupDecision,
   getPositionQualityIssue,
   messageDataToString,
   resolveCruiseShipIdentity,
@@ -7,7 +10,7 @@ import {
   type CruiseShipIdentityRecord,
   type CruiseShipIdentityRepository
 } from "@/lib/cruises/aisstream";
-import { CRUISE_REGIONS, getCruiseRegionConfig, getCruiseRegions, validateCruiseRegions } from "@/lib/cruises/config";
+import { CRUISE_REGIONS, getCruiseAisIngestMode, getCruiseRegionConfig, getCruiseRegions, validateCruiseRegions } from "@/lib/cruises/config";
 import { estimateCruiseDailyEmissions, haversineNm } from "@/lib/cruises/estimation";
 import { parseMrvCsv } from "@/lib/cruises/mrv";
 import {
@@ -34,6 +37,7 @@ import {
   buildRegistryCoverageReport,
   buildVerifiedAisAllowlistReport,
   getEffectiveRegistryStatus,
+  getVerifiedAisSubscriptionMmsis,
   parseRegistryExpansionManifest
 } from "@/lib/cruises/registryCoverage";
 import {
@@ -51,6 +55,7 @@ import {
 
 afterEach(() => {
   delete process.env.AISSTREAM_BOUNDING_BOXES;
+  delete process.env.CRUISE_AIS_INGEST_MODE;
 });
 
 describe("cruise emissions estimation", () => {
@@ -133,6 +138,22 @@ describe("AIS position cleanup", () => {
 });
 
 describe("AISStream cruise region configuration", () => {
+  it("defaults cruise AIS ingestion to discovery mode", () => {
+    delete process.env.CRUISE_AIS_INGEST_MODE;
+
+    expect(getCruiseAisIngestMode()).toBe("discovery");
+  });
+
+  it("lets CLI mode override the environment mode", () => {
+    process.env.CRUISE_AIS_INGEST_MODE = "discovery";
+
+    expect(getCruiseAisIngestMode("hybrid")).toBe("hybrid");
+  });
+
+  it("fails clearly for invalid cruise AIS ingestion modes", () => {
+    expect(() => getCruiseAisIngestMode("full-world")).toThrow(/Invalid CRUISE_AIS_INGEST_MODE/);
+  });
+
   it("uses all default regions when AISSTREAM_BOUNDING_BOXES is missing", () => {
     delete process.env.AISSTREAM_BOUNDING_BOXES;
 
@@ -193,6 +214,40 @@ describe("AISStream cruise region configuration", () => {
 
   it("defines valid default bounding boxes", () => {
     expect(() => validateCruiseRegions(CRUISE_REGIONS)).not.toThrow();
+  });
+
+  it("splits verified global MMSIs into provider-sized connection batches", () => {
+    const mmsis = Array.from({ length: 102 }, (_, index) => String(200000000 + index));
+
+    const connections = buildVerifiedGlobalConnectionConfigs(mmsis, AISSTREAM_MMSI_FILTER_LIMIT);
+
+    expect(connections).toHaveLength(3);
+    expect(connections.map((connection) => connection.label)).toEqual(["verified-global-batch-1", "verified-global-batch-2", "verified-global-batch-3"]);
+    expect(connections.map((connection) => connection.mmsis?.length)).toEqual([50, 50, 2]);
+  });
+
+  it("builds AISStream subscription payloads for discovery and verified global modes", () => {
+    const discovery = buildSubscriptionPayload("key", {
+      label: "discovery-corridors",
+      type: "discovery",
+      boundingBoxes: CRUISE_REGIONS.slice(0, 1).map((region) => region.boundingBox)
+    });
+    const verified = buildSubscriptionPayload("key", {
+      label: "verified-global-batch-1",
+      type: "verified-global",
+      mmsis: ["215123456"]
+    });
+
+    expect(discovery).toMatchObject({ APIKey: "key", BoundingBoxes: [CRUISE_REGIONS[0].boundingBox] });
+    expect(discovery).not.toHaveProperty("FiltersShipMMSI");
+    expect(verified).toMatchObject({ APIKey: "key", FiltersShipMMSI: ["215123456"] });
+    expect(verified).not.toHaveProperty("BoundingBoxes");
+  });
+
+  it("uses safe startup decisions for empty verified allowlists", () => {
+    expect(getEmptyAllowlistStartupDecision("verified-global")).toBe("refuse");
+    expect(getEmptyAllowlistStartupDecision("hybrid")).toBe("continue-discovery");
+    expect(getEmptyAllowlistStartupDecision("discovery")).toBe("start-without-global");
   });
 });
 
@@ -602,6 +657,45 @@ describe("verified ocean cruise registry", () => {
     expect(report.duplicateOrConflictingMmsis).toEqual([{ mmsi: "215123456", imos: ["9837420", "9876957"] }]);
   });
 
+  it("excludes conflicting MMSIs from verified global subscriptions", () => {
+    const report = buildVerifiedAisAllowlistReport({
+      registryEntries: [
+        {
+          imo: "9837420",
+          operator: "Operator A",
+          operatorGroup: "Group A",
+          registryDecision: "ACCEPT",
+          activeStatus: "ACTIVE",
+          vesselSegment: "OCEAN_CRUISE"
+        },
+        {
+          imo: "9876957",
+          operator: "Operator A",
+          operatorGroup: "Group A",
+          registryDecision: "ACCEPT",
+          activeStatus: "ACTIVE",
+          vesselSegment: "OCEAN_CRUISE"
+        },
+        {
+          imo: "9790045",
+          operator: "Operator B",
+          operatorGroup: "Group B",
+          registryDecision: "ACCEPT",
+          activeStatus: "ACTIVE",
+          vesselSegment: "OCEAN_CRUISE"
+        }
+      ],
+      publicEligibleShips: [
+        { id: "ship-1", imo: "9837420", mmsi: "215123456" },
+        { id: "ship-2", imo: "9876957", mmsi: "215123456" },
+        { id: "ship-3", imo: "9790045", mmsi: "311123456" }
+      ],
+      mmsiFilterLimit: 50
+    });
+
+    expect(getVerifiedAisSubscriptionMmsis(report)).toEqual(["311123456"]);
+  });
+
   it("validates a selected operator batch and flags generic source URLs", () => {
     const report = buildOperatorRegistryValidationReport(
       [
@@ -780,6 +874,22 @@ describe("cruise dashboard query helpers", () => {
     expect(points.find((point) => point.shipId === "ship-1")?.latitude).toBe(41);
   });
 
+  it("keeps one public marker when the same verified ship is seen through discovery and verified-global paths", () => {
+    const duplicateTimestamp = new Date("2026-07-01T11:00:00Z");
+    const points = selectLatestCruisePositionPerShip(
+      [
+        position({ shipId: "verified-ship", latitude: 40, longitude: 4, timestamp: duplicateTimestamp }),
+        position({ shipId: "verified-ship", latitude: 40, longitude: 4, timestamp: duplicateTimestamp }),
+        position({ shipId: "other-ship", latitude: 25, longitude: -78, timestamp: new Date("2026-07-01T11:30:00Z") })
+      ],
+      now,
+      CRUISE_POSITION_FRESHNESS_WINDOW_MS
+    );
+
+    expect(points).toHaveLength(2);
+    expect(points.filter((point) => point.shipId === "verified-ship")).toHaveLength(1);
+  });
+
   it("excludes stale positions from currently tracked vessels", () => {
     const points = selectLatestCruisePositionPerShip(
       [
@@ -821,6 +931,17 @@ describe("cruise dashboard query helpers", () => {
 
     expect(dedupeCruiseEstimateRows(rows)).toHaveLength(3);
     expect(summarizeCruiseEstimateRows(rows).co2Tonnes).toBe(275);
+  });
+
+  it("does not double daily totals when duplicate source observations produce equivalent estimates", () => {
+    const date = new Date("2026-07-01T00:00:00Z");
+    const rows = [
+      estimateRow({ shipId: "verified-ship", date, methodVersion: "cruise-ais-mrv-v1", estimatedCo2Tonnes: 200 }),
+      estimateRow({ shipId: "verified-ship", date, methodVersion: "cruise-ais-mrv-v1", estimatedCo2Tonnes: 200 })
+    ];
+
+    expect(dedupeCruiseEstimateRows(rows)).toHaveLength(1);
+    expect(summarizeCruiseEstimateRows(rows).co2Tonnes).toBe(200);
   });
 
   it("uses vessel activity density as the default map mode when no trusted daily CO2 estimate exists", () => {
