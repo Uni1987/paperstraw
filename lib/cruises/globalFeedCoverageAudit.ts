@@ -687,6 +687,7 @@ ${report.caveats.map((caveat) => `- ${caveat}`).join("\n")}
 }
 
 async function loadCoverageRegistryState(): Promise<CoverageRegistryState> {
+  await assertCoverageAuditTablesExist();
   const rows = await prisma.$queryRaw<
     Array<{
       imo: string;
@@ -744,6 +745,20 @@ async function loadCoverageRegistryState(): Promise<CoverageRegistryState> {
     acceptedRegistryVesselsWithoutLinkedMmsi: Math.max(0, acceptedRegistryImoSet.size - linked),
     verifiedPublicEligibleVessels: publicEligible
   };
+}
+
+async function assertCoverageAuditTablesExist() {
+  const rows = await prisma.$queryRaw<Array<{ registry_exists: boolean; verification_exists: boolean; ships_exists: boolean }>>`
+    SELECT
+      to_regclass('public.cruise_vessel_registry_entries') IS NOT NULL AS registry_exists,
+      to_regclass('public.cruise_vessel_verifications') IS NOT NULL AS verification_exists,
+      to_regclass('public.cruise_ships') IS NOT NULL AS ships_exists
+  `;
+  const row = rows[0];
+  if (row?.registry_exists && row.verification_exists && row.ships_exists) return;
+  throw new Error(
+    "Cruise coverage audit requires cruise registry tables in DATABASE_URL. Current database is missing one or more of cruise_vessel_registry_entries, cruise_vessel_verifications, cruise_ships."
+  );
 }
 
 function updateOneSecondRate(state: CoverageAuditState, byteLength: number) {
