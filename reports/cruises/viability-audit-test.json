@@ -1,0 +1,686 @@
+{
+  "generatedAt": "2026-07-02T15:02:20.355Z",
+  "recentDays": 7,
+  "executiveSummary": {
+    "acceptedRegistryVessels": 220,
+    "verifiedPublicEligibleVessels": 109,
+    "registryVesselsWithLinkedMmsi": 109,
+    "registryVesselsWithoutLinkedMmsi": 111,
+    "verifiedVesselsRecentlySeenInAis": 109,
+    "verifiedVesselsWithDailyEmissionsEstimates": 109,
+    "currentlyTrackableVerifiedVesselsInHybridMode": 100,
+    "currentlyExcludedVerifiedMmsisBecauseOfHybridBatchLimit": 9,
+    "candidateVesselsInDiscoveryNotVerified": 2912,
+    "readinessStatus": "GLOBAL_COVERAGE_NOT_YET_PROVEN",
+    "readinessReasons": [
+      "Verified subset tracking and estimates exist, but official operator/global fleet denominators are UNKNOWN."
+    ]
+  },
+  "registryCoverageByOperator": [
+    {
+      "operator": "Royal Caribbean International",
+      "acceptedVesselsInRegistry": 29,
+      "vesselsWithMmsi": 8,
+      "vesselsWithoutMmsi": 21,
+      "mmsiLinkageRate": 27.6,
+      "recentlySeenVessels": 8,
+      "recentAisVisibilityRate": 27.6,
+      "vesselsWithDailyEstimates": 8,
+      "segmentBreakdown": {
+        "OCEAN_CRUISE": 29
+      },
+      "officialExpectedFleetCountKnown": false,
+      "expectedFleetCount": null,
+      "registryFleetCoveragePercent": null
+    },
+    {
+      "operator": "Carnival Cruise Line",
+      "acceptedVesselsInRegistry": 24,
+      "vesselsWithMmsi": 8,
+      "vesselsWithoutMmsi": 16,
+      "mmsiLinkageRate": 33.3,
+      "recentlySeenVessels": 8,
+      "recentAisVisibilityRate": 33.3,
+      "vesselsWithDailyEstimates": 8,
+      "segmentBreakdown": {
+        "OCEAN_CRUISE": 24
+      },
+      "officialExpectedFleetCountKnown": false,
+      "expectedFleetCount": null,
+      "registryFleetCoveragePercent": null
+    },
+    {
+      "operator": "MSC Cruises",
+      "acceptedVesselsInRegistry": 23,
+      "vesselsWithMmsi": 17,
+      "vesselsWithoutMmsi": 6,
+      "mmsiLinkageRate": 73.9,
+      "recentlySeenVessels": 17,
+      "recentAisVisibilityRate": 73.9,
+      "vesselsWithDailyEstimates": 17,
+      "segmentBreakdown": {
+        "OCEAN_CRUISE": 23
+      },
+      "officialExpectedFleetCountKnown": false,
+      "expectedFleetCount": null,
+      "registryFleetCoveragePercent": null
+    },
+    {
+      "operator": "Norwegian Cruise Line",
+      "acceptedVesselsInRegistry": 19,
+      "vesselsWithMmsi": 8,
+      "vesselsWithoutMmsi": 11,
+      "mmsiLinkageRate": 42.1,
+      "recentlySeenVessels": 8,
+      "recentAisVisibilityRate": 42.1,
+      "vesselsWithDailyEstimates": 8,
+      "segmentBreakdown": {
+        "OCEAN_CRUISE": 19
+      },
+      "officialExpectedFleetCountKnown": false,
+      "expectedFleetCount": null,
+      "registryFleetCoveragePercent": null
+    },
+    {
+      "operator": "Princess Cruises",
+      "acceptedVesselsInRegistry": 16,
+      "vesselsWithMmsi": 7,
+      "vesselsWithoutMmsi": 9,
+      "mmsiLinkageRate": 43.8,
+      "recentlySeenVessels": 7,
+      "recentAisVisibilityRate": 43.8,
+      "vesselsWithDailyEstimates": 7,
+      "segmentBreakdown": {
+        "OCEAN_CRUISE": 16
+      },
+      "officialExpectedFleetCountKnown": false,
+      "expectedFleetCount": null,
+      "registryFleetCoveragePercent": null
+    },
+    {
+      "operator": "Celebrity Cruises",
+      "acceptedVesselsInRegistry": 13,
+      "vesselsWithMmsi": 7,
+      "vesselsWithoutMmsi": 6,
+      "mmsiLinkageRate": 53.8,
+      "recentlySeenVessels": 7,
+      "recentAisVisibilityRate": 53.8,
+      "vesselsWithDailyEstimates": 7,
+      "segmentBreakdown": {
+        "OCEAN_CRUISE": 13
+      },
+      "officialExpectedFleetCountKnown": false,
+      "expectedFleetCount": null,
+      "registryFleetCoveragePercent": null
+    },
+    {
+      "operator": "AIDA Cruises",
+      "acceptedVesselsInRegistry": 11,
+      "vesselsWithMmsi": 11,
+      "vesselsWithoutMmsi": 0,
+      "mmsiLinkageRate": 100,
+      "recentlySeenVessels": 11,
+      "recentAisVisibilityRate": 100,
+      "vesselsWithDailyEstimates": 11,
+      "segmentBreakdown": {
+        "OCEAN_CRUISE": 11
+      },
+      "officialExpectedFleetCountKnown": false,
+      "expectedFleetCount": null,
+      "registryFleetCoveragePercent": null
+    },
+    {
+      "operator": "Holland America Line",
+      "acceptedVesselsInRegistry": 11,
+      "vesselsWithMmsi": 3,
+      "vesselsWithoutMmsi": 8,
+      "mmsiLinkageRate": 27.3,
+      "recentlySeenVessels": 3,
+      "recentAisVisibilityRate": 27.3,
+      "vesselsWithDailyEstimates": 3,
+      "segmentBreakdown": {
+        "OCEAN_CRUISE": 11
+      },
+      "officialExpectedFleetCountKnown": false,
+      "expectedFleetCount": null,
+      "registryFleetCoveragePercent": null
+    },
+    {
+      "operator": "Viking Ocean",
+      "acceptedVesselsInRegistry": 10,
+      "vesselsWithMmsi": 5,
+      "vesselsWithoutMmsi": 5,
+      "mmsiLinkageRate": 50,
+      "recentlySeenVessels": 5,
+      "recentAisVisibilityRate": 50,
+      "vesselsWithDailyEstimates": 5,
+      "segmentBreakdown": {
+        "OCEAN_CRUISE": 10
+      },
+      "officialExpectedFleetCountKnown": false,
+      "expectedFleetCount": null,
+      "registryFleetCoveragePercent": null
+    },
+    {
+      "operator": "Costa Cruises",
+      "acceptedVesselsInRegistry": 8,
+      "vesselsWithMmsi": 6,
+      "vesselsWithoutMmsi": 2,
+      "mmsiLinkageRate": 75,
+      "recentlySeenVessels": 6,
+      "recentAisVisibilityRate": 75,
+      "vesselsWithDailyEstimates": 6,
+      "segmentBreakdown": {
+        "OCEAN_CRUISE": 8
+      },
+      "officialExpectedFleetCountKnown": false,
+      "expectedFleetCount": null,
+      "registryFleetCoveragePercent": null
+    },
+    {
+      "operator": "Oceania Cruises",
+      "acceptedVesselsInRegistry": 7,
+      "vesselsWithMmsi": 7,
+      "vesselsWithoutMmsi": 0,
+      "mmsiLinkageRate": 100,
+      "recentlySeenVessels": 7,
+      "recentAisVisibilityRate": 100,
+      "vesselsWithDailyEstimates": 7,
+      "segmentBreakdown": {
+        "OCEAN_CRUISE": 7
+      },
+      "officialExpectedFleetCountKnown": false,
+      "expectedFleetCount": null,
+      "registryFleetCoveragePercent": null
+    },
+    {
+      "operator": "P&O Cruises",
+      "acceptedVesselsInRegistry": 7,
+      "vesselsWithMmsi": 6,
+      "vesselsWithoutMmsi": 1,
+      "mmsiLinkageRate": 85.7,
+      "recentlySeenVessels": 6,
+      "recentAisVisibilityRate": 85.7,
+      "vesselsWithDailyEstimates": 6,
+      "segmentBreakdown": {
+        "OCEAN_CRUISE": 7
+      },
+      "officialExpectedFleetCountKnown": false,
+      "expectedFleetCount": null,
+      "registryFleetCoveragePercent": null
+    },
+    {
+      "operator": "TUI Cruises / Mein Schiff",
+      "acceptedVesselsInRegistry": 7,
+      "vesselsWithMmsi": 3,
+      "vesselsWithoutMmsi": 4,
+      "mmsiLinkageRate": 42.9,
+      "recentlySeenVessels": 3,
+      "recentAisVisibilityRate": 42.9,
+      "vesselsWithDailyEstimates": 3,
+      "segmentBreakdown": {
+        "OCEAN_CRUISE": 7
+      },
+      "officialExpectedFleetCountKnown": false,
+      "expectedFleetCount": null,
+      "registryFleetCoveragePercent": null
+    },
+    {
+      "operator": "Regent Seven Seas Cruises",
+      "acceptedVesselsInRegistry": 6,
+      "vesselsWithMmsi": 3,
+      "vesselsWithoutMmsi": 3,
+      "mmsiLinkageRate": 50,
+      "recentlySeenVessels": 3,
+      "recentAisVisibilityRate": 50,
+      "vesselsWithDailyEstimates": 3,
+      "segmentBreakdown": {
+        "OCEAN_CRUISE": 6
+      },
+      "officialExpectedFleetCountKnown": false,
+      "expectedFleetCount": null,
+      "registryFleetCoveragePercent": null
+    },
+    {
+      "operator": "Seabourn",
+      "acceptedVesselsInRegistry": 6,
+      "vesselsWithMmsi": 1,
+      "vesselsWithoutMmsi": 5,
+      "mmsiLinkageRate": 16.7,
+      "recentlySeenVessels": 1,
+      "recentAisVisibilityRate": 16.7,
+      "vesselsWithDailyEstimates": 1,
+      "segmentBreakdown": {
+        "OCEAN_CRUISE": 4,
+        "EXPEDITION_CRUISE": 2
+      },
+      "officialExpectedFleetCountKnown": false,
+      "expectedFleetCount": null,
+      "registryFleetCoveragePercent": null
+    },
+    {
+      "operator": "Disney Cruise Line",
+      "acceptedVesselsInRegistry": 6,
+      "vesselsWithMmsi": 1,
+      "vesselsWithoutMmsi": 5,
+      "mmsiLinkageRate": 16.7,
+      "recentlySeenVessels": 1,
+      "recentAisVisibilityRate": 16.7,
+      "vesselsWithDailyEstimates": 1,
+      "segmentBreakdown": {
+        "OCEAN_CRUISE": 6
+      },
+      "officialExpectedFleetCountKnown": false,
+      "expectedFleetCount": null,
+      "registryFleetCoveragePercent": null
+    },
+    {
+      "operator": "Hapag-Lloyd Cruises",
+      "acceptedVesselsInRegistry": 5,
+      "vesselsWithMmsi": 2,
+      "vesselsWithoutMmsi": 3,
+      "mmsiLinkageRate": 40,
+      "recentlySeenVessels": 2,
+      "recentAisVisibilityRate": 40,
+      "vesselsWithDailyEstimates": 2,
+      "segmentBreakdown": {
+        "EXPEDITION_CRUISE": 5
+      },
+      "officialExpectedFleetCountKnown": false,
+      "expectedFleetCount": null,
+      "registryFleetCoveragePercent": null
+    },
+    {
+      "operator": "Cunard",
+      "acceptedVesselsInRegistry": 4,
+      "vesselsWithMmsi": 2,
+      "vesselsWithoutMmsi": 2,
+      "mmsiLinkageRate": 50,
+      "recentlySeenVessels": 2,
+      "recentAisVisibilityRate": 50,
+      "vesselsWithDailyEstimates": 2,
+      "segmentBreakdown": {
+        "OCEAN_CRUISE": 4
+      },
+      "officialExpectedFleetCountKnown": false,
+      "expectedFleetCount": null,
+      "registryFleetCoveragePercent": null
+    },
+    {
+      "operator": "Virgin Voyages",
+      "acceptedVesselsInRegistry": 4,
+      "vesselsWithMmsi": 2,
+      "vesselsWithoutMmsi": 2,
+      "mmsiLinkageRate": 50,
+      "recentlySeenVessels": 2,
+      "recentAisVisibilityRate": 50,
+      "vesselsWithDailyEstimates": 2,
+      "segmentBreakdown": {
+        "OCEAN_CRUISE": 4
+      },
+      "officialExpectedFleetCountKnown": false,
+      "expectedFleetCount": null,
+      "registryFleetCoveragePercent": null
+    },
+    {
+      "operator": "Azamara",
+      "acceptedVesselsInRegistry": 4,
+      "vesselsWithMmsi": 2,
+      "vesselsWithoutMmsi": 2,
+      "mmsiLinkageRate": 50,
+      "recentlySeenVessels": 2,
+      "recentAisVisibilityRate": 50,
+      "vesselsWithDailyEstimates": 2,
+      "segmentBreakdown": {
+        "OCEAN_CRUISE": 4
+      },
+      "officialExpectedFleetCountKnown": false,
+      "expectedFleetCount": null,
+      "registryFleetCoveragePercent": null
+    }
+  ],
+  "unresolvedOperatorCoverage": [
+    {
+      "operator": "Royal Caribbean International",
+      "parentGroup": "Royal Caribbean Group",
+      "status": "INCLUDED_UNKNOWN_FLEET_COUNT",
+      "likelyRelevantToOceanCruiseScope": true,
+      "whyExcludedOrUnresolved": "Accepted registry rows exist; official denominator not recorded in this manifest.",
+      "recommendedNextAction": "research registry inclusion"
+    },
+    {
+      "operator": "Carnival Cruise Line",
+      "parentGroup": "Carnival Corporation",
+      "status": "INCLUDED_UNKNOWN_FLEET_COUNT",
+      "likelyRelevantToOceanCruiseScope": true,
+      "whyExcludedOrUnresolved": "Accepted registry rows exist; official denominator not recorded in this manifest.",
+      "recommendedNextAction": "research registry inclusion"
+    },
+    {
+      "operator": "MSC Cruises",
+      "parentGroup": "MSC Group",
+      "status": "INCLUDED_UNKNOWN_FLEET_COUNT",
+      "likelyRelevantToOceanCruiseScope": true,
+      "whyExcludedOrUnresolved": "Accepted registry rows exist; official denominator not recorded in this manifest.",
+      "recommendedNextAction": "research registry inclusion"
+    },
+    {
+      "operator": "Norwegian Cruise Line",
+      "parentGroup": "Norwegian Cruise Line Holdings",
+      "status": "INCLUDED_UNKNOWN_FLEET_COUNT",
+      "likelyRelevantToOceanCruiseScope": true,
+      "whyExcludedOrUnresolved": "Accepted registry rows exist; official denominator not recorded in this manifest.",
+      "recommendedNextAction": "research registry inclusion"
+    },
+    {
+      "operator": "Princess Cruises",
+      "parentGroup": "Carnival Corporation",
+      "status": "INCLUDED_UNKNOWN_FLEET_COUNT",
+      "likelyRelevantToOceanCruiseScope": true,
+      "whyExcludedOrUnresolved": "Accepted registry rows exist; official denominator not recorded in this manifest.",
+      "recommendedNextAction": "research registry inclusion"
+    },
+    {
+      "operator": "Celebrity Cruises",
+      "parentGroup": "Royal Caribbean Group",
+      "status": "INCLUDED_UNKNOWN_FLEET_COUNT",
+      "likelyRelevantToOceanCruiseScope": true,
+      "whyExcludedOrUnresolved": "Accepted registry rows exist; official denominator not recorded in this manifest.",
+      "recommendedNextAction": "research registry inclusion"
+    },
+    {
+      "operator": "AIDA Cruises",
+      "parentGroup": "Carnival Corporation",
+      "status": "INCLUDED_UNKNOWN_FLEET_COUNT",
+      "likelyRelevantToOceanCruiseScope": true,
+      "whyExcludedOrUnresolved": "Accepted registry rows exist; official denominator not recorded in this manifest.",
+      "recommendedNextAction": "research registry inclusion"
+    },
+    {
+      "operator": "Holland America Line",
+      "parentGroup": "Carnival Corporation",
+      "status": "INCLUDED_UNKNOWN_FLEET_COUNT",
+      "likelyRelevantToOceanCruiseScope": true,
+      "whyExcludedOrUnresolved": "Accepted registry rows exist; official denominator not recorded in this manifest.",
+      "recommendedNextAction": "research registry inclusion"
+    },
+    {
+      "operator": "Viking Ocean",
+      "parentGroup": "Viking",
+      "status": "INCLUDED_UNKNOWN_FLEET_COUNT",
+      "likelyRelevantToOceanCruiseScope": true,
+      "whyExcludedOrUnresolved": "Accepted registry rows exist; official denominator not recorded in this manifest.",
+      "recommendedNextAction": "research registry inclusion"
+    },
+    {
+      "operator": "Costa Cruises",
+      "parentGroup": "Carnival Corporation",
+      "status": "INCLUDED_UNKNOWN_FLEET_COUNT",
+      "likelyRelevantToOceanCruiseScope": true,
+      "whyExcludedOrUnresolved": "Accepted registry rows exist; official denominator not recorded in this manifest.",
+      "recommendedNextAction": "research registry inclusion"
+    },
+    {
+      "operator": "P&O Cruises",
+      "parentGroup": "Carnival Corporation",
+      "status": "INCLUDED_UNKNOWN_FLEET_COUNT",
+      "likelyRelevantToOceanCruiseScope": true,
+      "whyExcludedOrUnresolved": "Accepted registry rows exist; official denominator not recorded in this manifest.",
+      "recommendedNextAction": "research registry inclusion"
+    },
+    {
+      "operator": "Oceania Cruises",
+      "parentGroup": "Norwegian Cruise Line Holdings",
+      "status": "INCLUDED_UNKNOWN_FLEET_COUNT",
+      "likelyRelevantToOceanCruiseScope": true,
+      "whyExcludedOrUnresolved": "Accepted registry rows exist; official denominator not recorded in this manifest.",
+      "recommendedNextAction": "research registry inclusion"
+    },
+    {
+      "operator": "TUI Cruises / Mein Schiff",
+      "parentGroup": "Royal Caribbean Group / TUI",
+      "status": "INCLUDED_UNKNOWN_FLEET_COUNT",
+      "likelyRelevantToOceanCruiseScope": true,
+      "whyExcludedOrUnresolved": "Accepted registry rows exist; official denominator not recorded in this manifest.",
+      "recommendedNextAction": "research registry inclusion"
+    },
+    {
+      "operator": "Disney Cruise Line",
+      "parentGroup": "Disney",
+      "status": "INCLUDED_UNKNOWN_FLEET_COUNT",
+      "likelyRelevantToOceanCruiseScope": true,
+      "whyExcludedOrUnresolved": "Accepted registry rows exist; official denominator not recorded in this manifest.",
+      "recommendedNextAction": "research registry inclusion"
+    },
+    {
+      "operator": "Seabourn",
+      "parentGroup": "Carnival Corporation",
+      "status": "INCLUDED_UNKNOWN_FLEET_COUNT",
+      "likelyRelevantToOceanCruiseScope": true,
+      "whyExcludedOrUnresolved": "Accepted registry rows exist; official denominator not recorded in this manifest.",
+      "recommendedNextAction": "research registry inclusion"
+    },
+    {
+      "operator": "Regent Seven Seas Cruises",
+      "parentGroup": "Norwegian Cruise Line Holdings",
+      "status": "INCLUDED_UNKNOWN_FLEET_COUNT",
+      "likelyRelevantToOceanCruiseScope": true,
+      "whyExcludedOrUnresolved": "Accepted registry rows exist; official denominator not recorded in this manifest.",
+      "recommendedNextAction": "research registry inclusion"
+    },
+    {
+      "operator": "Hapag-Lloyd Cruises",
+      "parentGroup": "TUI Group",
+      "status": "INCLUDED_UNKNOWN_FLEET_COUNT",
+      "likelyRelevantToOceanCruiseScope": true,
+      "whyExcludedOrUnresolved": "Accepted registry rows exist; official denominator not recorded in this manifest.",
+      "recommendedNextAction": "research registry inclusion"
+    },
+    {
+      "operator": "Virgin Voyages",
+      "parentGroup": "Virgin Group",
+      "status": "INCLUDED_UNKNOWN_FLEET_COUNT",
+      "likelyRelevantToOceanCruiseScope": true,
+      "whyExcludedOrUnresolved": "Accepted registry rows exist; official denominator not recorded in this manifest.",
+      "recommendedNextAction": "research registry inclusion"
+    },
+    {
+      "operator": "Cunard",
+      "parentGroup": "Carnival Corporation",
+      "status": "INCLUDED_UNKNOWN_FLEET_COUNT",
+      "likelyRelevantToOceanCruiseScope": true,
+      "whyExcludedOrUnresolved": "Accepted registry rows exist; official denominator not recorded in this manifest.",
+      "recommendedNextAction": "research registry inclusion"
+    },
+    {
+      "operator": "Azamara",
+      "parentGroup": "Sycamore Partners",
+      "status": "INCLUDED_UNKNOWN_FLEET_COUNT",
+      "likelyRelevantToOceanCruiseScope": true,
+      "whyExcludedOrUnresolved": "Accepted registry rows exist; official denominator not recorded in this manifest.",
+      "recommendedNextAction": "research registry inclusion"
+    },
+    {
+      "operator": "Silversea",
+      "parentGroup": "Royal Caribbean Group",
+      "status": "UNRESOLVED_RESEARCH_REGISTRY_INCLUSION",
+      "likelyRelevantToOceanCruiseScope": true,
+      "whyExcludedOrUnresolved": "Known unresolved operator from current scope review; requires curated exact-IMO registry proposal.",
+      "recommendedNextAction": "research registry inclusion"
+    },
+    {
+      "operator": "Explora Journeys",
+      "parentGroup": "MSC Group",
+      "status": "UNRESOLVED_RESEARCH_REGISTRY_INCLUSION",
+      "likelyRelevantToOceanCruiseScope": true,
+      "whyExcludedOrUnresolved": "Known unresolved operator from current scope review; requires curated exact-IMO registry proposal.",
+      "recommendedNextAction": "research registry inclusion"
+    },
+    {
+      "operator": "Windstar",
+      "parentGroup": "Windstar Cruises",
+      "status": "UNRESOLVED_RESEARCH_REGISTRY_INCLUSION",
+      "likelyRelevantToOceanCruiseScope": true,
+      "whyExcludedOrUnresolved": "Known unresolved operator from current scope review; requires curated exact-IMO registry proposal.",
+      "recommendedNextAction": "research registry inclusion"
+    },
+    {
+      "operator": "Ponant",
+      "parentGroup": "Artemis Group",
+      "status": "UNRESOLVED_SCOPE_DECISION_REQUIRED",
+      "likelyRelevantToOceanCruiseScope": true,
+      "whyExcludedOrUnresolved": "Known unresolved expedition/ocean operator; scope and exact-IMO registry inclusion require review.",
+      "recommendedNextAction": "scope decision required"
+    },
+    {
+      "operator": "Celestyal",
+      "parentGroup": "Celestyal Cruises",
+      "status": "UNRESOLVED_RESEARCH_REGISTRY_INCLUSION",
+      "likelyRelevantToOceanCruiseScope": true,
+      "whyExcludedOrUnresolved": "Known unresolved operator from current scope review; requires curated exact-IMO registry proposal.",
+      "recommendedNextAction": "research registry inclusion"
+    },
+    {
+      "operator": "Fred. Olsen",
+      "parentGroup": "Fred. Olsen Cruise Lines",
+      "status": "UNRESOLVED_RESEARCH_REGISTRY_INCLUSION",
+      "likelyRelevantToOceanCruiseScope": true,
+      "whyExcludedOrUnresolved": "Known unresolved operator from current scope review; requires curated exact-IMO registry proposal.",
+      "recommendedNextAction": "research registry inclusion"
+    },
+    {
+      "operator": "Ambassador",
+      "parentGroup": "Ambassador Cruise Line",
+      "status": "UNRESOLVED_RESEARCH_REGISTRY_INCLUSION",
+      "likelyRelevantToOceanCruiseScope": true,
+      "whyExcludedOrUnresolved": "Known unresolved operator from current scope review; requires curated exact-IMO registry proposal.",
+      "recommendedNextAction": "research registry inclusion"
+    },
+    {
+      "operator": "Marella",
+      "parentGroup": "TUI Group",
+      "status": "UNRESOLVED_RESEARCH_REGISTRY_INCLUSION",
+      "likelyRelevantToOceanCruiseScope": true,
+      "whyExcludedOrUnresolved": "Known unresolved operator from current scope review; requires curated exact-IMO registry proposal.",
+      "recommendedNextAction": "research registry inclusion"
+    },
+    {
+      "operator": "HX / Hurtigruten Expeditions",
+      "parentGroup": "Hurtigruten Group",
+      "status": "UNRESOLVED_SCOPE_DECISION_REQUIRED",
+      "likelyRelevantToOceanCruiseScope": true,
+      "whyExcludedOrUnresolved": "Known unresolved expedition operator; scope and exact-IMO registry inclusion require review.",
+      "recommendedNextAction": "scope decision required"
+    },
+    {
+      "operator": "Hurtigruten Coastal Express",
+      "parentGroup": "Hurtigruten Group",
+      "status": "UNRESOLVED_SCOPE_DECISION_REQUIRED",
+      "likelyRelevantToOceanCruiseScope": false,
+      "whyExcludedOrUnresolved": "Known unresolved mixed coastal operator; scope decision required before inclusion.",
+      "recommendedNextAction": "scope decision required"
+    },
+    {
+      "operator": "river cruise brands",
+      "parentGroup": "Multiple",
+      "status": "EXCLUDE_NON_OCEAN_SCOPE",
+      "likelyRelevantToOceanCruiseScope": false,
+      "whyExcludedOrUnresolved": "Known out-of-scope category for ocean-cruise launch; do not include without a separate branch decision.",
+      "recommendedNextAction": "exclude permanently as non-ocean-cruise"
+    },
+    {
+      "operator": "ferry-like or mixed operators",
+      "parentGroup": "Multiple",
+      "status": "UNRESOLVED_SCOPE_DECISION_REQUIRED",
+      "likelyRelevantToOceanCruiseScope": false,
+      "whyExcludedOrUnresolved": "Known review bucket; avoid inclusion unless exact ocean-cruise scope is documented.",
+      "recommendedNextAction": "exclude permanently as non-ocean-cruise"
+    }
+  ],
+  "aisTrackingQuality": {
+    "verifiedGlobalLinkedMmsis": 109,
+    "mmsisCurrentlyActiveInHybridConfiguration": 100,
+    "mmsisTemporarilyExcludedByVerifiedBatchLimit": 9,
+    "freshnessBuckets": {
+      "lessThan1Hour": 53,
+      "lessThan24Hours": 52,
+      "lessThan7Days": 4,
+      "olderThan7Days": 0,
+      "neverSeen": 0
+    },
+    "verifiedShipsWithNoPositionsEver": 0,
+    "verifiedShipsWithPositionsButNoRecentPositions": 0,
+    "verifiedShipsWithIdentityConflicts": 0,
+    "verifiedShipsWithUnusableOrInvalidPositionData": 0
+  },
+  "emissionsDataReadiness": {
+    "verifiedVesselsWithAtLeastOneDailyEstimate": 109,
+    "verifiedVesselsWithEstimatesInRecentWindow": 109,
+    "verifiedVesselsWithAisPositionsButNoDailyEstimate": 0,
+    "duplicateOrOverlappingDailyEstimateGroups": 0,
+    "estimateDateCoverage": {
+      "earliest": "2026-07-01",
+      "latest": "2026-07-02"
+    },
+    "publicYtdClaimSufficient": false,
+    "validationNote": "Emission model validation against independent references is still required."
+  },
+  "claimSafetyMatrix": [
+    {
+      "claim": "Tracking a verified subset of ocean cruise ships",
+      "status": "SAFE_WITH_QUALIFIER",
+      "reason": "Verified high-confidence registry matches have recent AIS observations, but coverage is partial.",
+      "requiredEvidence": "Keep strict exact-IMO verification and clearly state subset/window limits."
+    },
+    {
+      "claim": "Tracking major ocean cruise operators",
+      "status": "SAFE_WITH_QUALIFIER",
+      "reason": "Multiple major operators are represented, but official fleet denominators are incomplete.",
+      "requiredEvidence": "Document expected fleet counts and registry completeness per operator."
+    },
+    {
+      "claim": "Tracking X% of the global ocean cruise fleet",
+      "status": "NOT_YET_SAFE",
+      "reason": "No authoritative global denominator is recorded in the operator manifest.",
+      "requiredEvidence": "Authoritative operator/global fleet denominators and measured coverage calculations."
+    },
+    {
+      "claim": "Tracking global cruise ship emissions",
+      "status": "NOT_YET_SAFE",
+      "reason": "Registry/operator completeness and independent emissions-model validation are not yet proven.",
+      "requiredEvidence": "High measured coverage, robust AIS availability, MRV/benchmark validation, and scoped public claims."
+    },
+    {
+      "claim": "Showing estimated emissions for verified vessels",
+      "status": "SAFE_WITH_QUALIFIER",
+      "reason": "Daily estimates exist for verified vessels, but model validation is still required.",
+      "requiredEvidence": "Independent emissions benchmark validation and methodology documentation."
+    }
+  ],
+  "goNoGoDecision": {
+    "currentDecision": "CONDITIONAL_GO_FOR_LIMITED_BETA",
+    "evidenceSupportingDecision": [
+      "109 verified public-eligible vessels.",
+      "109 verified vessels have MMSI for tracking.",
+      "109 verified vessels observed within the selected window.",
+      "109 verified vessels have daily estimates."
+    ],
+    "blockingGaps": [
+      "Authoritative fleet denominators are not recorded; global percentage claims are unsafe.",
+      "Emission model validation against independent references is still required.",
+      "Current hybrid mode excludes some verified MMSIs because of the practical connection limit."
+    ],
+    "nonBlockingImprovements": [
+      "Expand curated registry coverage.",
+      "Record official fleet-count sources.",
+      "Improve MMSI linkage for verified ships."
+    ],
+    "nextHighestValueActions": [
+      "Add authoritative fleet-count evidence to the operator coverage manifest.",
+      "Link missing verified registry entries to MMSIs where authoritative sources allow it.",
+      "Run hybrid with --verified-batch-limit 2 for stable three-connection diagnostics.",
+      "Benchmark daily emissions estimates against independent MRV or operator disclosures.",
+      "Resolve known operator scope gaps before making major-operator or global claims."
+    ]
+  }
+}

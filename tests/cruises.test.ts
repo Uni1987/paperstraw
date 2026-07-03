@@ -1,11 +1,23 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  AISSTREAM_FILTER_MESSAGE_TYPES,
+  VERIFIED_GLOBAL_BOUNDING_BOX,
   buildSubscriptionPayload,
   buildVerifiedGlobalConnectionConfigs,
+  formatCloseDiagnostic,
+  formatErrorDiagnostic,
+  getHybridDegradedStatus,
+  getHybridHealthStatus,
   getEmptyAllowlistStartupDecision,
   getPositionQualityIssue,
+  getReconnectDelayMs,
+  getSubscriptionSummary,
+  isLikelyConcurrentConnectionLimit,
   messageDataToString,
+  parseAisDiagnosticProfile,
   resolveCruiseShipIdentity,
+  selectVerifiedGlobalMmsis,
+  sendAisSubscription,
   type CruiseShipIdentityInput,
   type CruiseShipIdentityRecord,
   type CruiseShipIdentityRepository
@@ -52,6 +64,38 @@ import {
   selectLatestCruisePositionPerShip,
   summarizeCruiseEstimateRows
 } from "@/lib/cruises/queries";
+import { buildCruiseViabilityAudit, parseOperatorCoverageManifest } from "@/lib/cruises/viabilityAudit";
+import {
+  buildGlobalFeedSubscriptionPayload,
+  calculateAverageKbPerSecond,
+  calculateNetworkProjection,
+  calculateProcessCpuPercent,
+  calculateStorageEstimate,
+  createGlobalFeedBenchmarkState,
+  extractBenchmarkMmsi,
+  formatGlobalFeedBenchmarkReport,
+  getGlobalFeedBenchmarkVerdict,
+  getScaleRecommendation,
+  getGlobalFeedSubscriptionSummary,
+  getUtf8ByteLength,
+  handleBenchmarkMessage,
+  toSerializableGlobalFeedBenchmarkReport,
+  validateGlobalFeedBenchmarkOptions
+} from "@/lib/cruises/globalFeedBenchmark";
+import {
+  buildGlobalFeedCoverageAuditSubscriptionPayload,
+  classifyStaticRegistryMatch,
+  createGlobalFeedCoverageAuditState,
+  extractCoverageImo,
+  extractCoverageMmsi,
+  formatGlobalFeedCoverageAuditReport,
+  getCoverageVerdict,
+  getGlobalFeedCoverageSubscriptionSummary,
+  handleCoverageAuditMessage,
+  toSerializableCoverageAuditReport,
+  validateGlobalFeedCoverageAuditOptions,
+  type CoverageRegistryState
+} from "@/lib/cruises/globalFeedCoverageAudit";
 
 afterEach(() => {
   delete process.env.AISSTREAM_BOUNDING_BOXES;
@@ -154,6 +198,12 @@ describe("AISStream cruise region configuration", () => {
     expect(() => getCruiseAisIngestMode("full-world")).toThrow(/Invalid CRUISE_AIS_INGEST_MODE/);
   });
 
+  it("parses supported AIS diagnostic profiles and rejects invalid ones", () => {
+    expect(parseAisDiagnosticProfile("hybrid-verified-first")).toBe("hybrid-verified-first");
+    expect(parseAisDiagnosticProfile(null)).toBeNull();
+    expect(() => parseAisDiagnosticProfile("everything-at-once")).toThrow(/Invalid AIS diagnostic profile/);
+  });
+
   it("uses all default regions when AISSTREAM_BOUNDING_BOXES is missing", () => {
     delete process.env.AISSTREAM_BOUNDING_BOXES;
 
@@ -224,6 +274,29 @@ describe("AISStream cruise region configuration", () => {
     expect(connections).toHaveLength(3);
     expect(connections.map((connection) => connection.label)).toEqual(["verified-global-batch-1", "verified-global-batch-2", "verified-global-batch-3"]);
     expect(connections.map((connection) => connection.mmsis?.length)).toEqual([50, 50, 2]);
+    expect(connections.every((connection) => (connection.mmsis?.length ?? 0) <= AISSTREAM_MMSI_FILTER_LIMIT)).toBe(true);
+    expect(connections.every((connection) => connection.boundingBoxes?.length === 1)).toBe(true);
+    expect(connections.every((connection) => JSON.stringify(connection.boundingBoxes) === JSON.stringify([VERIFIED_GLOBAL_BOUNDING_BOX]))).toBe(true);
+  });
+
+  it("limits verified batches only for hybrid diagnosis and reports excluded MMSIs", () => {
+    const mmsis = Array.from({ length: 105 }, (_, index) => String(200000000 + index));
+
+    const hybridSelection = selectVerifiedGlobalMmsis(mmsis, "hybrid", AISSTREAM_MMSI_FILTER_LIMIT, null, 2);
+    const hybridConnections = [
+      { label: "discovery-corridors", type: "discovery" as const, boundingBoxes: [CRUISE_REGIONS[0].boundingBox] },
+      ...buildVerifiedGlobalConnectionConfigs(hybridSelection.selectedMmsis, AISSTREAM_MMSI_FILTER_LIMIT)
+    ];
+    const verifiedGlobalSelection = selectVerifiedGlobalMmsis(mmsis, "verified-global", AISSTREAM_MMSI_FILTER_LIMIT, null, 2);
+
+    expect(hybridSelection.selectedMmsis).toHaveLength(100);
+    expect(hybridSelection.excludedMmsiCount).toBe(5);
+    expect(hybridSelection.partialCoverage).toBe(true);
+    expect(hybridConnections).toHaveLength(3);
+    expect(hybridConnections.map((connection) => connection.label)).toEqual(["discovery-corridors", "verified-global-batch-1", "verified-global-batch-2"]);
+    expect(verifiedGlobalSelection.selectedMmsis).toHaveLength(105);
+    expect(verifiedGlobalSelection.excludedMmsiCount).toBe(0);
+    expect(verifiedGlobalSelection.partialCoverage).toBe(false);
   });
 
   it("builds AISStream subscription payloads for discovery and verified global modes", () => {
@@ -235,13 +308,113 @@ describe("AISStream cruise region configuration", () => {
     const verified = buildSubscriptionPayload("key", {
       label: "verified-global-batch-1",
       type: "verified-global",
+      boundingBoxes: [[[1, 2], [3, 4]]],
       mmsis: ["215123456"]
     });
 
     expect(discovery).toMatchObject({ APIKey: "key", BoundingBoxes: [CRUISE_REGIONS[0].boundingBox] });
     expect(discovery).not.toHaveProperty("FiltersShipMMSI");
-    expect(verified).toMatchObject({ APIKey: "key", FiltersShipMMSI: ["215123456"] });
-    expect(verified).not.toHaveProperty("BoundingBoxes");
+    expect(discovery).not.toMatchObject({ BoundingBoxes: [VERIFIED_GLOBAL_BOUNDING_BOX] });
+    expect(verified).toEqual({
+      APIKey: "key",
+      BoundingBoxes: [VERIFIED_GLOBAL_BOUNDING_BOX],
+      FiltersShipMMSI: ["215123456"],
+      FilterMessageTypes: [...AISSTREAM_FILTER_MESSAGE_TYPES]
+    });
+    const [[southWest, northEast]] = verified.BoundingBoxes as Array<[[number, number], [number, number]]>;
+    expect(southWest).toEqual([-90, -180]);
+    expect(northEast).toEqual([90, 180]);
+  });
+
+  it("summarizes subscription diagnostics without exposing API keys", () => {
+    const connection = {
+      label: "verified-global-batch-1",
+      type: "verified-global" as const,
+      boundingBoxes: [[[-90, -180], [90, 180]]] as Array<[[number, number], [number, number]]>,
+      mmsis: ["215123456"]
+    };
+    const payload = buildSubscriptionPayload("secret-api-key", connection);
+    const summary = getSubscriptionSummary(connection);
+
+    expect(JSON.stringify(payload)).toContain("secret-api-key");
+    expect(JSON.stringify(summary)).not.toContain("secret-api-key");
+    expect(summary).toMatchObject({ boundingBoxes: 1, usesExactGlobalBoundingBox: true, mmsis: 1 });
+  });
+
+  it("sends verified global subscriptions immediately after socket open", () => {
+    const sent: string[] = [];
+    const result = sendAisSubscription(
+      { send: (payload: string) => sent.push(payload) },
+      "key",
+      {
+        label: "verified-global-batch-1",
+        type: "verified-global",
+        mmsis: ["215123456"]
+      },
+      1000,
+      () => 1004
+    );
+
+    expect(sent).toHaveLength(1);
+    expect(result.sentAfterMs).toBe(4);
+    expect(result.sentAfterMs).toBeLessThan(3000);
+    expect(JSON.parse(sent[0] ?? "{}")).toMatchObject({
+      APIKey: "key",
+      BoundingBoxes: [VERIFIED_GLOBAL_BOUNDING_BOX],
+      FiltersShipMMSI: ["215123456"],
+      FilterMessageTypes: [...AISSTREAM_FILTER_MESSAGE_TYPES]
+    });
+  });
+
+  it("formats close and error diagnostics as concise safe single-line messages", () => {
+    const connection = {
+      label: "discovery-corridors",
+      type: "discovery" as const,
+      boundingBoxes: CRUISE_REGIONS.slice(0, 2).map((region) => region.boundingBox)
+    };
+    const close = formatCloseDiagnostic(connection, 3, { code: 1006, reason: "server closed\nconnection", wasClean: false }, Date.now() - 1250, 2);
+    const error = formatErrorDiagnostic(connection, 3, { type: "error", message: "boom", defaultPrevented: false }, Date.now() - 250, 1);
+
+    expect(close).toContain("discovery-corridors AISStream closed");
+    expect(close).toContain("code=1006");
+    expect(close).toContain("reason=server closed connection");
+    expect(close).toContain('"boundingBoxes":2');
+    expect(error).toContain("discovery-corridors AISStream error");
+    expect(error).toContain('"message":"boom"');
+    expect(`${close} ${error}`).not.toContain("secret-api-key");
+  });
+
+  it("reports hybrid unhealthy when a required verified global batch is unavailable", () => {
+    const status = getHybridHealthStatus([
+      { label: "discovery-corridors", type: "discovery", connected: true, unhealthy: false },
+      { label: "verified-global-batch-1", type: "verified-global", connected: true, unhealthy: false },
+      { label: "verified-global-batch-2", type: "verified-global", connected: true, unhealthy: false },
+      { label: "verified-global-batch-3", type: "verified-global", connected: false, unhealthy: true }
+    ]);
+
+    expect(status.hybridHealthy).toBe(false);
+    expect(status.unavailableVerifiedBatches).toEqual(["verified-global-batch-3"]);
+    expect(status.degraded).toBe("HYBRID DEGRADED: verified batch unavailable: verified-global-batch-3");
+  });
+
+  it("keeps hybrid healthy only when discovery and every verified batch are active", () => {
+    expect(
+      getHybridDegradedStatus([
+        { label: "discovery-corridors", type: "discovery", connected: true, unhealthy: false },
+        { label: "verified-global-batch-1", type: "verified-global", connected: true, unhealthy: false },
+        { label: "verified-global-batch-2", type: "verified-global", connected: true, unhealthy: false }
+      ])
+    ).toBe("none");
+  });
+
+  it("backs off noisy rapid provider failures", () => {
+    expect(getReconnectDelayMs(1, 1, 100)).toBe(4000);
+    expect(getReconnectDelayMs(2, 2, 100)).toBe(60000);
+    expect(getReconnectDelayMs(3, 3, 94)).toBe(120000);
+    expect(getReconnectDelayMs(8, 8, 94)).toBe(600000);
+    expect(getReconnectDelayMs(2, 2, 2000)).toBe(8000);
+    expect(isLikelyConcurrentConnectionLimit(2, 94)).toBe(false);
+    expect(isLikelyConcurrentConnectionLimit(3, 94)).toBe(true);
   });
 
   it("uses safe startup decisions for empty verified allowlists", () => {
@@ -1011,6 +1184,473 @@ describe("cruise dashboard query helpers", () => {
   });
 });
 
+describe("cruise viability audit", () => {
+  const now = new Date("2026-07-02T12:00:00Z");
+
+  it("keeps zero-data state conservative and read-only", () => {
+    const report = buildCruiseViabilityAudit({
+      recentDays: 7,
+      now,
+      registryEntries: [],
+      verifiedShips: [],
+      candidateShipCount: 0,
+      positions: [],
+      estimates: [],
+      manifestRows: []
+    });
+
+    expect(report.executiveSummary.acceptedRegistryVessels).toBe(0);
+    expect(report.executiveSummary.readinessStatus).toBe("NOT_READY");
+    expect(report.goNoGoDecision.currentDecision).toBe("NO_GO");
+    expect(report.claimSafetyMatrix.find((row) => row.claim.includes("global ocean cruise fleet"))?.status).toBe("NOT_YET_SAFE");
+  });
+
+  it("uses UNKNOWN fleet counts instead of inferred percentages", () => {
+    const manifest = parseOperatorCoverageManifest(
+      [
+        "operator,parentGroup,segment,officialFleetCount,officialFleetCountSource,checkedAt,includedInRegistry,notes,status",
+        "Example Cruises,Example Group,OCEAN_CRUISE,,,2026-07-02,true,No denominator,INCLUDED_UNKNOWN_FLEET_COUNT"
+      ].join("\n")
+    );
+    const report = buildCruiseViabilityAudit({
+      recentDays: 7,
+      now,
+      registryEntries: [viabilityRegistryEntry({ imo: "1234567", operator: "Example Cruises" })],
+      verifiedShips: [viabilityShip({ shipId: "ship-1", imo: "1234567", mmsi: "244123456", operator: "Example Cruises" })],
+      candidateShipCount: 1,
+      positions: [],
+      estimates: [],
+      manifestRows: manifest
+    });
+
+    expect(report.registryCoverageByOperator[0]?.officialExpectedFleetCountKnown).toBe(false);
+    expect(report.registryCoverageByOperator[0]?.expectedFleetCount).toBeNull();
+    expect(report.registryCoverageByOperator[0]?.registryFleetCoveragePercent).toBeNull();
+  });
+
+  it("counts recent observed verified vessels and stale vessels by date window", () => {
+    const report = buildCruiseViabilityAudit({
+      recentDays: 7,
+      now,
+      registryEntries: [
+        viabilityRegistryEntry({ imo: "1234567", operator: "Example Cruises" }),
+        viabilityRegistryEntry({ imo: "7654321", operator: "Example Cruises" })
+      ],
+      verifiedShips: [
+        viabilityShip({ shipId: "recent", imo: "1234567", mmsi: "244123456", operator: "Example Cruises" }),
+        viabilityShip({ shipId: "stale", imo: "7654321", mmsi: "244123457", operator: "Example Cruises" })
+      ],
+      candidateShipCount: 2,
+      positions: [
+        { shipId: "recent", timestamp: new Date("2026-07-02T11:30:00Z") },
+        { shipId: "stale", timestamp: new Date("2026-06-01T00:00:00Z") }
+      ],
+      estimates: [],
+      manifestRows: []
+    });
+
+    expect(report.executiveSummary.verifiedVesselsRecentlySeenInAis).toBe(1);
+    expect(report.aisTrackingQuality.freshnessBuckets.lessThan1Hour).toBe(1);
+    expect(report.aisTrackingQuality.freshnessBuckets.olderThan7Days).toBe(1);
+    expect(report.aisTrackingQuality.verifiedShipsWithPositionsButNoRecentPositions).toBe(1);
+  });
+
+  it("reports hybrid batch-limit exclusion counts", () => {
+    const registryEntries = Array.from({ length: 105 }, (_, index) => viabilityRegistryEntry({ imo: String(1000000 + index), operator: "Example Cruises" }));
+    const verifiedShips = registryEntries.map((entry, index) =>
+      viabilityShip({ shipId: `ship-${index}`, imo: entry.imo, mmsi: String(200000000 + index), operator: "Example Cruises" })
+    );
+
+    const report = buildCruiseViabilityAudit({
+      recentDays: 7,
+      now,
+      registryEntries,
+      verifiedShips,
+      candidateShipCount: 105,
+      positions: [],
+      estimates: [],
+      manifestRows: []
+    });
+
+    expect(report.executiveSummary.currentlyTrackableVerifiedVesselsInHybridMode).toBe(100);
+    expect(report.executiveSummary.currentlyExcludedVerifiedMmsisBecauseOfHybridBatchLimit).toBe(5);
+  });
+
+  it("keeps emissions and global claims unsafe without benchmark and denominator evidence", () => {
+    const report = buildCruiseViabilityAudit({
+      recentDays: 7,
+      now,
+      registryEntries: [viabilityRegistryEntry({ imo: "1234567", operator: "Example Cruises" })],
+      verifiedShips: [viabilityShip({ shipId: "ship-1", imo: "1234567", mmsi: "244123456", operator: "Example Cruises" })],
+      candidateShipCount: 1,
+      positions: [{ shipId: "ship-1", timestamp: new Date("2026-07-02T11:30:00Z") }],
+      estimates: [{ shipId: "ship-1", date: new Date("2026-07-02T00:00:00Z"), methodVersion: "v1" }],
+      manifestRows: []
+    });
+
+    expect(report.claimSafetyMatrix.find((row) => row.claim === "Tracking X% of the global ocean cruise fleet")?.status).toBe("NOT_YET_SAFE");
+    expect(report.claimSafetyMatrix.find((row) => row.claim === "Tracking global cruise ship emissions")?.status).toBe("NOT_YET_SAFE");
+    expect(report.claimSafetyMatrix.find((row) => row.claim === "Showing estimated emissions for verified vessels")?.status).toBe("SAFE_WITH_QUALIFIER");
+    expect(report.emissionsDataReadiness.validationNote).toMatch(/validation against independent references/);
+  });
+});
+
+describe("global AISStream feed benchmark", () => {
+  it("builds one full-world subscription without MMSI filters", () => {
+    const payload = buildGlobalFeedSubscriptionPayload("secret-key", "positions");
+    const summary = getGlobalFeedSubscriptionSummary(payload, 3);
+
+    expect(payload.BoundingBoxes).toEqual([VERIFIED_GLOBAL_BOUNDING_BOX]);
+    expect(payload.BoundingBoxes[0][0]).toEqual([-90, -180]);
+    expect(payload.BoundingBoxes[0][1]).toEqual([90, 180]);
+    expect(payload.FilterMessageTypes).toEqual(["PositionReport"]);
+    expect(payload).not.toHaveProperty("FiltersShipMMSI");
+    expect(summary).toMatchObject({ boundingBoxes: 1, usesExactGlobalBoundingBox: true, hasMmsiFilter: false, subscriptionSentAfterMs: 3 });
+    expect(JSON.stringify(summary)).not.toContain("secret-key");
+  });
+
+  it("uses only valid message type names for positions and static profile", () => {
+    expect(buildGlobalFeedSubscriptionPayload("key", "positions-and-static").FilterMessageTypes).toEqual(["PositionReport", "ShipStaticData"]);
+  });
+
+  it("counts verified MMSI messages locally and discards unknown messages", async () => {
+    const state = createGlobalFeedBenchmarkState({ maxRuntimeMs: 120000, messageProfile: "positions" }, 1);
+    await handleBenchmarkMessage(
+      { data: JSON.stringify({ MessageType: "PositionReport", MetaData: { MMSI: "244123456" }, Message: { PositionReport: { UserID: "244123456" } } }) },
+      new Set(["244123456"]),
+      state
+    );
+    await handleBenchmarkMessage(
+      { data: JSON.stringify({ MessageType: "PositionReport", MetaData: { MMSI: "111222333" }, Message: { PositionReport: { UserID: "111222333" } } }) },
+      new Set(["244123456"]),
+      state
+    );
+
+    expect(state.messagesMatchedToVerifiedMmsis).toBe(1);
+    expect(state.distinctVerifiedMmsisObserved.size).toBe(1);
+    expect(state.discardedUnverifiedMessages).toBe(1);
+    expect(state.totalBytesReceived).toBeGreaterThan(0);
+    expect(state.databaseWritesAttempted).toBe(0);
+    expect(state.databaseWritesCompleted).toBe(0);
+  });
+
+  it("counts UTF-8 bytes and network projections safely", () => {
+    expect(getUtf8ByteLength("abc")).toBe(3);
+    expect(getUtf8ByteLength("é")).toBe(2);
+    expect(calculateAverageKbPerSecond(1024, 1000)).toBe(1);
+    expect(calculateAverageKbPerSecond(1024, 0)).toBe(0);
+    expect(calculateNetworkProjection(1024 * 1024 * 1024, 60 * 60 * 1000)).toEqual({
+      gbPerHour: 1,
+      gbPerDay: 24,
+      gbPer30DayMonth: 720
+    });
+    expect(calculateNetworkProjection(100, 0)).toEqual({ gbPerHour: 0, gbPerDay: 0, gbPer30DayMonth: 0 });
+  });
+
+  it("calculates bounded process CPU percentage", () => {
+    expect(calculateProcessCpuPercent(500_000, 1000)).toBe(50);
+    expect(calculateProcessCpuPercent(2_000_000, 1000)).toBe(100);
+    expect(calculateProcessCpuPercent(500_000, 0)).toBe(0);
+  });
+
+  it("uses configurable assumptions for future storage estimates", () => {
+    const estimate = calculateStorageEstimate({
+      verifiedMessagesMatched: 10,
+      distinctVerifiedMmsisObserved: 2,
+      connectedDurationMs: 60 * 60 * 1000,
+      positionRetentionDays: 90,
+      estimatedVerifiedPositionBytes: 250,
+      estimatedDailyAggregateBytes: 500
+    });
+
+    expect(estimate.estimatedVerifiedPositionsPerHour).toBe(10);
+    expect(estimate.estimatedVerifiedPositionsPerDay).toBe(240);
+    expect(estimate.assumptions).toMatchObject({ positionRetentionDays: 90, estimatedVerifiedPositionBytes: 250, estimatedDailyAggregateBytes: 500 });
+    expect(estimate.estimatedRawVerifiedPositionStorageForRetentionMb).toBeGreaterThan(0);
+  });
+
+  it("does not retain raw AIS payloads in the serializable report", async () => {
+    const raw = JSON.stringify({ MessageType: "PositionReport", MetaData: { MMSI: "244123456" }, raw: "secret raw payload" });
+    const state = createGlobalFeedBenchmarkState({ maxRuntimeMs: 120000, messageProfile: "positions" }, 1);
+    await handleBenchmarkMessage({ data: raw }, new Set(["244123456"]), state);
+    state.endedAt = new Date("2026-07-02T12:00:00Z");
+    state.connectedDurationMs = 120000;
+    const report = toSerializableGlobalFeedBenchmarkReport(state);
+
+    expect(JSON.stringify(report)).not.toContain("secret raw payload");
+    expect(JSON.stringify(report)).not.toContain("244123456");
+    expect(report.databaseSafety.databaseWritesAttempted).toBe(0);
+    expect(report.network.totalBytesReceived).toBeGreaterThan(0);
+  });
+
+  it("extracts MMSI robustly from metadata and body", () => {
+    expect(extractBenchmarkMmsi({ MetaData: { MMSI: 244123456 } })).toBe("244123456");
+    expect(extractBenchmarkMmsi({ Message: { PositionReport: { UserID: "244123457" } } })).toBe("244123457");
+    expect(extractBenchmarkMmsi({ Message: { ShipStaticData: { MMSI: "244123458" } } })).toBe("244123458");
+    expect(extractBenchmarkMmsi({ MetaData: { MMSI: "bad" } })).toBeNull();
+  });
+
+  it("requires explicit allow-long-run for benchmark runtimes above 15 minutes", () => {
+    expect(() => validateGlobalFeedBenchmarkOptions({ maxRuntimeMs: 16 * 60 * 1000 })).toThrow(/allow-long-run/);
+    expect(() => validateGlobalFeedBenchmarkOptions({ maxRuntimeMs: 16 * 60 * 1000, allowLongRun: true })).not.toThrow();
+  });
+
+  it("produces stable, inconclusive, and unstable verdicts", () => {
+    expect(
+      getGlobalFeedBenchmarkVerdict({
+        requestedRuntimeMs: 120000,
+        connectedDurationMs: 120000,
+        socketOpened: true,
+        reconnectCount: 0,
+        unhandledErrors: 0,
+        totalMessages: 100,
+        backlogObserved: false,
+        eventLoopP95Ms: 20,
+        memoryStartMb: 100,
+        memoryPeakMb: 120,
+        closeCode: 1000
+      })
+    ).toBe("STABLE_FOR_LONGER_TEST");
+    expect(
+      getGlobalFeedBenchmarkVerdict({
+        requestedRuntimeMs: 120000,
+        connectedDurationMs: 120000,
+        socketOpened: true,
+        reconnectCount: 0,
+        unhandledErrors: 0,
+        totalMessages: 0,
+        backlogObserved: false,
+        eventLoopP95Ms: 20,
+        memoryStartMb: 100,
+        memoryPeakMb: 120,
+        closeCode: 1000
+      })
+    ).toBe("INCONCLUSIVE");
+    expect(
+      getGlobalFeedBenchmarkVerdict({
+        requestedRuntimeMs: 120000,
+        connectedDurationMs: 100,
+        socketOpened: true,
+        reconnectCount: 0,
+        unhandledErrors: 0,
+        totalMessages: 10,
+        backlogObserved: true,
+        eventLoopP95Ms: 20,
+        memoryStartMb: 100,
+        memoryPeakMb: 120,
+        closeCode: 1006
+      })
+    ).toBe("UNSTABLE");
+  });
+
+  it("keeps formatted output free of API keys, raw MMSIs, and vessel identities", () => {
+    const state = createGlobalFeedBenchmarkState({ maxRuntimeMs: 120000, messageProfile: "positions" }, 1);
+    state.totalMessages = 1;
+    state.totalBytesReceived = 512;
+    state.messagesMatchedToVerifiedMmsis = 1;
+    state.distinctVerifiedMmsisObserved.add("244123456");
+    state.endedAt = new Date("2026-07-02T12:00:00Z");
+    const output = formatGlobalFeedBenchmarkReport(toSerializableGlobalFeedBenchmarkReport(state), "json");
+    const markdown = formatGlobalFeedBenchmarkReport(toSerializableGlobalFeedBenchmarkReport(state), "markdown");
+
+    expect(output).not.toContain("secret-key");
+    expect(output).not.toContain("244123456");
+    expect(output).not.toContain("Example Cruise");
+    expect(JSON.parse(output).connection.reconnectCount).toBe(0);
+    expect(markdown).toContain("Total inbound bytes");
+    expect(markdown).toContain("Average bytes/message");
+    expect(markdown).toContain("CPU user time ms");
+    expect(markdown).toContain("Heap total start/peak/end MB");
+    expect(markdown).toContain("Future Storage Estimate");
+    expect(markdown).not.toContain("244123456");
+  });
+
+  it("uses conservative scale recommendations", () => {
+    expect(
+      getScaleRecommendation({
+        verdict: "UNSTABLE",
+        averageInboundKbPerSecond: 10,
+        peakInboundKbPerSecond: 20,
+        averageCpuPercent: 10,
+        peakCpuPercent: 10,
+        memoryPeakMb: 100,
+        eventLoopP95Ms: 20,
+        backlogObserved: false
+      })
+    ).toBe("NEEDS_OPTIMISATION_BEFORE_CLOUD_TEST");
+    expect(
+      getScaleRecommendation({
+        verdict: "INCONCLUSIVE",
+        averageInboundKbPerSecond: 10,
+        peakInboundKbPerSecond: 20,
+        averageCpuPercent: 10,
+        peakCpuPercent: 10,
+        memoryPeakMb: 100,
+        eventLoopP95Ms: 20,
+        backlogObserved: false
+      })
+    ).toBe("LOCAL_TEST_ONLY");
+    expect(
+      getScaleRecommendation({
+        verdict: "STABLE_FOR_LONGER_TEST",
+        averageInboundKbPerSecond: 10,
+        peakInboundKbPerSecond: 20,
+        averageCpuPercent: 5,
+        peakCpuPercent: 10,
+        memoryPeakMb: 100,
+        eventLoopP95Ms: 20,
+        backlogObserved: false
+      })
+    ).toBe("CANDIDATE_FOR_SMALL_CLOUD_WORKER_TEST");
+  });
+});
+
+describe("global AISStream coverage audit", () => {
+  it("builds exactly one full-world subscription with PositionReport and ShipStaticData only", () => {
+    const payload = buildGlobalFeedCoverageAuditSubscriptionPayload("secret-key");
+    const summary = getGlobalFeedCoverageSubscriptionSummary(payload, 2);
+
+    expect(payload.BoundingBoxes).toEqual([VERIFIED_GLOBAL_BOUNDING_BOX]);
+    expect(payload.BoundingBoxes[0][0]).toEqual([-90, -180]);
+    expect(payload.BoundingBoxes[0][1]).toEqual([90, 180]);
+    expect(payload.FilterMessageTypes).toEqual(["PositionReport", "ShipStaticData"]);
+    expect(payload).not.toHaveProperty("FiltersShipMMSI");
+    expect(summary).toMatchObject({
+      boundingBoxes: 1,
+      usesExactGlobalBoundingBox: true,
+      coordinateOrder: "[latitude, longitude]",
+      hasMmsiFilter: false,
+      subscriptionSentAfterMs: 2
+    });
+    expect(JSON.stringify(summary)).not.toContain("secret-key");
+  });
+
+  it("requires explicit allow-long-run for coverage audits above 30 minutes", () => {
+    expect(() => validateGlobalFeedCoverageAuditOptions({ maxRuntimeMs: 31 * 60 * 1000 })).toThrow(/allow-long-run/);
+    expect(() => validateGlobalFeedCoverageAuditOptions({ maxRuntimeMs: 31 * 60 * 1000, allowLongRun: true })).not.toThrow();
+  });
+
+  it("counts verified MMSI PositionReports and discards unknown MMSIs", async () => {
+    const registry = coverageRegistryState();
+    const state = createGlobalFeedCoverageAuditState({ maxRuntimeMs: 120000 });
+    await handleCoverageAuditMessage(positionAuditMessage("244123456"), registry, state);
+    await handleCoverageAuditMessage(positionAuditMessage("111222333"), registry, state);
+
+    expect(state.knownVerifiedMmsiPositionMatches).toBe(1);
+    expect(state.distinctVerifiedMmsisObserved.size).toBe(1);
+    expect(state.nonVerifiedPositionMessagesDiscarded).toBe(1);
+    expect(state.combinedObservedRegistryImos.size).toBe(1);
+    expect(state.databaseWritesAttempted).toBe(0);
+    expect(state.databaseWritesCompleted).toBe(0);
+  });
+
+  it("counts only checksum-valid exact accepted registry IMO static matches", async () => {
+    const registry = coverageRegistryState();
+    const state = createGlobalFeedCoverageAuditState({ maxRuntimeMs: 120000 });
+    await handleCoverageAuditMessage(staticAuditMessage({ mmsi: "244123456", imo: "9837420", name: "Should Not Leak" }), registry, state);
+    await handleCoverageAuditMessage(staticAuditMessage({ mmsi: "244123457", imo: "1234560" }), registry, state);
+    await handleCoverageAuditMessage(staticAuditMessage({ mmsi: "244123458", imo: "9999999" }), registry, state);
+    await handleCoverageAuditMessage({ data: JSON.stringify({ MessageType: "ShipStaticData", MetaData: { ShipName: "Name Only" }, Message: { ShipStaticData: { Name: "Name Only" } } }) }, registry, state);
+
+    expect(state.exactAcceptedRegistryStaticMatches).toBe(1);
+    expect(state.checksumValidImoValuesSeen).toBe(1);
+    expect(state.messagesMissingUsableImo).toBe(3);
+    expect(state.nonRegistryStaticMessagesDiscarded).toBe(3);
+    expect(extractCoverageImo({ Message: { ShipStaticData: { ImoNumber: "9837420" } } })).toBe("9837420");
+    expect(extractCoverageMmsi({ Message: { ShipStaticData: { MMSI: "244123456" } } })).toBe("244123456");
+  });
+
+  it("classifies linked confirmations, new MMSI candidates, and conflicts only in memory", async () => {
+    const registry = coverageRegistryState();
+    const state = createGlobalFeedCoverageAuditState({ maxRuntimeMs: 120000 });
+    await handleCoverageAuditMessage(staticAuditMessage({ mmsi: "244123456", imo: "9837420" }), registry, state);
+    await handleCoverageAuditMessage(staticAuditMessage({ mmsi: "244123999", imo: "9837420" }), registry, state);
+    await handleCoverageAuditMessage(staticAuditMessage({ mmsi: "244123777", imo: "9137363" }), registry, state);
+
+    expect(classifyStaticRegistryMatch("244123456", "244123456")).toBe("ALREADY_LINKED_MMSI");
+    expect(classifyStaticRegistryMatch("244123456", "244123999")).toBe("MMSI_CONFLICT_REVIEW_REQUIRED");
+    expect(classifyStaticRegistryMatch(null, "244123777")).toBe("NEW_MMSI_CANDIDATE_FOR_EXISTING_REGISTRY_ENTRY");
+    expect(state.staticMatchesAlreadyLinkedToSameMmsi).toBe(1);
+    expect(state.mmsiConflictReviewRequired).toBe(1);
+    expect(state.newMmsiCandidatesForExistingRegistryEntry).toBe(1);
+    expect(state.databaseWritesAttempted).toBe(0);
+    expect(state.databaseWritesCompleted).toBe(0);
+  });
+
+  it("keeps reports free of raw payloads, vessel names, MMSIs, and IMOs", async () => {
+    const registry = coverageRegistryState();
+    const state = createGlobalFeedCoverageAuditState({ maxRuntimeMs: 120000 });
+    await handleCoverageAuditMessage(staticAuditMessage({ mmsi: "244123456", imo: "9837420", name: "Example Secret Vessel" }), registry, state);
+    state.endedAt = new Date("2026-07-03T12:00:00Z");
+    state.connectedDurationMs = 120000;
+    const report = toSerializableCoverageAuditReport(state, registry, {
+      maxRuntimeMs: 120000,
+      reportIntervalMs: 10000,
+      format: "json",
+      recentDays: 7
+    });
+    const output = formatGlobalFeedCoverageAuditReport(report, "json") + formatGlobalFeedCoverageAuditReport(report, "markdown");
+
+    expect(output).not.toContain("secret-key");
+    expect(output).not.toContain("244123456");
+    expect(output).not.toContain("9837420");
+    expect(output).not.toContain("Example Secret Vessel");
+    expect(report.discoverySafety.databaseWritesAttempted).toBe(0);
+    expect(report.discoverySafety.databaseWritesCompleted).toBe(0);
+    expect(report.discoverySafety.rawPayloadRetention).toBe(false);
+    expect(report.discoverySafety.unsafeMatchingUsed).toBe(false);
+    expect(report.connection.reconnectCount).toBe(0);
+  });
+
+  it("calculates combined observed registry coverage without exposing identities", async () => {
+    const registry = coverageRegistryState();
+    const state = createGlobalFeedCoverageAuditState({ maxRuntimeMs: 120000 });
+    await handleCoverageAuditMessage(positionAuditMessage("244123456"), registry, state);
+    await handleCoverageAuditMessage(staticAuditMessage({ mmsi: "244123777", imo: "9137363" }), registry, state);
+    state.endedAt = new Date("2026-07-03T12:00:00Z");
+    state.connectedDurationMs = 120000;
+
+    const report = toSerializableCoverageAuditReport(state, registry, {
+      maxRuntimeMs: 120000,
+      reportIntervalMs: 10000,
+      format: "terminal",
+      recentDays: 7
+    });
+
+    expect(report.registryCoverage.acceptedRegistryVessels).toBe(2);
+    expect(report.registryCoverage.acceptedRegistryVesselsWithExistingLinkedMmsi).toBe(1);
+    expect(report.registryCoverage.acceptedRegistryVesselsWithoutLinkedMmsi).toBe(1);
+    expect(report.combinedCoverage.distinctRegistryVesselsObservedByEitherMethod).toBe(2);
+    expect(report.combinedCoverage.combinedObservedRegistryCoverageRate).toBe(100);
+    expect(report.combinedCoverage.label).toMatch(/audit window/);
+  });
+
+  it("produces all coverage verdicts", () => {
+    const base = {
+      requestedRuntimeMs: 120000,
+      connectedDurationMs: 120000,
+      socketOpened: true,
+      subscriptionSent: true,
+      reconnectCount: 0,
+      unhandledErrors: 0,
+      backlogObserved: false,
+      eventLoopP95Ms: 20,
+      closeCode: 1000,
+      positionReportMessages: 10,
+      shipStaticDataMessages: 5,
+      knownVerifiedMmsiPositionMatches: 1,
+      exactAcceptedRegistryStaticMatches: 1,
+      checksumValidImoValuesSeen: 1
+    };
+
+    expect(getCoverageVerdict(base)).toBe("STRONG_SIGNAL_FOR_GLOBAL_LOCAL_FILTER");
+    expect(getCoverageVerdict({ ...base, exactAcceptedRegistryStaticMatches: 0, checksumValidImoValuesSeen: 0 })).toBe("PROMISING_BUT_NEEDS_LONGER_AUDIT");
+    expect(getCoverageVerdict({ ...base, knownVerifiedMmsiPositionMatches: 0, exactAcceptedRegistryStaticMatches: 0, checksumValidImoValuesSeen: 0 })).toBe("INSUFFICIENT_EVIDENCE");
+    expect(getCoverageVerdict({ ...base, shipStaticDataMessages: 0 })).toBe("DATA_PATH_PROBLEM");
+    expect(getCoverageVerdict({ ...base, reconnectCount: 1 })).toBe("DATA_PATH_PROBLEM");
+  });
+});
+
 describe("AIS cruise ship identity resolution", () => {
   it("updates the IMO record when the same IMO arrives with a new safe MMSI", async () => {
     const repo = new FakeCruiseShipRepository([{ id: "ship-1", imo: "1234567", mmsi: null, shipType: "Passenger ship" }]);
@@ -1169,6 +1809,86 @@ function registryCandidate(overrides: {
     shipType: "Passenger ship",
     hasMrvRecord: false,
     ...overrides
+  };
+}
+
+function viabilityRegistryEntry(overrides: Partial<{
+  imo: string;
+  operator: string;
+  operatorGroup: string | null;
+  vesselSegment: string;
+  registryDecision: string;
+  activeStatus: string;
+}>) {
+  return {
+    imo: "1234567",
+    operator: "Example Cruises",
+    operatorGroup: "Example Group",
+    vesselSegment: "OCEAN_CRUISE",
+    registryDecision: "ACCEPT",
+    activeStatus: "ACTIVE",
+    ...overrides
+  };
+}
+
+function viabilityShip(overrides: Partial<{
+  shipId: string;
+  imo: string | null;
+  mmsi: string | null;
+  operator: string;
+  operatorGroup: string | null;
+  vesselSegment: string;
+}>) {
+  return {
+    shipId: "ship-1",
+    imo: "1234567",
+    mmsi: "244123456",
+    operator: "Example Cruises",
+    operatorGroup: "Example Group",
+    vesselSegment: "OCEAN_CRUISE",
+    ...overrides
+  };
+}
+
+function coverageRegistryState(): CoverageRegistryState {
+  return {
+    acceptedRegistryImoSet: new Set(["9837420", "9137363"]),
+    registryCoverageStateByImo: new Map([
+      ["9837420", { hasLinkedMmsi: true, linkedMmsi: "244123456", publicEligible: true }],
+      ["9137363", { hasLinkedMmsi: false, linkedMmsi: null, publicEligible: false }]
+    ]),
+    verifiedMmsiToImo: new Map([["244123456", "9837420"]]),
+    acceptedRegistryVessels: 2,
+    acceptedRegistryVesselsWithExistingLinkedMmsi: 1,
+    acceptedRegistryVesselsWithoutLinkedMmsi: 1,
+    verifiedPublicEligibleVessels: 1
+  };
+}
+
+function positionAuditMessage(mmsi: string) {
+  return {
+    data: JSON.stringify({
+      MessageType: "PositionReport",
+      MetaData: { MMSI: mmsi },
+      Message: { PositionReport: { UserID: mmsi } }
+    })
+  };
+}
+
+function staticAuditMessage(input: { mmsi: string; imo: string; name?: string }) {
+  return {
+    data: JSON.stringify({
+      MessageType: "ShipStaticData",
+      MetaData: { MMSI: input.mmsi, ShipName: input.name },
+      Message: {
+        ShipStaticData: {
+          UserID: input.mmsi,
+          ImoNumber: input.imo,
+          Name: input.name,
+          Type: "Passenger"
+        }
+      }
+    })
   };
 }
 

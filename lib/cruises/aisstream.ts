@@ -113,14 +113,38 @@ export type AisConnectionConfig = {
   mmsis?: string[];
 };
 
+export const AIS_DIAGNOSTIC_PROFILES = [
+  "discovery",
+  "verified-global",
+  "hybrid-discovery-first",
+  "hybrid-verified-first",
+  "hybrid-one-batch",
+  "hybrid-two-batches",
+  "hybrid-three-batches"
+] as const;
+
+export type AisDiagnosticProfile = (typeof AIS_DIAGNOSTIC_PROFILES)[number];
+
+type AisStartupOptions = {
+  mode?: string | null;
+  maxRuntimeMs?: number | null;
+  diagnosticProfile?: string | null;
+  discoveryRegionLimit?: number | null;
+  connectionStaggerMs?: number | null;
+  verifiedBatchLimit?: number | null;
+};
+
 type AisConnectionStats = {
   label: string;
   type: AisConnectionType;
   connected: boolean;
+  unhealthy: boolean;
   messagesReceived: number;
   positionsStored: number;
   filteredMessages: number;
   reconnectCount: number;
+  consecutiveFailures: number;
+  startedAt: Date | null;
   lastMessageAt: Date | null;
   lastError: string | null;
 };
@@ -130,13 +154,24 @@ type AisMessageContext = {
   type: AisConnectionType;
 };
 
-const MAX_RECONNECT_DELAY_MS = 120000;
+const MAX_RECONNECT_DELAY_MS = 10 * 60 * 1000;
+const RAPID_FAILURE_BACKOFF_MS = 60000;
+const RAPID_FAILURE_WINDOW_MS = 1000;
+const CONCURRENT_CONNECTION_LIMIT_WARNING_FAILURES = 3;
 const MAX_ALLOWED_SPEED_KNOTS = 45;
 const MAX_IMPLIED_SPEED_KNOTS = 70;
 const DUPLICATE_CACHE_TTL_MS = 10 * 60 * 1000;
 const LOG_INTERVAL_MS = 60 * 1000;
+const DEFAULT_CONNECTION_STAGGER_MS = 1500;
+export const AISSTREAM_FILTER_MESSAGE_TYPES = ["PositionReport", "StandardClassBPositionReport", "ShipStaticData"] as const;
+export const VERIFIED_GLOBAL_BOUNDING_BOX: [[number, number], [number, number]] = [
+  [-90, -180],
+  [90, 180]
+];
 
 const recentMessageKeys = new Map<string, number>();
+const degradedWarnings = new Set<string>();
+const connectionLimitWarnings = new Set<string>();
 const stats: AisWorkerStats = {
   mode: "discovery",
   shipsTracked: new Set(),
@@ -152,7 +187,7 @@ const stats: AisWorkerStats = {
 };
 const connectionStats = new Map<string, AisConnectionStats>();
 
-export async function runAisStreamWorker(options: { mode?: string | null; maxRuntimeMs?: number | null } = {}) {
+export async function runAisStreamWorker(options: AisStartupOptions = {}) {
   if (!isAisStreamIngestionEnabled()) {
     console.log("AISStream ingestion is disabled. Set ENABLE_AISSTREAM_INGESTION=true to run it.");
     return;
@@ -163,17 +198,19 @@ export async function runAisStreamWorker(options: { mode?: string | null; maxRun
     throw new Error("Missing AISSTREAM_API_KEY.");
   }
 
-  const mode = getCruiseAisIngestMode(options.mode);
+  const diagnosticProfile = parseAisDiagnosticProfile(options.diagnosticProfile);
+  const mode = diagnosticProfile ? getModeForDiagnosticProfile(diagnosticProfile) : getCruiseAisIngestMode(options.mode);
   stats.mode = mode;
   logInfo(
     [
       `CRUISE AIS INGESTION MODE: ${mode}`,
+      `Diagnostic profile: ${diagnosticProfile ?? "none"}`,
       `Environment target: ${process.env.CRUISE_AIS_ENVIRONMENT_TARGET?.trim() || "development / cruises-dev"}`,
       "Production deployment: not configured"
     ].join("\n")
   );
 
-  const connections = await buildAisConnectionConfigs(mode);
+  const connections = await buildAisConnectionConfigs(mode, diagnosticProfile, options.discoveryRegionLimit ?? null, options.verifiedBatchLimit ?? null);
   if (!connections.length) {
     logWarn("No AISStream connections configured; worker stopped safely.");
     return;
@@ -191,19 +228,37 @@ export async function runAisStreamWorker(options: { mode?: string | null; maxRun
         }, options.maxRuntimeMs)
       : null;
   runtimeTimer?.unref?.();
+  const staggerMs = options.connectionStaggerMs ?? getConnectionStaggerMs();
   try {
-    await Promise.all(connections.map((connection) => connectForever(apiKey, connection, controller.signal)));
+    await Promise.all(connections.map((connection, index) => startConnectionWithStagger(apiKey, connection, controller.signal, index, staggerMs)));
   } finally {
     if (runtimeTimer) clearTimeout(runtimeTimer);
   }
 }
 
-async function buildAisConnectionConfigs(mode: CruiseAisIngestMode): Promise<AisConnectionConfig[]> {
-  const connections: AisConnectionConfig[] = [];
+async function startConnectionWithStagger(apiKey: string, connection: AisConnectionConfig, signal: AbortSignal, index: number, staggerMs: number) {
+  const delayMs = Math.max(0, index * staggerMs);
+  if (delayMs > 0) {
+    logInfo(`${connection.label} startup stagger | delayMs=${delayMs}`);
+    await sleep(delayMs, signal);
+  }
+  if (signal.aborted) return;
+  await connectForever(apiKey, connection, signal);
+}
 
-  if (mode === "discovery" || mode === "hybrid") {
+async function buildAisConnectionConfigs(
+  mode: CruiseAisIngestMode,
+  diagnosticProfile: AisDiagnosticProfile | null = null,
+  discoveryRegionLimit: number | null = null,
+  verifiedBatchLimit: number | null = null
+): Promise<AisConnectionConfig[]> {
+  const connections: AisConnectionConfig[] = [];
+  const includeDiscovery = mode === "discovery" || mode === "hybrid";
+  const includeVerifiedGlobal = mode === "verified-global" || mode === "hybrid";
+
+  if (includeDiscovery) {
     const regionConfig = getCruiseRegionConfig();
-    const regions = regionConfig.regions;
+    const regions = discoveryRegionLimit && discoveryRegionLimit > 0 ? regionConfig.regions.slice(0, discoveryRegionLimit) : regionConfig.regions;
     const sourceLabel = regionConfig.source === "default" ? "default cruise corridors" : "AISSTREAM_BOUNDING_BOXES override";
     logInfo(
       `Discovery AISStream subscription uses ${regions.length} configured region(s) from ${sourceLabel}: ${regions.map((region) => region.name).join(", ")}`
@@ -215,10 +270,13 @@ async function buildAisConnectionConfigs(mode: CruiseAisIngestMode): Promise<Ais
     });
   }
 
-  if (mode === "verified-global" || mode === "hybrid") {
+  if (includeVerifiedGlobal) {
     const allowlist = await loadVerifiedAisAllowlist();
     const mmsis = getVerifiedAisSubscriptionMmsis(allowlist);
-    const batches = splitMmsiBatches(mmsis, AISSTREAM_MMSI_FILTER_LIMIT);
+    const diagnosticBatchCount = getDiagnosticBatchCount(diagnosticProfile);
+    const selection = selectVerifiedGlobalMmsis(mmsis, mode, AISSTREAM_MMSI_FILTER_LIMIT, diagnosticBatchCount, verifiedBatchLimit);
+    const selectedMmsis = selection.selectedMmsis;
+    const selectedBatches = splitMmsiBatches(selectedMmsis, AISSTREAM_MMSI_FILTER_LIMIT);
     logInfo(
       [
         "Verified global AIS allowlist loaded",
@@ -226,29 +284,59 @@ async function buildAisConnectionConfigs(mode: CruiseAisIngestMode): Promise<Ais
         `eligibleMmsis=${mmsis.length}`,
         `missingMmsis=${allowlist.linkedEntriesMissingMmsi}`,
         `conflictingMmsis=${allowlist.duplicateOrConflictingMmsis.length}`,
-        `batches=${batches.length}`,
-        `batchSizes=${batches.map((batch) => batch.length).join(",") || "none"}`
+        `batches=${selectedBatches.length}`,
+        `batchSizes=${selectedBatches.map((batch) => batch.length).join(",") || "none"}`
       ].join(" | ")
     );
-    const emptyDecision = mmsis.length ? null : getEmptyAllowlistStartupDecision(mode);
+    if (selection.partialCoverage) {
+      logWarn(
+        [
+          "Hybrid verified-global batch limit active",
+          `verifiedBatchLimit=${selection.activeBatchLimit}`,
+          `includedMmsis=${selection.selectedMmsis.length}`,
+          `excludedMmsis=${selection.excludedMmsiCount}`,
+          "partialVerifiedGlobalCoverage=true"
+        ].join(" | ")
+      );
+    }
+    const emptyDecision = selectedMmsis.length ? null : getEmptyAllowlistStartupDecision(mode);
     if (emptyDecision === "refuse") {
       throw new Error("Verified-global AIS ingestion refused to start: no verified public-eligible MMSIs are available.");
     }
     if (emptyDecision === "continue-discovery") {
       logWarn("Hybrid AIS ingestion has no verified public-eligible MMSIs; continuing with discovery corridors only.");
     }
-    connections.push(...buildVerifiedGlobalConnectionConfigs(mmsis, AISSTREAM_MMSI_FILTER_LIMIT));
+    connections.push(...buildVerifiedGlobalConnectionConfigs(selectedMmsis, AISSTREAM_MMSI_FILTER_LIMIT));
   }
 
-  return connections;
+  return orderConnectionsForDiagnostic(connections, diagnosticProfile);
 }
 
 export function buildVerifiedGlobalConnectionConfigs(mmsis: string[], limit = AISSTREAM_MMSI_FILTER_LIMIT): AisConnectionConfig[] {
   return splitMmsiBatches(mmsis, limit).map((batch, index) => ({
     label: `verified-global-batch-${index + 1}`,
     type: "verified-global",
+    boundingBoxes: [VERIFIED_GLOBAL_BOUNDING_BOX],
     mmsis: batch
   }));
+}
+
+export function selectVerifiedGlobalMmsis(
+  mmsis: string[],
+  mode: CruiseAisIngestMode,
+  providerBatchLimit = AISSTREAM_MMSI_FILTER_LIMIT,
+  diagnosticBatchCount: number | null = null,
+  verifiedBatchLimit: number | null = null
+) {
+  const hybridBatchLimit = mode === "hybrid" && verifiedBatchLimit && verifiedBatchLimit > 0 ? verifiedBatchLimit : null;
+  const activeBatchLimit = diagnosticBatchCount ?? hybridBatchLimit;
+  const selectedMmsis = activeBatchLimit ? mmsis.slice(0, activeBatchLimit * providerBatchLimit) : mmsis;
+  return {
+    selectedMmsis,
+    activeBatchLimit,
+    excludedMmsiCount: Math.max(0, mmsis.length - selectedMmsis.length),
+    partialCoverage: mode === "hybrid" && Boolean(hybridBatchLimit) && selectedMmsis.length < mmsis.length
+  };
 }
 
 export function getEmptyAllowlistStartupDecision(mode: CruiseAisIngestMode): "refuse" | "continue-discovery" | "start-without-global" {
@@ -257,11 +345,50 @@ export function getEmptyAllowlistStartupDecision(mode: CruiseAisIngestMode): "re
   return "start-without-global";
 }
 
+export function getReconnectDelayMs(reconnectAttempt: number, consecutiveFailures: number, lastConnectElapsedMs: number | null) {
+  const baseDelayMs = Math.min(MAX_RECONNECT_DELAY_MS, 2000 * 2 ** Math.min(reconnectAttempt, 8));
+  const rapidProviderFailure = lastConnectElapsedMs !== null && lastConnectElapsedMs < RAPID_FAILURE_WINDOW_MS && consecutiveFailures >= 2;
+  if (!rapidProviderFailure) return baseDelayMs;
+  const rapidBackoffMs = Math.min(MAX_RECONNECT_DELAY_MS, RAPID_FAILURE_BACKOFF_MS * 2 ** Math.max(0, consecutiveFailures - 2));
+  return Math.max(baseDelayMs, rapidBackoffMs);
+}
+
+export function isLikelyConcurrentConnectionLimit(consecutiveFailures: number, lastConnectElapsedMs: number | null) {
+  return lastConnectElapsedMs !== null && lastConnectElapsedMs < RAPID_FAILURE_WINDOW_MS && consecutiveFailures >= CONCURRENT_CONNECTION_LIMIT_WARNING_FAILURES;
+}
+
+export function parseAisDiagnosticProfile(value?: string | null): AisDiagnosticProfile | null {
+  const normalized = value?.trim();
+  if (!normalized) return null;
+  if ((AIS_DIAGNOSTIC_PROFILES as readonly string[]).includes(normalized)) return normalized as AisDiagnosticProfile;
+  throw new Error(`Invalid AIS diagnostic profile "${value}". Supported values: ${AIS_DIAGNOSTIC_PROFILES.join(", ")}.`);
+}
+
+function getModeForDiagnosticProfile(profile: AisDiagnosticProfile): CruiseAisIngestMode {
+  if (profile === "discovery") return "discovery";
+  if (profile === "verified-global") return "verified-global";
+  return "hybrid";
+}
+
+function getDiagnosticBatchCount(profile: AisDiagnosticProfile | null) {
+  if (profile === "hybrid-one-batch") return 1;
+  if (profile === "hybrid-two-batches") return 2;
+  if (profile === "hybrid-three-batches") return 3;
+  return null;
+}
+
+function orderConnectionsForDiagnostic(connections: AisConnectionConfig[], profile: AisDiagnosticProfile | null) {
+  if (profile === "hybrid-verified-first") {
+    return [...connections].sort((a, b) => (a.type === b.type ? 0 : a.type === "verified-global" ? -1 : 1));
+  }
+  return connections;
+}
+
 async function connectForever(apiKey: string, connection: AisConnectionConfig, signal: AbortSignal) {
   let reconnectAttempt = 0;
 
   while (!signal.aborted) {
-    await connectOnce(apiKey, connection, signal);
+    await connectOnce(apiKey, connection, signal, reconnectAttempt + 1);
     if (signal.aborted) break;
 
     reconnectAttempt += 1;
@@ -269,16 +396,40 @@ async function connectForever(apiKey: string, connection: AisConnectionConfig, s
     const current = getConnectionStats(connection);
     current.connected = false;
     current.reconnectCount += 1;
-    const delayMs = Math.min(MAX_RECONNECT_DELAY_MS, 2000 * 2 ** Math.min(reconnectAttempt, 8));
-    logInfo(`${connection.label} disconnected. Reconnect attempt ${reconnectAttempt}; waiting ${Math.round(delayMs / 1000)}s.`);
+    const elapsedMs = current.startedAt ? Date.now() - current.startedAt.getTime() : null;
+    const delayMs = getReconnectDelayMs(reconnectAttempt, current.consecutiveFailures, elapsedMs);
+    evaluateHybridDegradedState();
+    if (isLikelyConcurrentConnectionLimit(current.consecutiveFailures, elapsedMs) && !connectionLimitWarnings.has(connection.label)) {
+      connectionLimitWarnings.add(connection.label);
+      logWarn(
+        [
+          `${connection.label} likelyConcurrentConnectionLimit`,
+          `consecutiveRapidFailures=${current.consecutiveFailures}`,
+          `lastConnectElapsedMs=${elapsedMs}`,
+          `backoffSeconds=${Math.round(delayMs / 1000)}`,
+          "AISStream may be limiting concurrent WebSocket connections for this API key"
+        ].join(" | ")
+      );
+    }
+    logInfo(
+      [
+        `${connection.label} reconnect scheduled`,
+        `attempt=${reconnectAttempt}`,
+        `delaySeconds=${Math.round(delayMs / 1000)}`,
+        `consecutiveFailures=${current.consecutiveFailures}`,
+        `lastConnectElapsedMs=${elapsedMs ?? "unknown"}`
+      ].join(" | ")
+    );
     await sleep(delayMs, signal);
   }
 }
 
-async function connectOnce(apiKey: string, connection: AisConnectionConfig, signal: AbortSignal) {
+async function connectOnce(apiKey: string, connection: AisConnectionConfig, signal: AbortSignal, reconnectAttempt: number) {
   await new Promise<void>((resolve) => {
     const socket = new WebSocket(AISSTREAM_ENDPOINT);
     const current = getConnectionStats(connection);
+    const startedAt = Date.now();
+    current.startedAt = new Date(startedAt);
     let resolved = false;
     const finish = () => {
       if (resolved) return;
@@ -304,11 +455,23 @@ async function connectOnce(apiKey: string, connection: AisConnectionConfig, sign
         return;
       }
       current.connected = true;
+      current.unhealthy = false;
+      current.consecutiveFailures = 0;
       stats.lastConnectedAt = new Date();
       current.lastError = null;
       stats.lastError = null;
-      socket.send(JSON.stringify(buildSubscriptionPayload(apiKey, connection)));
-      logInfo(`${connection.label} connected. ${describeConnectionSubscription(connection)}`);
+      const subscriptionOpenedAt = Date.now();
+      const subscription = sendAisSubscription(socket, apiKey, connection, subscriptionOpenedAt);
+      logInfo(
+        [
+          `${connection.label} connected`,
+          `type=${connection.type}`,
+          `reconnectAttempt=${reconnectAttempt}`,
+          `readyState=${socket.readyState}`,
+          `subscriptionSentAfterMs=${subscription.sentAfterMs}`,
+          `subscription=${JSON.stringify(subscription.summary)}`
+        ].join(" | ")
+      );
     });
 
     socket.addEventListener("message", (event) => {
@@ -321,15 +484,26 @@ async function connectOnce(apiKey: string, connection: AisConnectionConfig, sign
       });
     });
 
-    socket.addEventListener("close", () => {
+    socket.addEventListener("close", (event) => {
+      if (resolved) return;
+      const diagnostic = formatCloseDiagnostic(connection, socket.readyState, event, startedAt, reconnectAttempt);
+      current.lastError = diagnostic;
+      current.connected = false;
+      current.unhealthy = true;
+      current.consecutiveFailures += 1;
+      stats.lastError = diagnostic;
+      logWarn(diagnostic);
       finish();
     });
 
     socket.addEventListener("error", (error) => {
       current.connected = false;
-      stats.lastError = "AISStream socket error";
-      current.lastError = stats.lastError;
-      logError(`${connection.label} AISStream socket error`, error);
+      const diagnostic = formatErrorDiagnostic(connection, socket.readyState, error, startedAt, reconnectAttempt);
+      stats.lastError = diagnostic;
+      current.lastError = diagnostic;
+      current.unhealthy = true;
+      current.consecutiveFailures += 1;
+      logWarn(diagnostic);
       socket.close();
       finish();
     });
@@ -337,13 +511,58 @@ async function connectOnce(apiKey: string, connection: AisConnectionConfig, sign
 }
 
 export function buildSubscriptionPayload(apiKey: string, connection: AisConnectionConfig) {
+  const boundingBoxes = getSubscriptionBoundingBoxes(connection);
   const payload: Record<string, unknown> = {
     APIKey: apiKey,
-    FilterMessageTypes: ["PositionReport", "StandardClassBPositionReport", "ShipStaticData"]
+    FilterMessageTypes: [...AISSTREAM_FILTER_MESSAGE_TYPES]
   };
-  if (connection.type === "discovery") payload.BoundingBoxes = connection.boundingBoxes ?? [];
+  if (boundingBoxes.length) payload.BoundingBoxes = boundingBoxes;
   if (connection.type === "verified-global") payload.FiltersShipMMSI = connection.mmsis ?? [];
   return payload;
+}
+
+export function sendAisSubscription(
+  socket: Pick<WebSocket, "send">,
+  apiKey: string,
+  connection: AisConnectionConfig,
+  openedAtMs = Date.now(),
+  now: () => number = Date.now
+) {
+  const payload = buildSubscriptionPayload(apiKey, connection);
+  socket.send(JSON.stringify(payload));
+  const sentAfterMs = now() - openedAtMs;
+  return {
+    payload,
+    sentAfterMs,
+    summary: getSubscriptionSummary(connection)
+  };
+}
+
+export function getSubscriptionSummary(connection: AisConnectionConfig) {
+  const boundingBoxes = getSubscriptionBoundingBoxes(connection);
+  return {
+    label: connection.label,
+    type: connection.type,
+    boundingBoxes: boundingBoxes.length,
+    usesExactGlobalBoundingBox: connection.type === "verified-global" ? usesExactVerifiedGlobalBoundingBox(boundingBoxes) : false,
+    mmsis: connection.mmsis?.length ?? 0,
+    messageTypes: [...AISSTREAM_FILTER_MESSAGE_TYPES]
+  };
+}
+
+function getSubscriptionBoundingBoxes(connection: AisConnectionConfig) {
+  if (connection.type === "verified-global") return [VERIFIED_GLOBAL_BOUNDING_BOX];
+  return connection.boundingBoxes ?? [];
+}
+
+export function usesExactVerifiedGlobalBoundingBox(boundingBoxes: Array<[[number, number], [number, number]]>) {
+  return (
+    boundingBoxes.length === 1 &&
+    boundingBoxes[0]?.[0]?.[0] === -90 &&
+    boundingBoxes[0]?.[0]?.[1] === -180 &&
+    boundingBoxes[0]?.[1]?.[0] === 90 &&
+    boundingBoxes[0]?.[1]?.[1] === 180
+  );
 }
 
 function describeConnectionSubscription(connection: AisConnectionConfig) {
@@ -694,10 +913,13 @@ function createConnectionStats(connection: AisConnectionConfig): AisConnectionSt
     label: connection.label,
     type: connection.type,
     connected: false,
+    unhealthy: false,
     messagesReceived: 0,
     positionsStored: 0,
     filteredMessages: 0,
     reconnectCount: 0,
+    consecutiveFailures: 0,
+    startedAt: null,
     lastMessageAt: null,
     lastError: null
   };
@@ -836,9 +1058,14 @@ function startStatsLogger() {
   const interval = setInterval(() => {
     const connectionRows = [...connectionStats.values()];
     const connectedConnections = connectionRows.filter((connection) => connection.connected).length;
-    const discoveryMessages = connectionRows.filter((connection) => connection.type === "discovery").reduce((total, connection) => total + connection.messagesReceived, 0);
-    const discoveryPositions = connectionRows.filter((connection) => connection.type === "discovery").reduce((total, connection) => total + connection.positionsStored, 0);
+    const discoveryConnections = connectionRows.filter((connection) => connection.type === "discovery");
     const verifiedConnections = connectionRows.filter((connection) => connection.type === "verified-global");
+    const discoveryMessages = discoveryConnections.reduce((total, connection) => total + connection.messagesReceived, 0);
+    const discoveryPositions = discoveryConnections.reduce((total, connection) => total + connection.positionsStored, 0);
+    const connectedVerifiedGlobalBatches = verifiedConnections.filter((connection) => connection.connected).length;
+    const discoveryHealthy = discoveryConnections.length ? discoveryConnections.some((connection) => connection.connected) : false;
+    const verifiedGlobalHealthy = verifiedConnections.length ? connectedVerifiedGlobalBatches > 0 : false;
+    const hybridStatus = getHybridHealthStatus(connectionRows);
     logInfo(
       [
         "AISStream status",
@@ -857,7 +1084,12 @@ function startStatsLogger() {
         `lastError=${stats.lastError ?? "none"}`,
         `discoveryMessages=${discoveryMessages}`,
         `discoveryPositions=${discoveryPositions}`,
-        `verifiedGlobalBatches=${verifiedConnections.length}`
+        `discoveryHealthy=${discoveryHealthy}`,
+        `verifiedGlobalHealthy=${verifiedGlobalHealthy}`,
+        `verifiedGlobalBatches=${verifiedConnections.length}`,
+        `connectedVerifiedGlobalBatches=${connectedVerifiedGlobalBatches}`,
+        `hybridHealthy=${hybridStatus.hybridHealthy}`,
+        `degraded=${hybridStatus.degraded}`
       ].join(" | ")
     );
     for (const connection of connectionRows) {
@@ -866,10 +1098,12 @@ function startStatsLogger() {
           `AISStream connection ${connection.label}`,
           `type=${connection.type}`,
           `connected=${connection.connected}`,
+          `unhealthy=${connection.unhealthy}`,
           `messagesReceived=${connection.messagesReceived}`,
           `positionsStored=${connection.positionsStored}`,
           `filteredMessages=${connection.filteredMessages}`,
           `reconnectCount=${connection.reconnectCount}`,
+          `consecutiveFailures=${connection.consecutiveFailures}`,
           `lastMessageAt=${connection.lastMessageAt?.toISOString() ?? "never"}`,
           `lastError=${connection.lastError ?? "none"}`
         ].join(" | ")
@@ -877,6 +1111,106 @@ function startStatsLogger() {
     }
   }, LOG_INTERVAL_MS);
   interval.unref?.();
+}
+
+function evaluateHybridDegradedState() {
+  const connectionRows = [...connectionStats.values()];
+  const status = getHybridHealthStatus(connectionRows);
+  if (status.degraded !== "none" && !degradedWarnings.has(status.degraded)) {
+    degradedWarnings.add(status.degraded);
+    logWarn(status.degraded);
+  }
+}
+
+export function getHybridDegradedStatus(connectionRows: Array<Pick<AisConnectionStats, "type" | "connected" | "unhealthy"> & { label?: string }>) {
+  return getHybridHealthStatus(connectionRows).degraded;
+}
+
+export function getHybridHealthStatus(connectionRows: Array<Pick<AisConnectionStats, "type" | "connected" | "unhealthy"> & { label?: string }>) {
+  const discoveryConnections = connectionRows.filter((connection) => connection.type === "discovery");
+  const verifiedConnections = connectionRows.filter((connection) => connection.type === "verified-global");
+  if (!discoveryConnections.length || !verifiedConnections.length) {
+    return {
+      hybridHealthy: true,
+      degraded: "none",
+      unavailableVerifiedBatches: [] as string[]
+    };
+  }
+  const discoveryHealthy = discoveryConnections.some((connection) => connection.connected);
+  const discoveryUnavailable = discoveryConnections.every((connection) => connection.unhealthy && !connection.connected);
+  const unavailableVerifiedBatches = verifiedConnections
+    .filter((connection) => !connection.connected || connection.unhealthy)
+    .map((connection, index) => connection.label ?? `verified-global-batch-${index + 1}`);
+  const issues: string[] = [];
+  if (discoveryUnavailable && !discoveryHealthy) issues.push("discovery unavailable");
+  if (unavailableVerifiedBatches.length) issues.push(`verified batch unavailable: ${unavailableVerifiedBatches.join(", ")}`);
+  return {
+    hybridHealthy: issues.length === 0,
+    degraded: issues.length ? `HYBRID DEGRADED: ${issues.join("; ")}` : "none",
+    unavailableVerifiedBatches
+  };
+}
+
+export function formatCloseDiagnostic(
+  connection: Pick<AisConnectionConfig, "label" | "type" | "boundingBoxes" | "mmsis">,
+  readyState: number,
+  event: unknown,
+  startedAtMs: number,
+  reconnectAttempt: number
+) {
+  const close = event as Partial<CloseEvent>;
+  return [
+    `${connection.label} AISStream closed`,
+    `type=${connection.type}`,
+    `readyState=${readyState}`,
+    `code=${typeof close.code === "number" ? close.code : "unknown"}`,
+    `reason=${sanitizeLogValue(close.reason) || "none"}`,
+    `wasClean=${typeof close.wasClean === "boolean" ? close.wasClean : "unknown"}`,
+    `elapsedMs=${Date.now() - startedAtMs}`,
+    `reconnectAttempt=${reconnectAttempt}`,
+    `subscription=${JSON.stringify(getSubscriptionSummary(connection as AisConnectionConfig))}`
+  ].join(" | ");
+}
+
+export function formatErrorDiagnostic(
+  connection: Pick<AisConnectionConfig, "label" | "type" | "boundingBoxes" | "mmsis">,
+  readyState: number,
+  event: unknown,
+  startedAtMs: number,
+  reconnectAttempt: number
+) {
+  return [
+    `${connection.label} AISStream error`,
+    `type=${connection.type}`,
+    `readyState=${readyState}`,
+    `elapsedMs=${Date.now() - startedAtMs}`,
+    `reconnectAttempt=${reconnectAttempt}`,
+    `event=${JSON.stringify(extractSafeEventFields(event))}`,
+    `subscription=${JSON.stringify(getSubscriptionSummary(connection as AisConnectionConfig))}`
+  ].join(" | ");
+}
+
+function extractSafeEventFields(event: unknown) {
+  if (!event || typeof event !== "object") return { type: typeof event };
+  const record = event as Record<string, unknown>;
+  return {
+    type: sanitizeLogValue(record.type),
+    message: sanitizeLogValue(record.message),
+    error: sanitizeLogValue(record.error),
+    code: sanitizeLogValue(record.code),
+    reason: sanitizeLogValue(record.reason),
+    wasClean: typeof record.wasClean === "boolean" ? record.wasClean : undefined,
+    cancelable: typeof record.cancelable === "boolean" ? record.cancelable : undefined,
+    defaultPrevented: typeof record.defaultPrevented === "boolean" ? record.defaultPrevented : undefined
+  };
+}
+
+function sanitizeLogValue(value: unknown) {
+  if (value === null || value === undefined || value === "") return undefined;
+  if (typeof value === "string") return value.replace(/[\r\n]+/g, " ").slice(0, 200);
+  if (typeof value === "number" || typeof value === "boolean") return value;
+  if (value instanceof Error) return value.message.slice(0, 200);
+  return String(value).replace(/[\r\n]+/g, " ").slice(0, 200);
 }
 
 function withIngestionAttribution(payload: AisMessage, context: AisMessageContext) {
@@ -972,6 +1306,13 @@ function sleep(ms: number, signal?: AbortSignal) {
     };
     signal?.addEventListener("abort", abort, { once: true });
   });
+}
+
+function getConnectionStaggerMs() {
+  const raw = process.env.CRUISE_AIS_CONNECTION_STAGGER_MS?.trim();
+  if (!raw) return DEFAULT_CONNECTION_STAGGER_MS;
+  const value = Number(raw);
+  return Number.isFinite(value) && value >= 0 ? value : DEFAULT_CONNECTION_STAGGER_MS;
 }
 
 function logDebug(message: string) {

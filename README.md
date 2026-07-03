@@ -793,6 +793,21 @@ For a short startup validation without leaving the worker running:
 pnpm cruises:ingest-ais -- --mode verified-global --max-runtime-ms 10000
 ```
 
+AISStream connection diagnostics:
+
+```bash
+pnpm cruises:ingest-ais -- --diagnostic-profile discovery --max-runtime-ms 10000
+pnpm cruises:ingest-ais -- --diagnostic-profile verified-global --max-runtime-ms 10000
+pnpm cruises:ingest-ais -- --diagnostic-profile hybrid-discovery-first --max-runtime-ms 10000
+pnpm cruises:ingest-ais -- --diagnostic-profile hybrid-verified-first --max-runtime-ms 10000
+pnpm cruises:ingest-ais -- --diagnostic-profile hybrid-one-batch --max-runtime-ms 10000
+pnpm cruises:ingest-ais -- --diagnostic-profile hybrid-two-batches --max-runtime-ms 10000
+pnpm cruises:ingest-ais -- --diagnostic-profile hybrid-three-batches --max-runtime-ms 10000
+pnpm cruises:ingest-ais -- --diagnostic-profile discovery --discovery-region-limit 1 --max-runtime-ms 10000
+```
+
+Diagnostics log sanitized subscription summaries only: connection label, mode/type, bounding-box count, MMSI count, and message types. API keys are never logged. If AISStream rejects or rate-limits handshakes, rapid failures back off more slowly to avoid noisy retry loops.
+
 In PowerShell:
 
 ```powershell
