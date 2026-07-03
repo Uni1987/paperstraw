@@ -15,17 +15,11 @@ const DynamicCruiseVesselMap = dynamic(
 export function LazyCruiseVesselMap({
   points,
   mapMode,
-  latestPositionLabel,
-  freshnessWindowHours,
-  monitoredRegionCount,
   emptyStateTitle,
   emptyStateDescription
 }: {
   points: CruiseMapPoint[];
   mapMode: CruiseMapMode;
-  latestPositionLabel: string;
-  freshnessWindowHours: number;
-  monitoredRegionCount: number;
   emptyStateTitle?: string;
   emptyStateDescription?: string;
 }) {
@@ -33,9 +27,6 @@ export function LazyCruiseVesselMap({
     <DynamicCruiseVesselMap
       points={points}
       mapMode={mapMode}
-      latestPositionLabel={latestPositionLabel}
-      freshnessWindowHours={freshnessWindowHours}
-      monitoredRegionCount={monitoredRegionCount}
       emptyStateTitle={emptyStateTitle}
       emptyStateDescription={emptyStateDescription}
     />

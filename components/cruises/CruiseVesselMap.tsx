@@ -40,7 +40,7 @@ function getClientCruiseMapCopy(mode: CruiseMapMode) {
   }
 
   return {
-    subtitle: "Latest AIS vessel positions from monitored cruise regions.",
+    subtitle: "Latest observed positions from verified cruise ships.",
     legendTitle: "Live cruise vessel activity"
   };
 }
@@ -48,17 +48,11 @@ function getClientCruiseMapCopy(mode: CruiseMapMode) {
 export function CruiseVesselMap({
   points,
   mapMode,
-  latestPositionLabel,
-  freshnessWindowHours,
-  monitoredRegionCount,
   emptyStateTitle = "Awaiting recent AIS positions",
   emptyStateDescription = "The cruise worker is connected, but no recent vessel positions are available yet."
 }: {
   points: CruiseMapPoint[];
   mapMode: CruiseMapMode;
-  latestPositionLabel: string;
-  freshnessWindowHours: number;
-  monitoredRegionCount: number;
   emptyStateTitle?: string;
   emptyStateDescription?: string;
 }) {
@@ -179,15 +173,6 @@ export function CruiseVesselMap({
           <span>Low</span>
           <span>High</span>
         </div>
-        <p className="mt-2 text-[0.68rem] leading-4 text-white/46">
-          Distinct vessels: {points.length.toLocaleString("en-US")}
-          <br />
-          Last AIS position: {latestPositionLabel}
-          <br />
-          Freshness window: {freshnessWindowHours} hours
-          <br />
-          Monitored regions: {monitoredRegionCount.toLocaleString("en-US")}
-        </p>
       </div>
 
       <div className="absolute right-3 top-1/2 z-10 flex -translate-y-1/2 flex-col overflow-hidden rounded-xl border border-white/10 bg-[#07100f]/88 shadow-2xl backdrop-blur md:right-5">

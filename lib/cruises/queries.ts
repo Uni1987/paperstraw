@@ -444,7 +444,7 @@ export function getCruiseMapCopy(mode: CruiseMapMode) {
     };
   }
   return {
-    subtitle: "Latest AIS vessel positions from monitored cruise regions.",
+    subtitle: "Latest observed positions from verified cruise ships.",
     legendTitle: "Live cruise vessel activity"
   };
 }

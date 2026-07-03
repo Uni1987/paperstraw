@@ -67,11 +67,11 @@ export default async function CruisesPage() {
       icon: "FL"
     },
     {
-      label: "Active AIS regions",
-      value: hasVerifiedVessels ? data.kpis.activeRegionCount.toLocaleString("en-US") : "Awaiting verified vessels",
-      detail: hasVerifiedVessels ? `${data.kpis.activeRegionCount.toLocaleString("en-US")} monitored cruise regions` : "AIS candidates remain separate from public coverage",
+      label: "Global AIS feed",
+      value: "Worldwide",
+      detail: "Verified vessel filtering",
       accent: "green" as const,
-      icon: "RG"
+      icon: "GL"
     }
   ];
 
@@ -86,10 +86,6 @@ export default async function CruisesPage() {
         </h1>
         <p className="mt-2 text-base text-white/64 md:mt-4 md:text-xl">
           Live AIS movement data, translated into estimated emissions.
-        </p>
-        <p className="mt-4 max-w-3xl text-sm leading-6 text-white/48">
-          AISStream provides vessel movement data. EMSA THETIS-MRV annual disclosures provide an emissions baseline where
-          available. Daily values are estimates, not official real-time emissions.
         </p>
         {!hasVerifiedVessels ? (
           <section className="mt-6 max-w-4xl rounded-2xl border border-paper/20 bg-paper/10 p-5">
@@ -122,9 +118,6 @@ export default async function CruisesPage() {
           <LazyCruiseVesselMap
             points={data.mapPoints}
             mapMode={data.mapMode}
-            latestPositionLabel={data.sourceStatus.latestPositionRelative}
-            freshnessWindowHours={data.sourceStatus.freshnessWindowHours}
-            monitoredRegionCount={data.sourceStatus.activeRegionCount}
             emptyStateTitle="Verified cruise coverage is being prepared"
             emptyStateDescription="Live AIS candidate data is collected separately and is not shown publicly until a vessel is verified as an ocean-going leisure cruise ship."
           />
@@ -175,7 +168,7 @@ function CruiseDataStatusWidget({ status }: { status: CruiseDataStatus }) {
         <SidebarStatusRow label="Public coverage" value={status.publicCoverage} />
         <SidebarStatusRow label="Last verified AIS position" value={status.latestPositionRelative} detail={status.latestPositionExact ?? undefined} />
         <SidebarStatusRow label="Currently tracked" value={`${status.currentlyTracked.toLocaleString("en-US")} verified ships`} />
-        <SidebarStatusRow label="Coverage" value={`${status.activeRegionCount.toLocaleString("en-US")} monitored regions`} />
+        <SidebarStatusRow label="Feed" value="Worldwide AIS observations" />
         <SidebarStatusRow label="Status" value={status.status} />
       </div>
     </div>

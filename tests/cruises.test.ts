@@ -96,6 +96,29 @@ import {
   validateGlobalFeedCoverageAuditOptions,
   type CoverageRegistryState
 } from "@/lib/cruises/globalFeedCoverageAudit";
+import {
+  buildGlobalLocalFilterSubscriptionPayload,
+  classifyGlobalLocalFilterStaticData,
+  createGlobalLocalFilterState,
+  createGlobalLocalFilterWriter,
+  formatGlobalLocalFilterReport,
+  getGlobalLocalFilterHealthStatus,
+  getGlobalLocalFilterSubscriptionSummary,
+  handleGlobalLocalFilterMessage,
+  toGlobalLocalFilterReport,
+  validateGlobalLocalFilterOptions,
+  type GlobalLocalFilterPosition,
+  type GlobalLocalFilterWriter,
+  type StaticQueueItem,
+  type VerifiedCruiseLookup
+} from "@/lib/cruises/globalLocalFilterIngest";
+import {
+  assertCanWriteStatusOutput,
+  formatGlobalLocalFilterStatusReport,
+  outputContainsSensitiveCruiseIdentity,
+  parseGlobalLocalFilterStatusArgs,
+  type GlobalLocalFilterStatusReport
+} from "@/lib/cruises/globalLocalFilterStatus";
 
 afterEach(() => {
   delete process.env.AISSTREAM_BOUNDING_BOXES;
@@ -1149,7 +1172,7 @@ describe("cruise dashboard query helpers", () => {
     const copy = getCruiseMapCopy("activity");
 
     expect(copy.legendTitle).toBe("Live cruise vessel activity");
-    expect(copy.subtitle).toContain("Latest AIS vessel positions");
+    expect(copy.subtitle).toBe("Latest observed positions from verified cruise ships.");
     expect(`${copy.legendTitle} ${copy.subtitle}`).not.toMatch(/emissions intensity|mixed|CO2 weighting/i);
   });
 
@@ -1651,6 +1674,141 @@ describe("global AISStream coverage audit", () => {
   });
 });
 
+describe("global-local-filter cruise ingest", () => {
+  it("builds exactly one global subscription without MMSI filters", () => {
+    const payload = buildGlobalLocalFilterSubscriptionPayload("secret-key");
+    const summary = getGlobalLocalFilterSubscriptionSummary(payload, 1);
+
+    expect(payload.BoundingBoxes).toEqual([VERIFIED_GLOBAL_BOUNDING_BOX]);
+    expect(payload.FilterMessageTypes).toEqual(["PositionReport", "ShipStaticData"]);
+    expect(payload).not.toHaveProperty("FiltersShipMMSI");
+    expect(summary).toMatchObject({
+      mode: "global-local-filter",
+      globalConnections: 1,
+      usesExactGlobalBoundingBox: true,
+      hasMmsiFilter: false,
+      coordinateOrder: "[latitude, longitude]"
+    });
+    expect(JSON.stringify(summary)).not.toContain("secret-key");
+  });
+
+  it("requires allow-long-run for bounded runs over 30 minutes", () => {
+    expect(() =>
+      validateGlobalLocalFilterOptions({
+        maxRuntimeMs: 31 * 60 * 1000,
+        reportIntervalMs: 30000,
+        positionRetentionDays: 90,
+        reviewQueueLimit: 10000
+      })
+    ).toThrow(/allow-long-run/);
+    expect(() =>
+      validateGlobalLocalFilterOptions({
+        maxRuntimeMs: 31 * 60 * 1000,
+        reportIntervalMs: 30000,
+        positionRetentionDays: 90,
+        reviewQueueLimit: 10000,
+        allowLongRun: true
+      })
+    ).not.toThrow();
+  });
+
+  it("stores only known verified MMSI PositionReports and discards unknown MMSIs", async () => {
+    const state = createGlobalLocalFilterState();
+    const writer = fakeGlobalLocalFilterWriter();
+    await handleGlobalLocalFilterMessage(positionAuditMessage("244123456"), globalLocalFilterLookup(), writer, state);
+    await handleGlobalLocalFilterMessage(positionAuditMessage("111222333"), globalLocalFilterLookup(), writer, state);
+
+    expect(state.verifiedPositionMatches).toBe(1);
+    expect(writer.positions).toHaveLength(1);
+    expect(state.discardedNonVerifiedPositions).toBe(1);
+    expect(state.databaseWritesAttempted).toBe(0);
+    expect(state.databaseWritesCompleted).toBe(0);
+  });
+
+  it("rejects invalid verified positions before storage", async () => {
+    const state = createGlobalLocalFilterState();
+    const writer = fakeGlobalLocalFilterWriter();
+    await handleGlobalLocalFilterMessage(positionAuditMessage("244123456", { latitude: 0, longitude: 0 }), globalLocalFilterLookup(), writer, state);
+    await handleGlobalLocalFilterMessage(positionAuditMessage("244123456", { speedOverGround: 99 }), globalLocalFilterLookup(), writer, state);
+
+    expect(state.rejectedInvalidPositions).toBe(2);
+    expect(writer.positions).toHaveLength(0);
+  });
+
+  it("dry-run writer counts would-store and skips duplicate positions without writes", async () => {
+    const state = createGlobalLocalFilterState();
+    const writer = createGlobalLocalFilterWriter({ dryRun: true, noEmissions: false, reviewQueueLimit: 10000 }, state);
+    await handleGlobalLocalFilterMessage(positionAuditMessage("244123456"), globalLocalFilterLookup(), writer, state);
+    await handleGlobalLocalFilterMessage(positionAuditMessage("244123456"), globalLocalFilterLookup(), writer, state);
+    await writer.flush();
+
+    expect(state.wouldStorePositions).toBe(1);
+    expect(state.duplicatePositionsSkipped).toBe(1);
+    expect(state.wouldUpdateEmissionDays).toBe(1);
+    expect(state.databaseWritesAttempted).toBe(0);
+    expect(state.databaseWritesCompleted).toBe(0);
+  });
+
+  it("no-emissions disables dry-run emission day updates", async () => {
+    const state = createGlobalLocalFilterState();
+    const writer = createGlobalLocalFilterWriter({ dryRun: true, noEmissions: true, reviewQueueLimit: 10000 }, state);
+    await handleGlobalLocalFilterMessage(positionAuditMessage("244123456"), globalLocalFilterLookup(), writer, state);
+
+    expect(state.wouldStorePositions).toBe(1);
+    expect(state.wouldUpdateEmissionDays).toBe(0);
+  });
+
+  it("classifies static data without auto-linking or reconciliation", async () => {
+    const state = createGlobalLocalFilterState();
+    const writer = fakeGlobalLocalFilterWriter();
+    await handleGlobalLocalFilterMessage(staticAuditMessage({ mmsi: "244123456", imo: "9837420", name: "Do Not Leak" }), globalLocalFilterLookup(), writer, state);
+    await handleGlobalLocalFilterMessage(staticAuditMessage({ mmsi: "244123777", imo: "9137363" }), globalLocalFilterLookup(), writer, state);
+    await handleGlobalLocalFilterMessage(staticAuditMessage({ mmsi: "244123999", imo: "9837420" }), globalLocalFilterLookup(), writer, state);
+    await handleGlobalLocalFilterMessage(staticAuditMessage({ mmsi: "244123888", imo: "1234560" }), globalLocalFilterLookup(), writer, state);
+
+    expect(classifyGlobalLocalFilterStaticData("244123456", "244123456")).toBe("ALREADY_LINKED_CONFIRMATION");
+    expect(classifyGlobalLocalFilterStaticData(null, "244123777")).toBe("NEW_MMSI_CANDIDATE_FOR_EXISTING_REGISTRY_ENTRY");
+    expect(classifyGlobalLocalFilterStaticData("244123456", "244123999")).toBe("MMSI_CONFLICT_REVIEW_REQUIRED");
+    expect(state.alreadyLinkedConfirmations).toBe(1);
+    expect(writer.queueItems.map((item) => item.classification)).toEqual(["NEW_MMSI_CANDIDATE_FOR_EXISTING_REGISTRY_ENTRY", "MMSI_CONFLICT_REVIEW_REQUIRED"]);
+    expect(state.staticExactRegistryMatches).toBe(3);
+    expect(state.databaseWritesAttempted).toBe(0);
+  });
+
+  it("dry-run queues candidates and conflicts as would-write metrics only", async () => {
+    const state = createGlobalLocalFilterState();
+    const writer = createGlobalLocalFilterWriter({ dryRun: true, noEmissions: false, reviewQueueLimit: 10000 }, state);
+    await handleGlobalLocalFilterMessage(staticAuditMessage({ mmsi: "244123777", imo: "9137363" }), globalLocalFilterLookup(), writer, state);
+    await handleGlobalLocalFilterMessage(staticAuditMessage({ mmsi: "244123999", imo: "9837420" }), globalLocalFilterLookup(), writer, state);
+    await handleGlobalLocalFilterMessage(staticAuditMessage({ mmsi: "244123999", imo: "9837420" }), globalLocalFilterLookup(), writer, state);
+
+    expect(state.wouldQueueNewMmsiCandidates).toBe(1);
+    expect(state.wouldQueueConflicts).toBe(1);
+    expect(state.databaseWritesAttempted).toBe(0);
+    expect(state.databaseWritesCompleted).toBe(0);
+  });
+
+  it("redacts identifiers from formatted reports", async () => {
+    const state = createGlobalLocalFilterState();
+    const writer = createGlobalLocalFilterWriter({ dryRun: true, noEmissions: false, reviewQueueLimit: 10000 }, state);
+    await handleGlobalLocalFilterMessage(staticAuditMessage({ mmsi: "244123777", imo: "9137363", name: "Secret Vessel" }), globalLocalFilterLookup(), writer, state);
+    const output = formatGlobalLocalFilterReport(toGlobalLocalFilterReport(state));
+
+    expect(output).not.toContain("244123777");
+    expect(output).not.toContain("9137363");
+    expect(output).not.toContain("Secret Vessel");
+    expect(output).toContain("Database writes attempted/completed: 0/0");
+  });
+
+  it("reports conservative runtime health statuses", () => {
+    expect(getGlobalLocalFilterHealthStatus({ connected: true, reconnectCount: 0, backlogObserved: false, databaseWriteFailures: 0, queueWriteFailures: 0, lastError: null, consecutiveFastFailures: 0 })).toBe("HEALTHY");
+    expect(getGlobalLocalFilterHealthStatus({ connected: true, reconnectCount: 0, backlogObserved: true, databaseWriteFailures: 0, queueWriteFailures: 0, lastError: null, consecutiveFastFailures: 0 })).toBe("BACKPRESSURE_RISK");
+    expect(getGlobalLocalFilterHealthStatus({ connected: true, reconnectCount: 0, backlogObserved: false, databaseWriteFailures: 3, queueWriteFailures: 0, lastError: null, consecutiveFastFailures: 0 })).toBe("DATABASE_WRITE_FAILURE");
+    expect(getGlobalLocalFilterHealthStatus({ connected: true, reconnectCount: 0, backlogObserved: false, databaseWriteFailures: 0, queueWriteFailures: 3, lastError: null, consecutiveFastFailures: 0 })).toBe("REVIEW_QUEUE_FAILURE");
+    expect(getGlobalLocalFilterHealthStatus({ connected: false, reconnectCount: 1, backlogObserved: false, databaseWriteFailures: 0, queueWriteFailures: 0, lastError: null, consecutiveFastFailures: 1 })).toBe("AISSTREAM_UNAVAILABLE");
+  });
+});
+
 describe("AIS cruise ship identity resolution", () => {
   it("updates the IMO record when the same IMO arrives with a new safe MMSI", async () => {
     const repo = new FakeCruiseShipRepository([{ id: "ship-1", imo: "1234567", mmsi: null, shipType: "Passenger ship" }]);
@@ -1726,6 +1884,98 @@ describe("EMSA THETIS-MRV parser", () => {
       reportingYear: 2025,
       annualCo2Tonnes: 120000
     });
+  });
+});
+
+describe("global-local-filter status reporting", () => {
+  it("parses defaults and optional arguments", () => {
+    expect(parseGlobalLocalFilterStatusArgs([])).toMatchObject({
+      sinceHours: 24,
+      format: "terminal",
+      force: false,
+      includeReviewDetails: false,
+      includeVesselDetails: false
+    });
+
+    expect(
+      parseGlobalLocalFilterStatusArgs([
+        "--",
+        "--since-hours",
+        "12",
+        "--format",
+        "markdown",
+        "--output",
+        "reports/cruises/status.md",
+        "--force",
+        "--include-review-details",
+        "--include-vessel-details"
+      ])
+    ).toMatchObject({
+      sinceHours: 12,
+      format: "markdown",
+      output: "reports/cruises/status.md",
+      force: true,
+      includeReviewDetails: true,
+      includeVesselDetails: true
+    });
+  });
+
+  it("requires force when overwriting status output", () => {
+    expect(() => assertCanWriteStatusOutput("reports/cruises/status.md", false, () => true)).toThrow(/--force/);
+    expect(() => assertCanWriteStatusOutput("reports/cruises/status.md", true, () => true)).not.toThrow();
+  });
+
+  it("formats terminal, markdown and JSON output without sensitive identity fields by default", () => {
+    const report = globalLocalFilterStatusReport();
+
+    for (const format of ["terminal", "markdown", "json"] as const) {
+      const output = formatGlobalLocalFilterStatusReport(report, format);
+      expect(output).toContain(format === "json" ? "generatedAt" : format === "markdown" ? "Cruise Global-Local-Filter Status" : "global-local-filter");
+      expect(outputContainsSensitiveCruiseIdentity(output)).toBe(false);
+      expect(output).not.toContain("244123456");
+      expect(output).not.toContain("9837420");
+      expect(output).not.toContain("Example Cruise");
+      expect(output).not.toContain("rawPayload");
+    }
+  });
+
+  it("keeps detail flags anonymized", () => {
+    const output = formatGlobalLocalFilterStatusReport(
+      globalLocalFilterStatusReport({
+        reviewQueue: {
+          details: [
+            {
+              id: "queue-1",
+              classification: "NEW_MMSI_CANDIDATE_FOR_EXISTING_REGISTRY_ENTRY",
+              reviewStatus: "PENDING",
+              firstSeenAt: "2026-07-03T10:00:00.000Z",
+              lastSeenAt: "2026-07-03T10:05:00.000Z",
+              occurrenceCount: 2
+            }
+          ]
+        },
+        vesselDetails: [{ label: "Verified vessel #1", positionCount: 3, latestObservedAt: "2026-07-03T10:05:00.000Z" }]
+      }),
+      "terminal"
+    );
+
+    expect(output).toContain("Verified vessel #1");
+    expect(output).toContain("queue-1");
+    expect(outputContainsSensitiveCruiseIdentity(output)).toBe(false);
+    expect(output).not.toContain("244123456");
+    expect(output).not.toContain("9837420");
+  });
+
+  it("surfaces pending review candidates and conflicts in safety checks", () => {
+    const report = globalLocalFilterStatusReport({
+      reviewQueue: { pendingRecords: 1, mmsiConflictCount: 1 }
+    });
+
+    expect(report.safetyChecks.pendingReviewCandidateExists).toBe(true);
+    expect(report.safetyChecks.conflictExists).toBe(true);
+    expect(report.safetyChecks.databaseWritesAttempted).toBe(0);
+    expect(report.safetyChecks.autoLinkingPerformed).toBe(false);
+    expect(report.safetyChecks.reconcileOrImportApplied).toBe(false);
   });
 });
 
@@ -1865,12 +2115,15 @@ function coverageRegistryState(): CoverageRegistryState {
   };
 }
 
-function positionAuditMessage(mmsi: string) {
+function positionAuditMessage(mmsi: string, overrides: Partial<{ latitude: number; longitude: number; speedOverGround: number; timestamp: string }> = {}) {
+  const latitude = overrides.latitude ?? 52.1;
+  const longitude = overrides.longitude ?? 4.3;
+  const speedOverGround = overrides.speedOverGround ?? 12;
   return {
     data: JSON.stringify({
       MessageType: "PositionReport",
-      MetaData: { MMSI: mmsi },
-      Message: { PositionReport: { UserID: mmsi } }
+      MetaData: { MMSI: mmsi, latitude, longitude, time_utc: overrides.timestamp ?? "2026-07-03T12:00:00Z" },
+      Message: { PositionReport: { UserID: mmsi, Latitude: latitude, Longitude: longitude, Sog: speedOverGround } }
     })
   };
 }
@@ -1889,6 +2142,94 @@ function staticAuditMessage(input: { mmsi: string; imo: string; name?: string })
         }
       }
     })
+  };
+}
+
+function globalLocalFilterStatusReport(overrides: Partial<Omit<GlobalLocalFilterStatusReport, "reviewQueue">> & {
+  reviewQueue?: Partial<GlobalLocalFilterStatusReport["reviewQueue"]>;
+  vesselDetails?: GlobalLocalFilterStatusReport["vesselDetails"];
+} = {}): GlobalLocalFilterStatusReport {
+  const reviewQueue = {
+    totalRecords: 0,
+    pendingRecords: 0,
+    reviewedRecords: 0,
+    dismissedRecords: 0,
+    alreadyLinkedConfirmationCount: 0,
+    newMmsiCandidateCount: 0,
+    mmsiConflictCount: 0,
+    recordsCreatedInWindow: 0,
+    recordsUpdatedInWindow: 0,
+    oldestPendingAt: null,
+    newestPendingAt: null,
+    ...overrides.reviewQueue
+  };
+  return {
+    generatedAt: "2026-07-03T12:00:00.000Z",
+    sinceHours: 24,
+    windowStart: "2026-07-02T12:00:00.000Z",
+    windowEnd: "2026-07-03T12:00:00.000Z",
+    grouping: "hour",
+    registry: {
+      acceptedRegistryEntries: 220,
+      verifiedPublicEligibleVessels: 109,
+      verifiedVesselsWithLinkedMmsi: 109,
+      verifiedVesselsWithStoredPositionsInWindow: 3,
+      verifiedVesselsWithDailyEstimatesInWindow: 2
+    },
+    positions: {
+      totalStoredCruisePositions: 12,
+      distinctVerifiedVesselsWithStoredPositions: 3,
+      earliestStoredPositionAt: "2026-07-03T10:00:00.000Z",
+      latestStoredPositionAt: "2026-07-03T11:00:00.000Z",
+      invalidOrMissingCoordinatePositions: 0,
+      grouped: [{ label: "2026-07-03T10:00:00.000Z", count: 12 }]
+    },
+    reviewQueue,
+    emissions: {
+      dailyEstimateRowsInWindow: 2,
+      distinctVerifiedVesselsWithEstimates: 2,
+      earliestEstimateDate: "2026-07-03T00:00:00.000Z",
+      latestEstimateDate: "2026-07-03T00:00:00.000Z"
+    },
+    safetyChecks: {
+      readOnlyCommand: true,
+      databaseWritesAttempted: 0,
+      autoLinkingPerformed: false,
+      reconcileOrImportApplied: false,
+      pendingReviewCandidateExists: (reviewQueue.pendingRecords ?? 0) > 0,
+      conflictExists: (reviewQueue.mmsiConflictCount ?? 0) > 0,
+      identityFieldsHiddenByDefault: true
+    },
+    ...(overrides.vesselDetails ? { vesselDetails: overrides.vesselDetails } : {})
+  };
+}
+
+function globalLocalFilterLookup(): VerifiedCruiseLookup {
+  return {
+    mmsiToShip: new Map([["244123456", { shipId: "ship-verified" }]]),
+    acceptedRegistryByImo: new Map([
+      ["9837420", { registryEntryId: "registry-linked", linkedMmsi: "244123456" }],
+      ["9137363", { registryEntryId: "registry-unlinked", linkedMmsi: null }]
+    ])
+  };
+}
+
+function fakeGlobalLocalFilterWriter(): GlobalLocalFilterWriter & { positions: GlobalLocalFilterPosition[]; queueItems: StaticQueueItem[] } {
+  const positions: GlobalLocalFilterPosition[] = [];
+  const queueItems: StaticQueueItem[] = [];
+  return {
+    positions,
+    queueItems,
+    async enqueuePosition(position: GlobalLocalFilterPosition) {
+      positions.push(position);
+    },
+    async enqueueStaticQueueItem(item: StaticQueueItem) {
+      queueItems.push(item);
+    },
+    async flush() {},
+    pendingCount() {
+      return positions.length;
+    }
   };
 }
 
