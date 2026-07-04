@@ -115,8 +115,10 @@ import {
 import {
   assertCanWriteStatusOutput,
   formatGlobalLocalFilterStatusReport,
+  getUtcDayRangeForStatusWindow,
   outputContainsSensitiveCruiseIdentity,
   parseGlobalLocalFilterStatusArgs,
+  summarizeEmissionStatusRows,
   type GlobalLocalFilterStatusReport
 } from "@/lib/cruises/globalLocalFilterStatus";
 
@@ -1744,7 +1746,7 @@ describe("global-local-filter cruise ingest", () => {
 
     expect(state.wouldStorePositions).toBe(1);
     expect(state.duplicatePositionsSkipped).toBe(1);
-    expect(state.wouldUpdateEmissionDays).toBe(1);
+    expect(state.wouldAffectEmissionDays).toBe(1);
     expect(state.databaseWritesAttempted).toBe(0);
     expect(state.databaseWritesCompleted).toBe(0);
   });
@@ -1755,7 +1757,7 @@ describe("global-local-filter cruise ingest", () => {
     await handleGlobalLocalFilterMessage(positionAuditMessage("244123456"), globalLocalFilterLookup(), writer, state);
 
     expect(state.wouldStorePositions).toBe(1);
-    expect(state.wouldUpdateEmissionDays).toBe(0);
+    expect(state.wouldAffectEmissionDays).toBe(0);
   });
 
   it("classifies static data without auto-linking or reconciliation", async () => {
@@ -1798,6 +1800,8 @@ describe("global-local-filter cruise ingest", () => {
     expect(output).not.toContain("9137363");
     expect(output).not.toContain("Secret Vessel");
     expect(output).toContain("Database writes attempted/completed: 0/0");
+    expect(output).toContain("Emission days affected/would affect: 0/0");
+    expect(output).not.toContain("Emission days updated");
   });
 
   it("reports conservative runtime health statuses", () => {
@@ -1976,6 +1980,52 @@ describe("global-local-filter status reporting", () => {
     expect(report.safetyChecks.databaseWritesAttempted).toBe(0);
     expect(report.safetyChecks.autoLinkingPerformed).toBe(false);
     expect(report.safetyChecks.reconcileOrImportApplied).toBe(false);
+  });
+
+  it("uses UTC calendar days consistently for status windows", () => {
+    const range = getUtcDayRangeForStatusWindow(new Date("2026-07-02T23:30:00Z"), new Date("2026-07-03T01:30:00Z"));
+
+    expect(range.start.toISOString()).toBe("2026-07-02T00:00:00.000Z");
+    expect(range.endExclusive.toISOString()).toBe("2026-07-04T00:00:00.000Z");
+  });
+
+  it("distinguishes old estimate dates updated now from exact estimate-date window coverage", () => {
+    const summary = summarizeEmissionStatusRows(
+      [
+        {
+          shipId: "ship-1",
+          estimateDate: new Date("2026-07-03T00:00:00Z"),
+          createdAt: new Date("2026-07-03T00:05:00Z"),
+          updatedAt: new Date("2026-07-03T11:15:00Z")
+        }
+      ],
+      new Date("2026-07-03T10:00:00Z"),
+      new Date("2026-07-03T12:00:00Z")
+    );
+
+    expect(summary.estimateDateRows).toBe(0);
+    expect(summary.utcCalendarRows).toBe(1);
+    expect(summary.writeRows).toBe(1);
+    expect(summary.writeVessels).toBe(1);
+  });
+
+  it("distinguishes current estimate dates from write activity when created earlier", () => {
+    const summary = summarizeEmissionStatusRows(
+      [
+        {
+          shipId: "ship-1",
+          estimateDate: new Date("2026-07-03T00:00:00Z"),
+          createdAt: new Date("2026-07-03T00:05:00Z"),
+          updatedAt: new Date("2026-07-03T00:05:00Z")
+        }
+      ],
+      new Date("2026-07-03T10:00:00Z"),
+      new Date("2026-07-03T12:00:00Z")
+    );
+
+    expect(summary.estimateDateRows).toBe(0);
+    expect(summary.utcCalendarRows).toBe(1);
+    expect(summary.writeRows).toBe(0);
   });
 });
 
@@ -2174,7 +2224,7 @@ function globalLocalFilterStatusReport(overrides: Partial<Omit<GlobalLocalFilter
       verifiedPublicEligibleVessels: 109,
       verifiedVesselsWithLinkedMmsi: 109,
       verifiedVesselsWithStoredPositionsInWindow: 3,
-      verifiedVesselsWithDailyEstimatesInWindow: 2
+      verifiedVesselsWithDailyEstimatesForWindowUtcDays: 2
     },
     positions: {
       totalStoredCruisePositions: 12,
@@ -2186,10 +2236,28 @@ function globalLocalFilterStatusReport(overrides: Partial<Omit<GlobalLocalFilter
     },
     reviewQueue,
     emissions: {
-      dailyEstimateRowsInWindow: 2,
-      distinctVerifiedVesselsWithEstimates: 2,
-      earliestEstimateDate: "2026-07-03T00:00:00.000Z",
-      latestEstimateDate: "2026-07-03T00:00:00.000Z"
+      estimateDateWindow: {
+        dailyEstimateRows: 0,
+        distinctVerifiedVessels: 0,
+        earliestEstimateDate: null,
+        latestEstimateDate: null
+      },
+      utcCalendarDaysCoveredByWindow: {
+        start: "2026-07-03T00:00:00.000Z",
+        endExclusive: "2026-07-04T00:00:00.000Z",
+        dailyEstimateRows: 2,
+        distinctVerifiedVessels: 2,
+        earliestEstimateDate: "2026-07-03T00:00:00.000Z",
+        latestEstimateDate: "2026-07-03T00:00:00.000Z"
+      },
+      writeActivity: {
+        available: false,
+        reason: "cruise_emissions_daily_estimates has no created_at/updated_at audit columns",
+        rowsCreatedOrUpdatedInWindow: null,
+        distinctVerifiedVesselsCreatedOrUpdatedInWindow: null,
+        earliestWriteActivityAt: null,
+        latestWriteActivityAt: null
+      }
     },
     safetyChecks: {
       readOnlyCommand: true,

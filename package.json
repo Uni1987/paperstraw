@@ -32,7 +32,10 @@
     "cruises:export-review-queue": "tsx scripts/export-cruise-review-queue.ts",
     "cruises:viability-audit": "tsx scripts/cruise-viability-audit.ts",
     "cruises:benchmark-global-feed": "tsx scripts/cruise-benchmark-global-feed.ts",
-    "cruises:coverage-audit-global-feed": "tsx scripts/cruise-coverage-audit-global-feed.ts"
+    "cruises:coverage-audit-global-feed": "tsx scripts/cruise-coverage-audit-global-feed.ts",
+    "cruises:ingest-global-local-filter": "tsx scripts/cruise-ingest-global-local-filter.ts",
+    "cruises:global-local-filter:status": "tsx scripts/cruise-global-local-filter-status.ts",
+    "cruises:cleanup-global-local-filter-data": "tsx scripts/cruise-cleanup-global-local-filter-data.ts"
   },
   "dependencies": {
     "@prisma/client": "^5.22.0",

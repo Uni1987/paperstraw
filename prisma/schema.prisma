@@ -257,6 +257,7 @@ model CruiseVesselRegistryEntry {
   createdAt        DateTime                  @default(now()) @map("created_at")
   updatedAt        DateTime                  @updatedAt @map("updated_at")
   verifications    CruiseVesselVerification[]
+  staticReviewQueue CruiseStaticDataReviewQueue[]
 
   @@index([registryDecision])
   @@index([vesselSegment])
@@ -280,4 +281,40 @@ model CruiseVesselVerification {
   @@index([verificationStatus])
   @@index([registryEntryId])
   @@map("cruise_vessel_verifications")
+}
+
+enum CruiseStaticReviewClassification {
+  ALREADY_LINKED_CONFIRMATION
+  NEW_MMSI_CANDIDATE_FOR_EXISTING_REGISTRY_ENTRY
+  MMSI_CONFLICT_REVIEW_REQUIRED
+}
+
+enum CruiseStaticReviewStatus {
+  PENDING
+  REVIEWED
+  DISMISSED
+}
+
+model CruiseStaticDataReviewQueue {
+  id                String                            @id @default(cuid())
+  registryEntryId   String                            @map("registry_entry_id")
+  observedMmsi      String                            @map("observed_mmsi")
+  observedAt        DateTime                          @map("observed_at")
+  classification    CruiseStaticReviewClassification
+  source            String                            @default("GLOBAL_LOCAL_FILTER")
+  firstSeenAt       DateTime                          @default(now()) @map("first_seen_at")
+  lastSeenAt        DateTime                          @default(now()) @map("last_seen_at")
+  occurrenceCount   Int                               @default(1) @map("occurrence_count")
+  reviewStatus      CruiseStaticReviewStatus          @default(PENDING) @map("review_status")
+  resolvedAt        DateTime?                         @map("resolved_at")
+  resolutionNotes   String?                           @map("resolution_notes")
+  createdAt         DateTime                          @default(now()) @map("created_at")
+  updatedAt         DateTime                          @updatedAt @map("updated_at")
+  registryEntry     CruiseVesselRegistryEntry         @relation(fields: [registryEntryId], references: [id], onDelete: Cascade)
+
+  @@unique([registryEntryId, observedMmsi, classification])
+  @@index([classification])
+  @@index([reviewStatus])
+  @@index([lastSeenAt])
+  @@map("cruise_static_data_review_queue")
 }

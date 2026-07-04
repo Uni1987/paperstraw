@@ -25,6 +25,11 @@ export type CruiseDailyEstimate = {
   confidenceScore: number;
 };
 
+export type CruiseDailyEmissionPersistenceResult = {
+  action: "inserted" | "updated";
+  estimate: Awaited<ReturnType<typeof prisma.cruiseEmissionsDailyEstimate.upsert>>;
+};
+
 const CO2_TONNES_PER_FUEL_TONNE = 3.114;
 const FALLBACK_FUEL_TONNES_PER_HOUR_BASE = 8;
 
@@ -76,12 +81,17 @@ export function estimateCruiseDailyEmissions(input: CruiseDailyEstimateInput): C
   });
 }
 
-export async function estimateAndStoreCruiseDailyEmissions(shipId: string, date = new Date()) {
+export async function estimateAndStoreCruiseDailyEmissions(shipId: string, date = new Date()): Promise<CruiseDailyEmissionPersistenceResult> {
   const dayStart = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
   const dayEnd = new Date(dayStart);
   dayEnd.setUTCDate(dayEnd.getUTCDate() + 1);
+  const uniqueKey = {
+    shipId,
+    date: dayStart,
+    methodVersion: CRUISE_ESTIMATION_METHOD_VERSION
+  };
 
-  const [ship, latestAnnual, positions] = await Promise.all([
+  const [ship, latestAnnual, positions, existing] = await Promise.all([
     prisma.cruiseShip.findUnique({
       where: { id: shipId },
       select: { grossTonnage: true }
@@ -95,6 +105,10 @@ export async function estimateAndStoreCruiseDailyEmissions(shipId: string, date 
       where: { shipId, timestamp: { gte: dayStart, lt: dayEnd } },
       orderBy: { timestamp: "asc" },
       select: { latitude: true, longitude: true, timestamp: true, speedOverGround: true }
+    }),
+    prisma.cruiseEmissionsDailyEstimate.findUnique({
+      where: { shipId_date_methodVersion: uniqueKey },
+      select: { id: true }
     })
   ]);
 
@@ -110,13 +124,9 @@ export async function estimateAndStoreCruiseDailyEmissions(shipId: string, date 
     }))
   });
 
-  return prisma.cruiseEmissionsDailyEstimate.upsert({
+  const persisted = await prisma.cruiseEmissionsDailyEstimate.upsert({
     where: {
-      shipId_date_methodVersion: {
-        shipId,
-        date: dayStart,
-        methodVersion: CRUISE_ESTIMATION_METHOD_VERSION
-      }
+      shipId_date_methodVersion: uniqueKey
     },
     create: {
       shipId,
@@ -140,6 +150,11 @@ export async function estimateAndStoreCruiseDailyEmissions(shipId: string, date 
       confidenceScore: estimate.confidenceScore
     }
   });
+
+  return {
+    action: existing ? "updated" : "inserted",
+    estimate: persisted
+  };
 }
 
 function calculateObservedDistanceNm(points: CruisePositionPoint[]) {
