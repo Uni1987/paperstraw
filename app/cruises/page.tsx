@@ -16,8 +16,7 @@ export default async function CruisesPage() {
     return (
       <PublicShell>
         <section className="mx-auto max-w-7xl pb-20 pt-10 sm:pt-16">
-          <p className="text-sm font-semibold uppercase tracking-[0.18em] text-paper">Cruise emissions</p>
-          <h1 className="mt-4 max-w-4xl text-4xl font-semibold leading-tight tracking-normal text-white md:text-6xl">
+          <h1 className="max-w-4xl text-4xl font-semibold leading-tight tracking-normal text-white md:text-6xl">
             Cruise ships. Global impact.
           </h1>
           <p className="mt-5 max-w-3xl text-base leading-7 text-white/64 md:text-xl">
@@ -92,7 +91,6 @@ export default async function CruisesPage() {
   return (
     <PublicShell sidebarFooter={<CruiseDataStatusWidget status={data.sourceStatus} />}>
       <header>
-        <p className="mb-3 text-xs font-semibold uppercase tracking-[0.18em] text-paper md:text-sm">Cruise emissions</p>
         <h1 className="max-w-4xl text-3xl font-semibold leading-tight tracking-normal text-white md:text-6xl">
           Cruise ships. Global impact.
         </h1>
@@ -126,10 +124,6 @@ export default async function CruisesPage() {
       </section>
 
       <section className="mt-4 md:mt-6">
-        <CruiseCoveragePanel status={data.sourceStatus} />
-      </section>
-
-      <section className="mt-4">
         <Suspense fallback={<DashboardMapSkeleton />}>
           <LazyCruiseVesselMap
             points={data.mapPoints}
@@ -184,42 +178,6 @@ export default async function CruisesPage() {
         </DashboardCard>
       </section>
     </PublicShell>
-  );
-}
-
-function CruiseCoveragePanel({ status }: { status: CruiseDataStatus }) {
-  return (
-    <DashboardCard title="Cruise coverage and freshness">
-      <div className="grid gap-4 p-5 text-sm leading-6 text-white/60 md:grid-cols-2 xl:grid-cols-4">
-        <CoverageItem
-          label="Verified ships observed in the last 24 hours"
-          value={status.verifiedShipsObservedLast24h > 0 ? `${status.verifiedShipsObservedLast24h.toLocaleString("en-US")} ships` : "No recent observations"}
-          detail="Based on valid stored positions from verified cruise ships."
-        />
-        <CoverageItem
-          label="Verified ships with stored observations"
-          value={`${status.verifiedShipsWithStoredObservations.toLocaleString("en-US")} ships`}
-          detail="Candidate AIS vessels are not shown publicly."
-        />
-        <CoverageItem label="Observation source" value="Worldwide AIS observations" detail="Positions are collected from worldwide AIS observations." />
-        <CoverageItem label="Coverage note" value="Varies by vessel" detail="Coverage varies by vessel and AIS availability." />
-      </div>
-      <div className="border-t border-white/10 px-5 py-4">
-        <Link href="/methodology" className="text-sm font-semibold text-paper hover:text-white">
-          Read the methodology
-        </Link>
-      </div>
-    </DashboardCard>
-  );
-}
-
-function CoverageItem({ label, value, detail }: { label: string; value: string; detail: string }) {
-  return (
-    <div>
-      <p className="text-[0.68rem] font-semibold uppercase tracking-[0.14em] text-white/40">{label}</p>
-      <p className="mt-2 text-lg font-semibold text-white">{value}</p>
-      <p className="mt-1 text-xs leading-5 text-white/44">{detail}</p>
-    </div>
   );
 }
 

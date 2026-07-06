@@ -482,7 +482,7 @@ export function getCruiseMapCopy(mode: CruiseMapMode) {
     };
   }
   return {
-    subtitle: "Latest observed positions from verified cruise ships.",
+    subtitle: "Latest observed verified cruise positions.",
     legendTitle: "Live cruise vessel activity"
   };
 }

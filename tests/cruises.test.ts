@@ -1176,7 +1176,7 @@ describe("cruise dashboard query helpers", () => {
     const copy = getCruiseMapCopy("activity");
 
     expect(copy.legendTitle).toBe("Live cruise vessel activity");
-    expect(copy.subtitle).toBe("Latest observed positions from verified cruise ships.");
+    expect(copy.subtitle).toBe("Latest observed verified cruise positions.");
     expect(`${copy.legendTitle} ${copy.subtitle}`).not.toMatch(/emissions intensity|mixed|CO2 weighting/i);
   });
 
@@ -1211,16 +1211,20 @@ describe("cruise dashboard query helpers", () => {
   });
 
   it("keeps public cruise preview copy honest about monitoring-only coverage", () => {
+    const cruisePageSource = readFileSync("app/cruises/page.tsx", "utf8");
     const source = [
-      readFileSync("app/cruises/page.tsx", "utf8"),
+      cruisePageSource,
       readFileSync("app/cruises/[shipId]/page.tsx", "utf8"),
       readFileSync("components/cruises/CruiseVesselMap.tsx", "utf8")
     ].join("\n");
 
     expect(source).toContain("Estimated CO₂ emissions from verified ocean cruise ships observed by PaperStraw since monitoring began");
-    expect(source).toContain("Latest observed positions from verified cruise ships.");
+    expect(source).toContain("Latest observed verified cruise positions.");
     expect(source).toContain("Coverage varies by vessel and AIS availability");
-    expect(source).toContain("Verified ships observed in the last 24 hours");
+    expect(source).toContain("WORLD CRUISE ACTIVITY");
+    expect(source).not.toContain("Cruise coverage and freshness");
+    expect(source).not.toContain("Positions may be delayed and coverage varies by vessel and AIS availability.");
+    expect(cruisePageSource).not.toContain(">Cruise emissions</p>");
     expect(source).not.toMatch(/\bYTD\b|year-to-date|19 monitored|monitored cruise regions|regional discovery|global cruise emissions|all cruises|real-time exact/i);
   });
 });
