@@ -1,11 +1,13 @@
 import Link from "next/link";
 import { Suspense } from "react";
+import { CruiseDashboardCharts } from "@/components/cruises/CruiseDashboardCharts";
 import { LazyCruiseVesselMap } from "@/components/cruises/LazyCruiseVesselMap";
 import { DashboardCard } from "@/components/dashboard/DashboardCard";
 import { DashboardMapSkeleton } from "@/components/dashboard/DashboardSkeletons";
 import { StatCard } from "@/components/dashboard/StatCard";
 import { PublicShell } from "@/components/PublicShell";
-import { getCruiseDashboardData, type CruiseDataStatus, type CruiseRankRow } from "@/lib/cruises/queries";
+import { buildComparisonCards } from "@/lib/comparisons";
+import { getCruiseDashboardData, type CruiseDataStatus } from "@/lib/cruises/queries";
 
 export const dynamic = "force-dynamic";
 
@@ -87,6 +89,9 @@ export default async function CruisesPage() {
   ];
 
   const operatorRows = data.operators.filter((row) => row.operator !== "Unknown operator");
+  const cruiseComparisons = buildComparisonCards(data.kpis.co2SinceMonitoringBeganTonnes).filter((comparison) =>
+    ["driving-distance", "household-electricity", "lifetime-trees"].includes(comparison.id)
+  );
 
   return (
     <PublicShell sidebarFooter={<CruiseDataStatusWidget status={data.sourceStatus} />}>
@@ -127,6 +132,7 @@ export default async function CruisesPage() {
         <Suspense fallback={<DashboardMapSkeleton />}>
           <LazyCruiseVesselMap
             points={data.mapPoints}
+            periods={data.mapPeriods}
             mapMode={data.mapMode}
             emptyStateTitle="Verified cruise coverage is being prepared"
             emptyStateDescription="Live AIS candidate data is collected separately and is not shown publicly until a vessel is verified as an ocean-going leisure cruise ship."
@@ -134,20 +140,14 @@ export default async function CruisesPage() {
         </Suspense>
       </section>
 
-      <section className="mt-5 grid gap-4 md:mt-4 xl:grid-cols-2">
-        <CruiseRankingCard
-          title="Estimated emissions from observed activity today"
-          rows={data.topToday}
-          emptyMessage="Awaiting verified ocean-cruise vessels with fresh observed estimates."
-          note="Only verified ships are included. Observation coverage varies, so rankings are directional."
-        />
-        <CruiseRankingCard
-          title="Estimated emissions from observed activity since monitoring began"
-          rows={data.topSinceMonitoringBegan}
-          emptyMessage="Awaiting verified ocean-cruise vessels with stored estimates."
-          note="Only verified ships are included. Observation coverage varies, so rankings are directional."
-        />
-      </section>
+      <CruiseDashboardCharts
+        dailyEmissions={data.dailyEmissionsSeries}
+        topShips={data.topShipsByEstimatedCo2}
+        operatorBreakdown={data.operatorBreakdown}
+        segmentBreakdown={data.segmentBreakdown}
+        comparisons={cruiseComparisons}
+        totalCo2Tonnes={data.kpis.co2SinceMonitoringBeganTonnes}
+      />
 
       <section className="mt-4 grid gap-4 xl:grid-cols-[1fr_0.85fr]">
         {operatorRows.length ? <OperatorCard rows={operatorRows} /> : null}
@@ -210,47 +210,17 @@ function SidebarStatusRow({ label, value, detail }: { label: string; value: stri
   );
 }
 
-function CruiseRankingCard({ title, rows, emptyMessage, note }: { title: string; rows: CruiseRankRow[]; emptyMessage: string; note: string }) {
-  return (
-    <DashboardCard title={title}>
-      <p className="border-b border-white/10 px-5 py-3 text-xs leading-5 text-white/44">{note}</p>
-      <div className="max-h-[34rem] overflow-auto">
-        {rows.length ? (
-          <div className="divide-y divide-white/10">
-            {rows.map((row, index) => (
-              <Link
-                href={`/cruises/${row.shipId}`}
-                key={row.shipId}
-                className="grid grid-cols-[2.25rem_1fr_auto] items-center gap-4 px-5 py-4 transition hover:bg-white/[0.035]"
-              >
-                <span className="text-sm tabular-nums text-white/36">{index + 1}</span>
-                <span className="min-w-0">
-                  <span className="block truncate font-semibold text-white">{row.shipName}</span>
-                  <span className="mt-1 block truncate text-xs text-white/42">{row.operator}</span>
-                </span>
-                <span className="text-right font-semibold tabular-nums text-white">{formatTonnes(row.co2Tonnes)} t</span>
-              </Link>
-            ))}
-          </div>
-        ) : (
-          <p className="px-5 py-10 text-center text-sm text-white/48">{emptyMessage}</p>
-        )}
-      </div>
-    </DashboardCard>
-  );
-}
-
 function OperatorCard({ rows }: { rows: Array<{ operator: string; co2Tonnes: number; ships: number }> }) {
   return (
-    <DashboardCard title="Operators by estimated CO₂ from observed activity">
-      <div className="divide-y divide-white/10">
+    <DashboardCard title="Operators by estimated CO₂ from observed activity" className="overflow-hidden">
+      <div className="space-y-2 p-3">
         {rows.map((row) => (
-          <div key={row.operator} className="grid grid-cols-[1fr_auto] gap-4 px-5 py-4">
+          <div key={row.operator} className="grid grid-cols-[minmax(0,1fr)_auto] gap-4 rounded-xl border border-white/[0.07] bg-white/[0.025] px-4 py-3.5">
             <div className="min-w-0">
-              <p className="truncate font-semibold text-white">{row.operator}</p>
+              <p className="truncate text-sm font-semibold text-white sm:text-base">{formatOperator(row.operator)}</p>
               <p className="mt-1 text-xs text-white/42">{row.ships.toLocaleString("en-US")} ship(s) with estimates</p>
             </div>
-            <p className="font-semibold tabular-nums text-white">{formatTonnes(row.co2Tonnes)} t</p>
+            <p className="text-right text-base font-semibold tabular-nums text-white sm:text-lg">{formatTonnes(row.co2Tonnes)} t</p>
           </div>
         ))}
       </div>
@@ -260,6 +230,10 @@ function OperatorCard({ rows }: { rows: Array<{ operator: string; co2Tonnes: num
 
 function formatTonnes(value: number) {
   return Math.round(value).toLocaleString("en-US");
+}
+
+function formatOperator(value: string) {
+  return value === "Unknown operator" ? "Operator not published" : value;
 }
 
 function formatDate(value: Date) {

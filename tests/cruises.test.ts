@@ -54,12 +54,21 @@ import {
   parseRegistryExpansionManifest
 } from "@/lib/cruises/registryCoverage";
 import {
+  CRUISE_MAP_PERIODS,
   CRUISE_POSITION_FRESHNESS_WINDOW_MS,
+  DEFAULT_CRUISE_MAP_PERIOD,
+  buildCruiseActivityCellPoints,
+  buildCruiseOperatorBreakdown,
+  buildCruiseSegmentBreakdown,
+  buildDailyCruiseEmissionSeries,
   buildCruiseActivityMapPoints,
+  buildTopCruiseShipChartRows,
   dedupeCruiseEstimateRows,
   estimateCruiseMapPayloadBytes,
   getCruiseDataStatus,
   getCruiseMapCopy,
+  getCruiseMapPeriodRange,
+  normalizeCruiseMapPeriod,
   filterPublicCruiseRowsByVerifiedShipIds,
   isPublicVerifiedOceanCruise,
   selectLatestCruisePositionPerShip,
@@ -1144,6 +1153,88 @@ describe("cruise dashboard query helpers", () => {
     expect(summarizeCruiseEstimateRows(rows).co2Tonnes).toBe(200);
   });
 
+  it("builds the cruise daily chart from observed estimate dates only", () => {
+    const rows = [
+      estimateRow({ shipId: "verified-1", date: new Date("2026-07-02T00:00:00Z"), methodVersion: "v1", estimatedCo2Tonnes: 120 }),
+      estimateRow({ shipId: "verified-1", date: new Date("2026-07-04T00:00:00Z"), methodVersion: "v1", estimatedCo2Tonnes: 80 }),
+      estimateRow({ shipId: "verified-2", date: new Date("2026-07-04T00:00:00Z"), methodVersion: "v1", estimatedCo2Tonnes: 20 })
+    ];
+
+    expect(buildDailyCruiseEmissionSeries(rows)).toEqual([
+      { date: "2026-07-02", label: "Jul 2", estimatedCo2Tonnes: 120 },
+      { date: "2026-07-03", label: "Jul 3", estimatedCo2Tonnes: 0 },
+      { date: "2026-07-04", label: "Jul 4", estimatedCo2Tonnes: 100 }
+    ]);
+  });
+
+  it("returns an empty daily chart series when no verified estimate rows are available", () => {
+    expect(buildDailyCruiseEmissionSeries([])).toEqual([]);
+  });
+
+  it("builds top cruise ship chart rows from positive verified estimates only", () => {
+    const date = new Date("2026-07-01T00:00:00Z");
+    const rows = [
+      estimateRow({ shipId: "ship-a", date, methodVersion: "v1", estimatedCo2Tonnes: 10 }),
+      estimateRow({ shipId: "ship-b", date, methodVersion: "v1", estimatedCo2Tonnes: 0 }),
+      estimateRow({ shipId: "ship-c", date, methodVersion: "v1", estimatedCo2Tonnes: 25 }),
+      estimateRow({ shipId: "ship-d", date, methodVersion: "v1", estimatedCo2Tonnes: 3 })
+    ];
+
+    expect(buildTopCruiseShipChartRows(rows, 2).map((row) => ({ shipId: row.shipId, co2Tonnes: row.co2Tonnes }))).toEqual([
+      { shipId: "ship-c", co2Tonnes: 25 },
+      { shipId: "ship-a", co2Tonnes: 10 }
+    ]);
+  });
+
+  it("keeps cruise chart data compatible with the public verified-only gate", () => {
+    const date = new Date("2026-07-01T00:00:00Z");
+    const rows = [
+      estimateRow({ shipId: "verified", date, methodVersion: "v1", estimatedCo2Tonnes: 10 }),
+      estimateRow({ shipId: "unverified", date, methodVersion: "v1", estimatedCo2Tonnes: 90 })
+    ];
+    const verifiedRows = filterPublicCruiseRowsByVerifiedShipIds(rows, ["verified"]);
+
+    expect(buildDailyCruiseEmissionSeries(verifiedRows)[0]?.estimatedCo2Tonnes).toBe(10);
+    expect(buildTopCruiseShipChartRows(verifiedRows, 6).map((row) => row.shipId)).toEqual(["verified"]);
+  });
+
+  it("builds operator breakdowns from verified registry metadata and safe unpublished buckets", () => {
+    const date = new Date("2026-07-01T00:00:00Z");
+    const rows = [
+      estimateRow({ shipId: "ship-a", date, methodVersion: "v1", estimatedCo2Tonnes: 60 }),
+      estimateRow({ shipId: "ship-b", date, methodVersion: "v1", estimatedCo2Tonnes: 40 }),
+      estimateRow({ shipId: "ship-c", date, methodVersion: "v1", estimatedCo2Tonnes: 20 })
+    ];
+    const metadata = new Map([
+      ["ship-a", { operator: "Example Cruises", vesselSegment: "OCEAN_CRUISE" }],
+      ["ship-b", { operator: null, vesselSegment: "EXPEDITION_CRUISE" }],
+      ["ship-c", { operator: "Unknown operator", vesselSegment: "OCEAN_CRUISE" }]
+    ]);
+
+    expect(buildCruiseOperatorBreakdown(rows, metadata)).toEqual([
+      { label: "Example Cruises", estimatedCo2Tonnes: 60, percent: 50 },
+      { label: "Operator not published", estimatedCo2Tonnes: 60, percent: 50 }
+    ]);
+  });
+
+  it("builds segment breakdowns only from actual verified registry segments", () => {
+    const date = new Date("2026-07-01T00:00:00Z");
+    const rows = [
+      estimateRow({ shipId: "ship-a", date, methodVersion: "v1", estimatedCo2Tonnes: 75 }),
+      estimateRow({ shipId: "ship-b", date, methodVersion: "v1", estimatedCo2Tonnes: 25 }),
+      estimateRow({ shipId: "ship-c", date, methodVersion: "v1", estimatedCo2Tonnes: 10 })
+    ];
+    const metadata = new Map([
+      ["ship-a", { operator: "Example Cruises", vesselSegment: "OCEAN_CRUISE" }],
+      ["ship-b", { operator: "Expedition Line", vesselSegment: "EXPEDITION_CRUISE" }]
+    ]);
+
+    expect(buildCruiseSegmentBreakdown(rows, metadata)).toEqual([
+      { label: "Ocean cruise", estimatedCo2Tonnes: 75, percent: 75 },
+      { label: "Expedition cruise", estimatedCo2Tonnes: 25, percent: 25 }
+    ]);
+  });
+
   it("uses vessel activity density as the default map mode when no trusted daily CO2 estimate exists", () => {
     const points = buildCruiseActivityMapPoints([position({ shipId: "ship-1" })], []);
 
@@ -1178,6 +1269,75 @@ describe("cruise dashboard query helpers", () => {
     expect(copy.legendTitle).toBe("Live cruise vessel activity");
     expect(copy.subtitle).toBe("Latest observed verified cruise positions.");
     expect(`${copy.legendTitle} ${copy.subtitle}`).not.toMatch(/emissions intensity|mixed|CO2 weighting/i);
+  });
+
+  it("defines cruise-only map period labels and defaults to since monitoring began", () => {
+    expect(DEFAULT_CRUISE_MAP_PERIOD).toBe("since-monitoring");
+    expect(CRUISE_MAP_PERIODS.map((period) => period.label)).toEqual(["This week", "This month", "Since monitoring began"]);
+    expect(CRUISE_MAP_PERIODS.map((period) => period.legendTitle)).toEqual([
+      "WEEKLY CRUISE ACTIVITY",
+      "MONTHLY CRUISE ACTIVITY",
+      "CRUISE ACTIVITY SINCE MONITORING BEGAN"
+    ]);
+    expect(normalizeCruiseMapPeriod(undefined)).toBe("since-monitoring");
+    expect(normalizeCruiseMapPeriod("")).toBe("since-monitoring");
+    expect(normalizeCruiseMapPeriod("week")).toBe("week");
+    expect(normalizeCruiseMapPeriod("ytd")).toBe("since-monitoring");
+  });
+
+  it("calculates cruise map period boundaries in UTC", () => {
+    const wednesday = new Date("2026-07-08T15:30:00.000Z");
+    const monitoringStart = new Date("2026-07-03T12:00:00.000Z");
+
+    expect(getCruiseMapPeriodRange("week", wednesday, monitoringStart).start.toISOString()).toBe("2026-07-06T00:00:00.000Z");
+    expect(getCruiseMapPeriodRange("week", wednesday, monitoringStart).end).toBe(wednesday);
+    expect(getCruiseMapPeriodRange("month", wednesday, monitoringStart).start.toISOString()).toBe("2026-07-01T00:00:00.000Z");
+    expect(getCruiseMapPeriodRange("since-monitoring", wednesday, monitoringStart).start).toBe(monitoringStart);
+  });
+
+  it("allows overlapping cruise map periods without fabricating visual differences", () => {
+    const monday = new Date("2026-06-01T08:15:00.000Z");
+    const monitoringStart = new Date("2026-06-01T00:00:00.000Z");
+
+    expect(getCruiseMapPeriodRange("week", monday, monitoringStart).start.toISOString()).toBe(
+      getCruiseMapPeriodRange("month", monday, monitoringStart).start.toISOString()
+    );
+    expect(getCruiseMapPeriodRange("since-monitoring", monday, monitoringStart).start.toISOString()).toBe("2026-06-01T00:00:00.000Z");
+  });
+
+  it("builds aggregate cruise activity map cells without exposing vessel identity fields", () => {
+    const points = buildCruiseActivityCellPoints(
+      [
+        {
+          latitude: 36.4,
+          longitude: 14.2,
+          observationCount: 16,
+          vesselCount: 4,
+          latestTimestamp: new Date("2026-07-08T12:00:00.000Z")
+        },
+        {
+          latitude: 51.8,
+          longitude: 3.2,
+          observationCount: 4,
+          vesselCount: 2,
+          latestTimestamp: new Date("2026-07-08T11:00:00.000Z")
+        }
+      ],
+      "This week"
+    );
+
+    expect(points).toHaveLength(2);
+    expect(points[0]).toMatchObject({
+      isAggregate: true,
+      shipId: "",
+      mmsi: "",
+      name: "Verified cruise activity",
+      observationCount: 16,
+      vesselCount: 4,
+      activityWeight: 1,
+      periodLabel: "This week"
+    });
+    expect(points[1]?.activityWeight).toBe(0.5);
   });
 
   it("uses the shared PaperStraw heatmap palette for cruise activity maps", () => {
@@ -1215,15 +1375,36 @@ describe("cruise dashboard query helpers", () => {
     const source = [
       cruisePageSource,
       readFileSync("app/cruises/[shipId]/page.tsx", "utf8"),
-      readFileSync("components/cruises/CruiseVesselMap.tsx", "utf8")
+      readFileSync("components/cruises/CruiseVesselMap.tsx", "utf8"),
+      readFileSync("components/cruises/LazyCruiseVesselMap.tsx", "utf8"),
+      readFileSync("components/cruises/CruiseDashboardCharts.tsx", "utf8"),
+      readFileSync("lib/cruises/queries.ts", "utf8")
     ].join("\n");
 
     expect(source).toContain("Estimated CO₂ emissions from verified ocean cruise ships observed by PaperStraw since monitoring began");
+    expect(source).toContain("Estimated CO₂ emissions over time");
+    expect(source).toContain("Top cruise ships by estimated CO₂");
+    expect(source).toContain("CO₂ emissions breakdown");
+    expect(source).toContain("CO₂ by operator");
+    expect(source).toContain("CO₂ by cruise segment");
+    expect(source).toContain("CO₂ comparisons");
+    expect(source).toContain("Based on estimated verified cruise CO₂ observed since monitoring began.");
+    expect(source).toContain("Building observed emissions history.");
+    expect(source).toContain("Building observed emissions breakdown.");
+    expect(source).toContain("No verified cruise emissions available yet.");
     expect(source).toContain("Latest observed verified cruise positions.");
+    expect(source).toContain("Observed verified cruise activity this week.");
+    expect(source).toContain("Observed verified cruise activity this month.");
+    expect(source).toContain("Observed verified cruise activity since monitoring began.");
+    expect(source).toContain("No verified cruise activity observed for this period yet.");
+    expect(source).toContain('params.set("period", periodId)');
     expect(source).toContain("Coverage varies by vessel and AIS availability");
     expect(source).toContain("WORLD CRUISE ACTIVITY");
     expect(source).not.toContain("Cruise coverage and freshness");
     expect(source).not.toContain("Positions may be delayed and coverage varies by vessel and AIS availability.");
+    expect(source).not.toContain("Estimated emissions from observed activity today");
+    expect(source).not.toContain("Estimated emissions from observed activity since monitoring began");
+    expect(readFileSync("components/cruises/CruiseDashboardCharts.tsx", "utf8")).not.toMatch(/Unknown operator|review queue|MMSI|IMO|global cruise emissions|annual cruise emissions/i);
     expect(cruisePageSource).not.toContain(">Cruise emissions</p>");
     expect(source).not.toMatch(/\bYTD\b|year-to-date|19 monitored|monitored cruise regions|regional discovery|global cruise emissions|all cruises|real-time exact/i);
   });

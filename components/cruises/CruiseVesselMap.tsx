@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import type { Map as MapLibreMap, MapGeoJSONFeature } from "maplibre-gl";
-import type { CruiseMapMode, CruiseMapPoint } from "@/lib/cruises/queries";
+import type { CruiseMapMode, CruiseMapPeriodPayload, CruiseMapPoint } from "@/lib/cruises/queries";
 import {
   PAPERSTRAW_CARTO_VECTOR_SOURCE_ID,
   PAPERSTRAW_HEATMAP_COLORS,
@@ -22,6 +23,10 @@ type TooltipState = {
   timestamp: string;
   shipId: string;
   estimatedCo2Tonnes: number | null;
+  isAggregate: boolean;
+  observationCount: number | null;
+  vesselCount: number | null;
+  periodLabel: string | null;
 } | null;
 
 const sourceId = "cruise-vessels";
@@ -47,22 +52,32 @@ function getClientCruiseMapCopy(mode: CruiseMapMode) {
 
 export function CruiseVesselMap({
   points,
+  periods,
   mapMode,
   emptyStateTitle = "Awaiting recent AIS positions",
   emptyStateDescription = "The cruise worker is connected, but no recent vessel positions are available yet."
 }: {
   points: CruiseMapPoint[];
+  periods?: CruiseMapPeriodPayload[];
   mapMode: CruiseMapMode;
   emptyStateTitle?: string;
   emptyStateDescription?: string;
 }) {
+  const searchParams = useSearchParams();
+  const [selectedPeriodId, setSelectedPeriodId] = useState(() => searchParams.get("period") ?? undefined);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const [tooltip, setTooltip] = useState<TooltipState>(null);
   const [mapReady, setMapReady] = useState(false);
   const [dataVisible, setDataVisible] = useState(true);
-  const geojson = useMemo(() => buildVesselGeoJson(points), [points]);
-  const copy = getClientCruiseMapCopy(mapMode);
+  const selectedPeriod = useMemo(() => {
+    if (!periods?.length) return null;
+    return periods.find((period) => period.id === selectedPeriodId) ?? periods.find((period) => period.id === "since-monitoring") ?? periods[0];
+  }, [periods, selectedPeriodId]);
+  const displayPoints = selectedPeriod?.points ?? points;
+  const geojson = useMemo(() => buildVesselGeoJson(displayPoints), [displayPoints]);
+  const initialGeojsonRef = useRef(geojson);
+  const copy = selectedPeriod ? { subtitle: selectedPeriod.subtitle, legendTitle: selectedPeriod.legendTitle } : getClientCruiseMapCopy(mapMode);
 
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return;
@@ -90,7 +105,7 @@ export function CruiseVesselMap({
         if (disposed) return;
         map.addSource(sourceId, {
           type: "geojson",
-          data: geojson
+          data: initialGeojsonRef.current
         } as never);
         addVesselLayers(map);
         fitWorld(map, 0);
@@ -112,6 +127,7 @@ export function CruiseVesselMap({
       map.on("click", interactiveLayerIds, async (event) => {
         const feature = event.features?.[0];
         if (!feature) return;
+        if (feature.properties?.isAggregate) return;
 
         const shipId = String(feature.properties?.shipId ?? "");
         if (shipId) window.location.href = `/cruises/${encodeURIComponent(shipId)}`;
@@ -125,7 +141,7 @@ export function CruiseVesselMap({
       mapRef.current?.remove();
       mapRef.current = null;
     };
-  }, [geojson]);
+  }, []);
 
   useEffect(() => {
     const source = mapRef.current?.getSource(sourceId) as { setData?: (data: ReturnType<typeof buildVesselGeoJson>) => void } | undefined;
@@ -142,11 +158,41 @@ export function CruiseVesselMap({
     setDataVisible(visible);
   }
 
+  function selectPeriod(periodId: string) {
+    setSelectedPeriodId(periodId);
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    params.set("period", periodId);
+    const query = params.toString();
+    window.history.replaceState(null, "", query ? `${window.location.pathname}?${query}` : window.location.pathname);
+  }
+
   return (
     <div className="relative overflow-hidden rounded-2xl border border-white/10 bg-[#030807] shadow-2xl shadow-black/35">
-      <div className="absolute left-4 top-4 z-10 max-w-[16rem] md:left-5 md:top-5 md:max-w-md">
-        <p className="text-sm font-semibold uppercase tracking-[0.14em] text-white">WORLD CRUISE ACTIVITY</p>
-        <p className="mt-2 hidden text-sm leading-5 text-white/58 sm:block">{copy.subtitle}</p>
+      <div className="absolute left-4 right-4 top-4 z-10 flex flex-col gap-3 md:left-5 md:right-5 md:top-5 md:flex-row md:items-start md:justify-between">
+        <div className="max-w-[16rem] md:max-w-md">
+          <p className="text-sm font-semibold uppercase tracking-[0.14em] text-white">WORLD CRUISE ACTIVITY</p>
+          <p className="mt-2 hidden text-sm leading-5 text-white/58 sm:block">{copy.subtitle}</p>
+        </div>
+        {periods?.length ? (
+          <div className="flex w-fit max-w-full overflow-hidden rounded-full border border-white/10 bg-[#07100f]/88 p-1 shadow-2xl backdrop-blur">
+            {periods.map((period) => {
+              const active = selectedPeriod?.id === period.id;
+              return (
+                <button
+                  key={period.id}
+                  type="button"
+                  className={`whitespace-nowrap rounded-full px-3 py-1.5 text-[0.68rem] font-semibold transition md:px-3.5 ${
+                    active ? "bg-paper text-black shadow-lg shadow-paper/10" : "text-white/58 hover:bg-white/10 hover:text-white"
+                  }`}
+                  onClick={() => selectPeriod(period.id)}
+                >
+                  {period.label}
+                </button>
+              );
+            })}
+          </div>
+        ) : null}
       </div>
 
       <div ref={containerRef} className="h-[24rem] w-full md:h-[36rem]" />
@@ -157,11 +203,11 @@ export function CruiseVesselMap({
         </div>
       ) : null}
 
-      {mapReady && points.length === 0 ? (
+      {mapReady && displayPoints.length === 0 ? (
         <div className="absolute inset-0 flex items-center justify-center bg-[#030807]/72 p-6 text-center backdrop-blur-[1px]">
           <div className="max-w-sm rounded-2xl border border-white/10 bg-[#07100f]/92 p-6 shadow-2xl">
-            <p className="text-lg font-semibold text-white">{emptyStateTitle}</p>
-            <p className="mt-3 text-sm leading-6 text-white/58">{emptyStateDescription}</p>
+            <p className="text-lg font-semibold text-white">{selectedPeriod ? "No verified cruise activity observed for this period yet." : emptyStateTitle}</p>
+            <p className="mt-3 text-sm leading-6 text-white/58">{selectedPeriod ? "The selector remains available as observed monitoring data accumulates." : emptyStateDescription}</p>
           </div>
         </div>
       ) : null}
@@ -212,19 +258,34 @@ export function CruiseVesselMap({
           <p className="font-semibold text-white">{tooltip.name}</p>
           <p className="mt-1 text-sm text-white/58">{tooltip.operator}</p>
           <dl className="mt-4 grid grid-cols-2 gap-3 border-t border-white/10 pt-4 text-sm">
-            <div>
-              <dt className="text-white/42">MMSI</dt>
-              <dd className="mt-1 font-semibold tabular-nums text-white">{tooltip.mmsi}</dd>
-            </div>
-            <div>
-              <dt className="text-white/42">Speed</dt>
-              <dd className="mt-1 font-semibold tabular-nums text-paper">
-                {tooltip.speedOverGround === null ? "n/a" : `${tooltip.speedOverGround.toFixed(1)} kn`}
-              </dd>
-            </div>
+            {tooltip.isAggregate ? (
+              <>
+                <div>
+                  <dt className="text-white/42">Observations</dt>
+                  <dd className="mt-1 font-semibold tabular-nums text-white">{tooltip.observationCount?.toLocaleString("en-US") ?? "n/a"}</dd>
+                </div>
+                <div>
+                  <dt className="text-white/42">Verified ships</dt>
+                  <dd className="mt-1 font-semibold tabular-nums text-paper">{tooltip.vesselCount?.toLocaleString("en-US") ?? "n/a"}</dd>
+                </div>
+              </>
+            ) : (
+              <>
+                <div>
+                  <dt className="text-white/42">MMSI</dt>
+                  <dd className="mt-1 font-semibold tabular-nums text-white">{tooltip.mmsi}</dd>
+                </div>
+                <div>
+                  <dt className="text-white/42">Speed</dt>
+                  <dd className="mt-1 font-semibold tabular-nums text-paper">
+                    {tooltip.speedOverGround === null ? "n/a" : `${tooltip.speedOverGround.toFixed(1)} kn`}
+                  </dd>
+                </div>
+              </>
+            )}
           </dl>
           <p className="mt-3 text-xs leading-5 text-white/42">
-            Destination: {tooltip.destination ?? "Unknown"}
+            {tooltip.isAggregate ? `Period: ${tooltip.periodLabel ?? "Selected period"}` : `Destination: ${tooltip.destination ?? "Unknown"}`}
             <br />
             Updated: {tooltip.timestamp}
             {tooltip.estimatedCo2Tonnes !== null ? (
@@ -298,7 +359,11 @@ function buildVesselGeoJson(points: CruiseMapPoint[]) {
         destination: point.destination,
         timestamp: point.timestamp.toISOString(),
         activityWeight: point.activityWeight,
-        estimatedCo2Tonnes: point.estimatedCo2Tonnes
+        estimatedCo2Tonnes: point.estimatedCo2Tonnes,
+        isAggregate: Boolean(point.isAggregate),
+        observationCount: point.observationCount ?? null,
+        vesselCount: point.vesselCount ?? null,
+        periodLabel: point.periodLabel ?? null
       }
     }))
   };
@@ -317,7 +382,11 @@ function featureToTooltip(feature: MapGeoJSONFeature, x: number, y: number): Too
     destination: properties.destination ? String(properties.destination) : null,
     timestamp: formatDateTime(new Date(String(properties.timestamp))),
     shipId: String(properties.shipId ?? ""),
-    estimatedCo2Tonnes: properties.estimatedCo2Tonnes === null || properties.estimatedCo2Tonnes === undefined ? null : Number(properties.estimatedCo2Tonnes)
+    estimatedCo2Tonnes: properties.estimatedCo2Tonnes === null || properties.estimatedCo2Tonnes === undefined ? null : Number(properties.estimatedCo2Tonnes),
+    isAggregate: Boolean(properties.isAggregate),
+    observationCount: properties.observationCount === null || properties.observationCount === undefined ? null : Number(properties.observationCount),
+    vesselCount: properties.vesselCount === null || properties.vesselCount === undefined ? null : Number(properties.vesselCount),
+    periodLabel: properties.periodLabel ? String(properties.periodLabel) : null
   };
 }
 

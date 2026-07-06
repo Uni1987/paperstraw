@@ -2,7 +2,7 @@
 
 import dynamic from "next/dynamic";
 import { DashboardMapSkeleton } from "@/components/dashboard/DashboardSkeletons";
-import type { CruiseMapMode, CruiseMapPoint } from "@/lib/cruises/queries";
+import type { CruiseMapMode, CruiseMapPeriodPayload, CruiseMapPoint } from "@/lib/cruises/queries";
 
 const DynamicCruiseVesselMap = dynamic(
   () => import("@/components/cruises/CruiseVesselMap").then((mod) => mod.CruiseVesselMap),
@@ -14,11 +14,13 @@ const DynamicCruiseVesselMap = dynamic(
 
 export function LazyCruiseVesselMap({
   points,
+  periods,
   mapMode,
   emptyStateTitle,
   emptyStateDescription
 }: {
   points: CruiseMapPoint[];
+  periods?: CruiseMapPeriodPayload[];
   mapMode: CruiseMapMode;
   emptyStateTitle?: string;
   emptyStateDescription?: string;
@@ -26,6 +28,7 @@ export function LazyCruiseVesselMap({
   return (
     <DynamicCruiseVesselMap
       points={points}
+      periods={periods}
       mapMode={mapMode}
       emptyStateTitle={emptyStateTitle}
       emptyStateDescription={emptyStateDescription}
