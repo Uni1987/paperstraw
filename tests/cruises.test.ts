@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   AISSTREAM_FILTER_MESSAGE_TYPES,
@@ -119,6 +120,7 @@ import {
   outputContainsSensitiveCruiseIdentity,
   parseGlobalLocalFilterStatusArgs,
   summarizeEmissionStatusRows,
+  summarizeObservedVerifiedPositions,
   type GlobalLocalFilterStatusReport
 } from "@/lib/cruises/globalLocalFilterStatus";
 
@@ -1207,6 +1209,20 @@ describe("cruise dashboard query helpers", () => {
 
     expect(estimateCruiseMapPayloadBytes(points)).toBeLessThan(1_500_000);
   });
+
+  it("keeps public cruise preview copy honest about monitoring-only coverage", () => {
+    const source = [
+      readFileSync("app/cruises/page.tsx", "utf8"),
+      readFileSync("app/cruises/[shipId]/page.tsx", "utf8"),
+      readFileSync("components/cruises/CruiseVesselMap.tsx", "utf8")
+    ].join("\n");
+
+    expect(source).toContain("Estimated CO₂ emissions from verified ocean cruise ships observed by PaperStraw since monitoring began");
+    expect(source).toContain("Latest observed positions from verified cruise ships.");
+    expect(source).toContain("Coverage varies by vessel and AIS availability");
+    expect(source).toContain("Verified ships observed in the last 24 hours");
+    expect(source).not.toMatch(/\bYTD\b|year-to-date|19 monitored|monitored cruise regions|regional discovery|global cruise emissions|all cruises|real-time exact/i);
+  });
 });
 
 describe("cruise viability audit", () => {
@@ -1989,6 +2005,40 @@ describe("global-local-filter status reporting", () => {
     expect(range.endExclusive.toISOString()).toBe("2026-07-04T00:00:00.000Z");
   });
 
+  it("counts valid observed vessels in 24h and 7d windows using UTC timestamps", () => {
+    const now = new Date("2026-07-06T12:00:00Z");
+    const summary = summarizeObservedVerifiedPositions(
+      [
+        observedPosition("ship-recent", "2026-07-06T11:59:00Z"),
+        observedPosition("ship-boundary", "2026-07-05T12:00:00Z"),
+        observedPosition("ship-week", "2026-07-01T12:00:00Z"),
+        observedPosition("ship-old", "2026-06-28T12:00:00Z")
+      ],
+      now
+    );
+
+    expect(summary.verifiedVesselsObservedLast24h).toBe(2);
+    expect(summary.verifiedVesselsObservedLast7d).toBe(3);
+    expect(summary.verifiedVesselsWithStoredPositions).toBe(4);
+  });
+
+  it("excludes invalid, zero-island, and future positions from observed status counts", () => {
+    const now = new Date("2026-07-06T12:00:00Z");
+    const summary = summarizeObservedVerifiedPositions(
+      [
+        observedPosition("ship-valid", "2026-07-06T11:59:00Z"),
+        observedPosition("ship-invalid-lat", "2026-07-06T11:59:00Z", { latitude: 91 }),
+        observedPosition("ship-zero", "2026-07-06T11:59:00Z", { latitude: 0, longitude: 0 }),
+        observedPosition("ship-future", "2026-07-06T12:01:00Z")
+      ],
+      now
+    );
+
+    expect(summary.verifiedVesselsObservedLast24h).toBe(1);
+    expect(summary.verifiedVesselsObservedLast7d).toBe(1);
+    expect(summary.verifiedVesselsWithStoredPositions).toBe(1);
+  });
+
   it("distinguishes old estimate dates updated now from exact estimate-date window coverage", () => {
     const summary = summarizeEmissionStatusRows(
       [
@@ -2043,6 +2093,15 @@ function identity(overrides: Partial<CruiseShipIdentityInput>): CruiseShipIdenti
 
 function position(overrides: Partial<ReturnType<typeof positionBase>>) {
   return { ...positionBase(), ...overrides };
+}
+
+function observedPosition(shipId: string, timestamp: string, overrides: Partial<{ latitude: number; longitude: number }> = {}) {
+  return {
+    shipId,
+    timestamp: new Date(timestamp),
+    latitude: overrides.latitude ?? 40,
+    longitude: overrides.longitude ?? 4
+  };
 }
 
 function positionBase() {
@@ -2209,6 +2268,8 @@ function globalLocalFilterStatusReport(overrides: Partial<Omit<GlobalLocalFilter
     mmsiConflictCount: 0,
     recordsCreatedInWindow: 0,
     recordsUpdatedInWindow: 0,
+    pendingMmsiReviewCandidates: 0,
+    pendingMmsiConflicts: 0,
     oldestPendingAt: null,
     newestPendingAt: null,
     ...overrides.reviewQueue
@@ -2222,7 +2283,11 @@ function globalLocalFilterStatusReport(overrides: Partial<Omit<GlobalLocalFilter
     registry: {
       acceptedRegistryEntries: 220,
       verifiedPublicEligibleVessels: 109,
+      verifiedMmsisLoaded: 109,
       verifiedVesselsWithLinkedMmsi: 109,
+      verifiedVesselsObservedLast24h: 3,
+      verifiedVesselsObservedLast7d: 8,
+      verifiedVesselsWithStoredPositions: 12,
       verifiedVesselsWithStoredPositionsInWindow: 3,
       verifiedVesselsWithDailyEstimatesForWindowUtcDays: 2
     },

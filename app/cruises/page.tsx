@@ -36,35 +36,47 @@ export default async function CruisesPage() {
     );
   }
 
-  const hasVerifiedVessels = data.sourceStatus.currentlyTracked > 0 || data.kpis.hasTodayEstimates || data.kpis.hasYtdEstimates || data.mapPoints.length > 0;
+  const hasFreshVerifiedObservations = data.sourceStatus.currentlyTracked > 0;
+  const monitoringStartLabel = data.monitoringStart ? formatDate(data.monitoringStart) : null;
+  const hasVerifiedVessels =
+    data.sourceStatus.verifiedShipsWithStoredObservations > 0 ||
+    data.kpis.hasTodayEstimates ||
+    data.kpis.hasSinceMonitoringBeganEstimates ||
+    data.mapPoints.length > 0;
   const statCards = [
     {
-      label: "Estimated CO2 today",
-      value: data.kpis.hasTodayEstimates ? `${formatTonnes(data.kpis.co2TodayTonnes)} t` : "Awaiting verified vessels",
-      detail: data.kpis.hasTodayEstimates ? "Estimated from verified cruise movement" : "Public totals require verified ocean-cruise identities",
+      label: "Estimated CO₂ since monitoring began",
+      value: data.kpis.hasSinceMonitoringBeganEstimates
+        ? `${formatTonnes(data.kpis.co2SinceMonitoringBeganTonnes)} t`
+        : "Awaiting verified observations",
+      detail: monitoringStartLabel ? `Observed since ${monitoringStartLabel}` : "Estimated CO₂ from observed activity",
       accent: "gold" as const,
-      icon: "CO2"
+      icon: "CO₂"
     },
     {
-      label: "Estimated CO2 YTD",
-      value: data.kpis.hasYtdEstimates ? `${formatTonnes(data.kpis.co2YtdTonnes)} t` : "Awaiting verified vessels",
-      detail: data.kpis.hasYtdEstimates ? "Based on verified public cruise data" : "Candidate AIS data is not shown publicly",
+      label: "Estimated CO₂ today",
+      value: data.kpis.hasTodayEstimates && hasFreshVerifiedObservations ? `${formatTonnes(data.kpis.co2TodayTonnes)} t` : "Awaiting fresh observations",
+      detail: data.kpis.hasTodayEstimates && hasFreshVerifiedObservations ? "Estimated from verified cruise movement" : "Shown only when fresh verified observations exist",
       accent: "purple" as const,
-      icon: "YT"
+      icon: "TD"
     },
     {
-      label: "Ships currently tracked",
-      value: data.kpis.trackedShips > 0 ? data.kpis.trackedShips.toLocaleString("en-US") : "Awaiting verified vessels",
-      detail: data.kpis.trackedShips > 0 ? `Verified ships within ${data.sourceStatus.freshnessWindowHours} hours` : "No verified public vessels yet",
+      label: "Verified ships observed",
+      value: data.sourceStatus.verifiedShipsWithStoredObservations > 0
+        ? data.sourceStatus.verifiedShipsWithStoredObservations.toLocaleString("en-US")
+        : "Awaiting verified vessels",
+      detail: data.sourceStatus.verifiedShipsObservedLast24h > 0
+        ? `${data.sourceStatus.verifiedShipsObservedLast24h.toLocaleString("en-US")} observed in the last 24 hours`
+        : "No verified ships observed in the last 24 hours",
       accent: "blue" as const,
       icon: "SH"
     },
     {
-      label: "Fuel burned today",
-      value: data.kpis.hasTodayEstimates ? `${formatTonnes(data.kpis.fuelTodayTonnes)} t` : "Awaiting verified vessels",
-      detail: data.kpis.hasTodayEstimates ? "From the same verified daily estimates" : "Held until registry verification is ready",
+      label: "Latest observation freshness",
+      value: data.sourceStatus.latestPositionRelative,
+      detail: "Coverage varies by vessel and AIS availability",
       accent: "pink" as const,
-      icon: "FL"
+      icon: "FR"
     },
     {
       label: "Global AIS feed",
@@ -114,6 +126,10 @@ export default async function CruisesPage() {
       </section>
 
       <section className="mt-4 md:mt-6">
+        <CruiseCoveragePanel status={data.sourceStatus} />
+      </section>
+
+      <section className="mt-4">
         <Suspense fallback={<DashboardMapSkeleton />}>
           <LazyCruiseVesselMap
             points={data.mapPoints}
@@ -125,8 +141,18 @@ export default async function CruisesPage() {
       </section>
 
       <section className="mt-5 grid gap-4 md:mt-4 xl:grid-cols-2">
-        <CruiseRankingCard title="Top cruise emitters today" rows={data.topToday} emptyMessage="Awaiting verified ocean-cruise vessels." />
-        <CruiseRankingCard title="Top cruise emitters YTD" rows={data.topYtd} emptyMessage="Awaiting verified ocean-cruise vessels." />
+        <CruiseRankingCard
+          title="Estimated emissions from observed activity today"
+          rows={data.topToday}
+          emptyMessage="Awaiting verified ocean-cruise vessels with fresh observed estimates."
+          note="Only verified ships are included. Observation coverage varies, so rankings are directional."
+        />
+        <CruiseRankingCard
+          title="Estimated emissions from observed activity since monitoring began"
+          rows={data.topSinceMonitoringBegan}
+          emptyMessage="Awaiting verified ocean-cruise vessels with stored estimates."
+          note="Only verified ships are included. Observation coverage varies, so rankings are directional."
+        />
       </section>
 
       <section className="mt-4 grid gap-4 xl:grid-cols-[1fr_0.85fr]">
@@ -137,14 +163,19 @@ export default async function CruisesPage() {
               Public cruise statistics only include vessels verified through an exact curated registry IMO match. AIS
               passenger-vessel candidates are collected separately and are not shown publicly until verified.
             </p>
-            {data.ytdCollectionStart ? (
+            <p className="rounded-xl border border-paper/20 bg-paper/10 px-4 py-3 text-paper/90">
+              Estimated CO₂ emissions from verified ocean cruise ships observed by PaperStraw since monitoring began.
+              {monitoringStartLabel ? ` Observed since ${monitoringStartLabel}.` : ""}
+            </p>
+            {data.monitoringStart ? (
               <p className="rounded-xl border border-paper/20 bg-paper/10 px-4 py-3 text-paper/90">
-                YTD currently reflects locally collected cruise data since {formatDate(data.ytdCollectionStart)}.
+                Coverage varies by vessel and AIS availability. Positions may be delayed, and totals reflect only verified
+                ships observed by PaperStraw.
               </p>
             ) : null}
             <p>
               Sources: curated ocean-cruise registry entries, AISStream vessel movement feed and EMSA THETIS-MRV public
-              annual ship emissions data where an IMO match exists.
+              ship emissions disclosures where an IMO match exists.
             </p>
             <Link href="/methodology" className="inline-flex text-sm font-semibold text-paper hover:text-white">
               Read the methodology
@@ -153,6 +184,42 @@ export default async function CruisesPage() {
         </DashboardCard>
       </section>
     </PublicShell>
+  );
+}
+
+function CruiseCoveragePanel({ status }: { status: CruiseDataStatus }) {
+  return (
+    <DashboardCard title="Cruise coverage and freshness">
+      <div className="grid gap-4 p-5 text-sm leading-6 text-white/60 md:grid-cols-2 xl:grid-cols-4">
+        <CoverageItem
+          label="Verified ships observed in the last 24 hours"
+          value={status.verifiedShipsObservedLast24h > 0 ? `${status.verifiedShipsObservedLast24h.toLocaleString("en-US")} ships` : "No recent observations"}
+          detail="Based on valid stored positions from verified cruise ships."
+        />
+        <CoverageItem
+          label="Verified ships with stored observations"
+          value={`${status.verifiedShipsWithStoredObservations.toLocaleString("en-US")} ships`}
+          detail="Candidate AIS vessels are not shown publicly."
+        />
+        <CoverageItem label="Observation source" value="Worldwide AIS observations" detail="Positions are collected from worldwide AIS observations." />
+        <CoverageItem label="Coverage note" value="Varies by vessel" detail="Coverage varies by vessel and AIS availability." />
+      </div>
+      <div className="border-t border-white/10 px-5 py-4">
+        <Link href="/methodology" className="text-sm font-semibold text-paper hover:text-white">
+          Read the methodology
+        </Link>
+      </div>
+    </DashboardCard>
+  );
+}
+
+function CoverageItem({ label, value, detail }: { label: string; value: string; detail: string }) {
+  return (
+    <div>
+      <p className="text-[0.68rem] font-semibold uppercase tracking-[0.14em] text-white/40">{label}</p>
+      <p className="mt-2 text-lg font-semibold text-white">{value}</p>
+      <p className="mt-1 text-xs leading-5 text-white/44">{detail}</p>
+    </div>
   );
 }
 
@@ -167,7 +234,7 @@ function CruiseDataStatusWidget({ status }: { status: CruiseDataStatus }) {
         <SidebarStatusRow label="Source" value={status.source} />
         <SidebarStatusRow label="Public coverage" value={status.publicCoverage} />
         <SidebarStatusRow label="Last verified AIS position" value={status.latestPositionRelative} detail={status.latestPositionExact ?? undefined} />
-        <SidebarStatusRow label="Currently tracked" value={`${status.currentlyTracked.toLocaleString("en-US")} verified ships`} />
+        <SidebarStatusRow label="Observed last 24h" value={`${status.verifiedShipsObservedLast24h.toLocaleString("en-US")} verified ships`} />
         <SidebarStatusRow label="Feed" value="Worldwide AIS observations" />
         <SidebarStatusRow label="Status" value={status.status} />
       </div>
@@ -185,9 +252,10 @@ function SidebarStatusRow({ label, value, detail }: { label: string; value: stri
   );
 }
 
-function CruiseRankingCard({ title, rows, emptyMessage }: { title: string; rows: CruiseRankRow[]; emptyMessage: string }) {
+function CruiseRankingCard({ title, rows, emptyMessage, note }: { title: string; rows: CruiseRankRow[]; emptyMessage: string; note: string }) {
   return (
     <DashboardCard title={title}>
+      <p className="border-b border-white/10 px-5 py-3 text-xs leading-5 text-white/44">{note}</p>
       <div className="max-h-[34rem] overflow-auto">
         {rows.length ? (
           <div className="divide-y divide-white/10">
@@ -216,7 +284,7 @@ function CruiseRankingCard({ title, rows, emptyMessage }: { title: string; rows:
 
 function OperatorCard({ rows }: { rows: Array<{ operator: string; co2Tonnes: number; ships: number }> }) {
   return (
-    <DashboardCard title="Top operators by estimated CO2">
+    <DashboardCard title="Operators by estimated CO₂ from observed activity">
       <div className="divide-y divide-white/10">
         {rows.map((row) => (
           <div key={row.operator} className="grid grid-cols-[1fr_auto] gap-4 px-5 py-4">

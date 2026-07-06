@@ -25,8 +25,9 @@ export default async function CruiseShipPage({ params }: { params: { shipId: str
   if (!data.ship) notFound();
 
   const todayCo2 = data.today ? Number(data.today.estimatedCo2Tonnes) : 0;
-  const comparisons = buildComparisonCards(data.ytd.co2Tonnes).slice(0, 3);
-  const equivalents = calculateCo2Equivalents(data.ytd.co2Tonnes * 1000);
+  const comparisons = buildComparisonCards(data.sinceMonitoringBegan.co2Tonnes).slice(0, 3);
+  const equivalents = calculateCo2Equivalents(data.sinceMonitoringBegan.co2Tonnes * 1000);
+  const monitoringStartLabel = data.monitoringStart ? formatDateOnly(data.monitoringStart) : null;
 
   return (
     <PublicShell>
@@ -62,13 +63,13 @@ export default async function CruiseShipPage({ params }: { params: { shipId: str
         </div>
 
         <div className="mt-8 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-          <Metric title="CO2 today" value={formatTonnes(todayCo2)} />
-          <Metric title="CO2 YTD" value={formatTonnes(data.ytd.co2Tonnes)} />
-          <Metric title="Annual MRV CO2" value={data.annual ? formatTonnes(Number(data.annual.annualCo2Tonnes)) : "No MRV match"} />
-          <Metric title="Fuel estimate YTD" value={formatTonnes(data.ytd.fuelTonnes)} />
-          <Metric title="NOx estimate YTD" value={`${Math.round(data.ytd.noxKg).toLocaleString("en-US")} kg`} />
-          <Metric title="SOx estimate YTD" value={`${Math.round(data.ytd.soxKg).toLocaleString("en-US")} kg`} />
-          <Metric title="Distance observed YTD" value={`${Math.round(data.ytd.distanceNm).toLocaleString("en-US")} nm`} />
+          <Metric title="CO₂ today" value={formatTonnes(todayCo2)} />
+          <Metric title="CO₂ since monitoring began" value={formatTonnes(data.sinceMonitoringBegan.co2Tonnes)} />
+          <Metric title="MRV CO₂ baseline" value={data.annual ? formatTonnes(Number(data.annual.annualCo2Tonnes)) : "No MRV match"} />
+          <Metric title="Fuel since monitoring began" value={formatTonnes(data.sinceMonitoringBegan.fuelTonnes)} />
+          <Metric title="NOx since monitoring began" value={`${Math.round(data.sinceMonitoringBegan.noxKg).toLocaleString("en-US")} kg`} />
+          <Metric title="SOx since monitoring began" value={`${Math.round(data.sinceMonitoringBegan.soxKg).toLocaleString("en-US")} kg`} />
+          <Metric title="Distance observed since monitoring began" value={`${Math.round(data.sinceMonitoringBegan.distanceNm).toLocaleString("en-US")} nm`} />
           <Metric title="Paper straws equivalent" value={formatCompact(equivalents.paperStraws)} />
         </div>
 
@@ -88,9 +89,10 @@ export default async function CruiseShipPage({ params }: { params: { shipId: str
         <section className="mt-8 rounded-2xl border border-white/10 bg-white/[0.035] p-6">
           <h2 className="text-sm font-semibold uppercase tracking-normal text-paper">Methodology</h2>
           <p className="mt-4 max-w-4xl text-sm leading-7 text-white/62">
-            AIS provides location, speed and voyage data. THETIS-MRV provides verified annual emissions for qualifying
-            ships. Daily emissions are estimated from movement and annual baseline where available. Results are
-            directional and are not official real-time emissions.
+            Estimated CO₂ emissions from verified ocean cruise ships observed by PaperStraw since monitoring began
+            {monitoringStartLabel ? ` on ${monitoringStartLabel}` : ""}. AIS provides location, speed and voyage data.
+            THETIS-MRV provides ship emissions disclosures for qualifying ships. Daily emissions are estimated from
+            observed movement and disclosure baselines where available. Results are directional, not exact live emissions.
           </p>
         </section>
       </section>
@@ -128,6 +130,14 @@ function formatDate(value: Date) {
     day: "2-digit",
     hour: "2-digit",
     minute: "2-digit"
+  });
+}
+
+function formatDateOnly(value: Date) {
+  return value.toLocaleDateString("en-US", {
+    year: "numeric",
+    month: "short",
+    day: "2-digit"
   });
 }
 

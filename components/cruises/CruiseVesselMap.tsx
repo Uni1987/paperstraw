@@ -34,7 +34,7 @@ const cartoVectorSourceId = PAPERSTRAW_CARTO_VECTOR_SOURCE_ID;
 function getClientCruiseMapCopy(mode: CruiseMapMode) {
   if (mode === "emissions") {
     return {
-      subtitle: "Estimated cruise emissions from monitored AIS regions.",
+      subtitle: "Estimated cruise emissions from verified cruise ships observed by PaperStraw.",
       legendTitle: "Estimated cruise emissions"
     };
   }
@@ -147,6 +147,7 @@ export function CruiseVesselMap({
       <div className="absolute left-4 top-4 z-10 max-w-[16rem] md:left-5 md:top-5 md:max-w-md">
         <p className="text-sm font-semibold uppercase tracking-[0.14em] text-white">World cruise activity</p>
         <p className="mt-2 hidden text-sm leading-5 text-white/58 sm:block">{copy.subtitle}</p>
+        <p className="mt-1 hidden text-xs leading-5 text-white/42 md:block">Positions may be delayed and coverage varies by vessel and AIS availability.</p>
       </div>
 
       <div ref={containerRef} className="h-[24rem] w-full md:h-[36rem]" />
@@ -230,7 +231,7 @@ export function CruiseVesselMap({
             {tooltip.estimatedCo2Tonnes !== null ? (
               <>
                 <br />
-                Estimated CO2 today: {tooltip.estimatedCo2Tonnes.toLocaleString("en-US", { maximumFractionDigits: 1 })} t
+                Estimated CO₂ today: {tooltip.estimatedCo2Tonnes.toLocaleString("en-US", { maximumFractionDigits: 1 })} t
               </>
             ) : null}
           </p>
