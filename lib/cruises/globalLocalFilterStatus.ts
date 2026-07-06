@@ -23,6 +23,13 @@ export type CountByLabel = {
   count: number;
 };
 
+export type ObservedPositionSummaryInput = {
+  shipId: string;
+  timestamp: Date;
+  latitude: number;
+  longitude: number;
+};
+
 export type SafeReviewDetail = {
   id: string;
   classification: string;
@@ -47,7 +54,11 @@ export type GlobalLocalFilterStatusReport = {
   registry: {
     acceptedRegistryEntries: number;
     verifiedPublicEligibleVessels: number;
+    verifiedMmsisLoaded: number;
     verifiedVesselsWithLinkedMmsi: number;
+    verifiedVesselsObservedLast24h: number;
+    verifiedVesselsObservedLast7d: number;
+    verifiedVesselsWithStoredPositions: number;
     verifiedVesselsWithStoredPositionsInWindow: number;
     verifiedVesselsWithDailyEstimatesForWindowUtcDays: number;
   };
@@ -69,6 +80,8 @@ export type GlobalLocalFilterStatusReport = {
     mmsiConflictCount: number;
     recordsCreatedInWindow: number;
     recordsUpdatedInWindow: number;
+    pendingMmsiReviewCandidates: number;
+    pendingMmsiConflicts: number;
     oldestPendingAt: string | null;
     newestPendingAt: string | null;
     details?: SafeReviewDetail[];
@@ -179,6 +192,8 @@ export async function buildGlobalLocalFilterStatusReport(
 ): Promise<GlobalLocalFilterStatusReport> {
   const now = options.now ?? new Date();
   const windowStart = new Date(now.getTime() - options.sinceHours * 60 * 60 * 1000);
+  const last24hStart = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+  const last7dStart = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
   const utcDayRange = getUtcDayRangeForStatusWindow(windowStart, now);
   const grouping = options.sinceHours <= 72 ? "hour" : "day";
   const tables = await getTableStatus(db);
@@ -186,7 +201,11 @@ export async function buildGlobalLocalFilterStatusReport(
   const [
     acceptedRegistryEntries,
     verifiedPublicEligibleVessels,
+    verifiedMmsisLoaded,
     verifiedVesselsWithLinkedMmsi,
+    verifiedVesselsObservedLast24h,
+    verifiedVesselsObservedLast7d,
+    verifiedVesselsWithStoredPositions,
     verifiedVesselsWithStoredPositionsInWindow,
     verifiedVesselsWithDailyEstimatesForWindowUtcDays,
     positionsSummary,
@@ -199,7 +218,11 @@ export async function buildGlobalLocalFilterStatusReport(
     tables.registry_exists ? count(db, `SELECT COUNT(*)::int AS count FROM cruise_vessel_registry_entries WHERE registry_decision = 'ACCEPT'`) : 0,
     hasStrictVerificationTables(tables) ? count(db, strictVerifiedCountSql()) : 0,
     hasStrictVerificationTables(tables) ? count(db, `${strictVerifiedCountSql()} AND s.mmsi IS NOT NULL`) : 0,
-    hasPositionTables(tables) ? count(db, `${strictVerifiedPositionCountSql()} AND p.timestamp >= $1 AND p.timestamp <= $2`, windowStart, now) : 0,
+    hasStrictVerificationTables(tables) ? count(db, `${strictVerifiedCountSql()} AND s.mmsi IS NOT NULL`) : 0,
+    hasPositionTables(tables) ? count(db, `${strictVerifiedValidPositionCountSql()} AND p.timestamp >= $1 AND p.timestamp <= $2`, last24hStart, now) : 0,
+    hasPositionTables(tables) ? count(db, `${strictVerifiedValidPositionCountSql()} AND p.timestamp >= $1 AND p.timestamp <= $2`, last7dStart, now) : 0,
+    hasPositionTables(tables) ? count(db, strictVerifiedValidPositionCountSql()) : 0,
+    hasPositionTables(tables) ? count(db, `${strictVerifiedValidPositionCountSql()} AND p.timestamp >= $1 AND p.timestamp <= $2`, windowStart, now) : 0,
     hasEstimateTables(tables) ? count(db, `${strictVerifiedEstimateCountSql()} AND e.date >= $1 AND e.date < $2`, utcDayRange.start, utcDayRange.endExclusive) : 0,
     getPositionsSummary(db, tables, windowStart, now),
     getPositionGroups(db, tables, windowStart, now, grouping),
@@ -218,7 +241,11 @@ export async function buildGlobalLocalFilterStatusReport(
     registry: {
       acceptedRegistryEntries,
       verifiedPublicEligibleVessels,
+      verifiedMmsisLoaded,
       verifiedVesselsWithLinkedMmsi,
+      verifiedVesselsObservedLast24h,
+      verifiedVesselsObservedLast7d,
+      verifiedVesselsWithStoredPositions,
       verifiedVesselsWithStoredPositionsInWindow,
       verifiedVesselsWithDailyEstimatesForWindowUtcDays
     },
@@ -346,6 +373,15 @@ function strictVerifiedPositionCountSql() {
   `;
 }
 
+function strictVerifiedValidPositionCountSql() {
+  return `
+    ${strictVerifiedPositionCountSql()}
+      AND p.latitude BETWEEN -90 AND 90
+      AND p.longitude BETWEEN -180 AND 180
+      AND NOT (p.latitude = 0 AND p.longitude = 0)
+  `;
+}
+
 function strictVerifiedEstimateCountSql() {
   return `
     SELECT COUNT(DISTINCT s.id)::int AS count
@@ -457,6 +493,8 @@ async function getReviewQueueSummary(db: RawDb, tables: TableStatusRow, windowSt
       conflict: number | bigint | string | null;
       created_window: number | bigint | string | null;
       updated_window: number | bigint | string | null;
+      pending_new_candidate: number | bigint | string | null;
+      pending_conflict: number | bigint | string | null;
       oldest_pending: Date | string | null;
       newest_pending: Date | string | null;
     }>
@@ -472,6 +510,14 @@ async function getReviewQueueSummary(db: RawDb, tables: TableStatusRow, windowSt
         COUNT(*) FILTER (WHERE classification = 'MMSI_CONFLICT_REVIEW_REQUIRED')::int AS conflict,
         COUNT(*) FILTER (WHERE created_at >= $1 AND created_at <= $2)::int AS created_window,
         COUNT(*) FILTER (WHERE updated_at >= $1 AND updated_at <= $2)::int AS updated_window,
+        COUNT(*) FILTER (
+          WHERE review_status = 'PENDING'
+            AND classification = 'NEW_MMSI_CANDIDATE_FOR_EXISTING_REGISTRY_ENTRY'
+        )::int AS pending_new_candidate,
+        COUNT(*) FILTER (
+          WHERE review_status = 'PENDING'
+            AND classification = 'MMSI_CONFLICT_REVIEW_REQUIRED'
+        )::int AS pending_conflict,
         MIN(first_seen_at) FILTER (WHERE review_status = 'PENDING') AS oldest_pending,
         MAX(last_seen_at) FILTER (WHERE review_status = 'PENDING') AS newest_pending
       FROM cruise_static_data_review_queue
@@ -490,8 +536,35 @@ async function getReviewQueueSummary(db: RawDb, tables: TableStatusRow, windowSt
     mmsiConflictCount: Number(row?.conflict ?? 0),
     recordsCreatedInWindow: Number(row?.created_window ?? 0),
     recordsUpdatedInWindow: Number(row?.updated_window ?? 0),
+    pendingMmsiReviewCandidates: Number(row?.pending_new_candidate ?? 0),
+    pendingMmsiConflicts: Number(row?.pending_conflict ?? 0),
     oldestPendingAt: isoOrNull(row?.oldest_pending ?? null),
     newestPendingAt: isoOrNull(row?.newest_pending ?? null)
+  };
+}
+
+export function summarizeObservedVerifiedPositions(rows: ObservedPositionSummaryInput[], now: Date) {
+  const nowMs = now.getTime();
+  const last24hStartMs = nowMs - 24 * 60 * 60 * 1000;
+  const last7dStartMs = nowMs - 7 * 24 * 60 * 60 * 1000;
+  const validRows = rows.filter((row) => {
+    const timestampMs = row.timestamp.getTime();
+    return (
+      Number.isFinite(timestampMs) &&
+      timestampMs <= nowMs &&
+      Number.isFinite(row.latitude) &&
+      Number.isFinite(row.longitude) &&
+      row.latitude >= -90 &&
+      row.latitude <= 90 &&
+      row.longitude >= -180 &&
+      row.longitude <= 180 &&
+      !(row.latitude === 0 && row.longitude === 0)
+    );
+  });
+  return {
+    verifiedVesselsObservedLast24h: new Set(validRows.filter((row) => row.timestamp.getTime() >= last24hStartMs).map((row) => row.shipId)).size,
+    verifiedVesselsObservedLast7d: new Set(validRows.filter((row) => row.timestamp.getTime() >= last7dStartMs).map((row) => row.shipId)).size,
+    verifiedVesselsWithStoredPositions: new Set(validRows.map((row) => row.shipId)).size
   };
 }
 
@@ -735,6 +808,8 @@ function emptyReviewQueue() {
     mmsiConflictCount: 0,
     recordsCreatedInWindow: 0,
     recordsUpdatedInWindow: 0,
+    pendingMmsiReviewCandidates: 0,
+    pendingMmsiConflicts: 0,
     oldestPendingAt: null,
     newestPendingAt: null
   };
@@ -782,8 +857,12 @@ function formatTerminal(report: GlobalLocalFilterStatusReport) {
     tableLines([
       ["accepted registry entries", report.registry.acceptedRegistryEntries],
       ["verified public-eligible vessels", report.registry.verifiedPublicEligibleVessels],
+      ["verified MMSIs loaded", report.registry.verifiedMmsisLoaded],
       ["verified vessels with linked MMSI", report.registry.verifiedVesselsWithLinkedMmsi],
-      ["verified vessels with stored positions", report.registry.verifiedVesselsWithStoredPositionsInWindow],
+      ["verified vessels observed last 24h", report.registry.verifiedVesselsObservedLast24h],
+      ["verified vessels observed last 7d", report.registry.verifiedVesselsObservedLast7d],
+      ["verified vessels with stored positions", report.registry.verifiedVesselsWithStoredPositions],
+      ["verified vessels with stored positions in selected window", report.registry.verifiedVesselsWithStoredPositionsInWindow],
       ["verified vessels with daily estimates for UTC day(s)", report.registry.verifiedVesselsWithDailyEstimatesForWindowUtcDays]
     ]),
     "",
@@ -805,6 +884,8 @@ function formatTerminal(report: GlobalLocalFilterStatusReport) {
       ["already-linked confirmations", report.reviewQueue.alreadyLinkedConfirmationCount],
       ["new MMSI candidates", report.reviewQueue.newMmsiCandidateCount],
       ["MMSI conflicts", report.reviewQueue.mmsiConflictCount],
+      ["pending MMSI review candidates", report.reviewQueue.pendingMmsiReviewCandidates],
+      ["pending MMSI conflicts", report.reviewQueue.pendingMmsiConflicts],
       ["created in window", report.reviewQueue.recordsCreatedInWindow],
       ["updated in window", report.reviewQueue.recordsUpdatedInWindow]
     ]),
@@ -852,8 +933,12 @@ function formatMarkdown(report: GlobalLocalFilterStatusReport) {
     markdownTable([
       ["Accepted registry entries", report.registry.acceptedRegistryEntries],
       ["Verified public-eligible vessels", report.registry.verifiedPublicEligibleVessels],
+      ["Verified MMSIs loaded", report.registry.verifiedMmsisLoaded],
       ["Verified vessels with linked MMSI", report.registry.verifiedVesselsWithLinkedMmsi],
-      ["Verified vessels with stored positions", report.registry.verifiedVesselsWithStoredPositionsInWindow],
+      ["Verified vessels observed last 24h", report.registry.verifiedVesselsObservedLast24h],
+      ["Verified vessels observed last 7d", report.registry.verifiedVesselsObservedLast7d],
+      ["Verified vessels with stored positions", report.registry.verifiedVesselsWithStoredPositions],
+      ["Verified vessels with stored positions in selected window", report.registry.verifiedVesselsWithStoredPositionsInWindow],
       ["Verified vessels with daily estimates for UTC day(s)", report.registry.verifiedVesselsWithDailyEstimatesForWindowUtcDays]
     ]),
     "",
@@ -875,6 +960,8 @@ function formatMarkdown(report: GlobalLocalFilterStatusReport) {
       ["Already-linked confirmations", report.reviewQueue.alreadyLinkedConfirmationCount],
       ["New MMSI candidates", report.reviewQueue.newMmsiCandidateCount],
       ["MMSI conflicts", report.reviewQueue.mmsiConflictCount],
+      ["Pending MMSI review candidates", report.reviewQueue.pendingMmsiReviewCandidates],
+      ["Pending MMSI conflicts", report.reviewQueue.pendingMmsiConflicts],
       ["Created in window", report.reviewQueue.recordsCreatedInWindow],
       ["Updated in window", report.reviewQueue.recordsUpdatedInWindow]
     ]),
