@@ -16,6 +16,18 @@ export const GLOBAL_LOCAL_FILTER_DEFAULT_REVIEW_QUEUE_LIMIT = 10000;
 export const GLOBAL_LOCAL_FILTER_FLUSH_INTERVAL_MS = 5000;
 export const GLOBAL_LOCAL_FILTER_FLUSH_BATCH_SIZE = 100;
 export const GLOBAL_LOCAL_FILTER_MESSAGE_TYPES = ["PositionReport", "ShipStaticData"] as const;
+export const GLOBAL_LOCAL_FILTER_RAILWAY_REPORT_INTERVAL_MS = 60000;
+export const GLOBAL_LOCAL_FILTER_SHUTDOWN_TIMEOUT_MS = 20000;
+export const CRUISE_WORKER_ENVS = ["development", "railway-development", "production"] as const;
+export const CRUISE_WORKER_DATABASE_TARGET_CRUISES_DEV = "cruises-dev";
+export const CRUISE_WORKER_PRODUCTION_OVERRIDE = "CRUISE_WORKER_ALLOW_PRODUCTION";
+
+export type CruiseWorkerEnv = (typeof CRUISE_WORKER_ENVS)[number];
+export type GlobalLocalFilterWorkerSafety = {
+  workerEnv: CruiseWorkerEnv;
+  databaseTarget: string;
+  profile: string | null;
+};
 
 export type GlobalLocalFilterHealthStatus =
   | "HEALTHY"
@@ -132,6 +144,68 @@ type AisMessage = {
   };
 };
 
+type CruiseWorkerEnvironment = Record<string, string | undefined>;
+
+export function validateGlobalLocalFilterWorkerEnvironment(env: CruiseWorkerEnvironment = process.env): GlobalLocalFilterWorkerSafety {
+  const workerEnv = env.CRUISE_WORKER_ENV?.trim();
+  const databaseTarget = env.CRUISE_WORKER_DATABASE_TARGET?.trim();
+  const databaseUrl = env.DATABASE_URL?.trim();
+  const apiKey = env.AISSTREAM_API_KEY?.trim();
+  const profile = env.CRUISE_WORKER_PROFILE?.trim() || null;
+
+  if (!databaseUrl) throw new Error("Missing DATABASE_URL. global-local-filter refuses to start without an explicit database URL.");
+  if (!apiKey) throw new Error("Missing AISSTREAM_API_KEY. global-local-filter requires AISStream credentials.");
+  if (!workerEnv) throw new Error("Missing CRUISE_WORKER_ENV. Set it explicitly to development, railway-development, or production.");
+  if (!(CRUISE_WORKER_ENVS as readonly string[]).includes(workerEnv)) {
+    throw new Error(`Invalid CRUISE_WORKER_ENV "${workerEnv}". Supported values: ${CRUISE_WORKER_ENVS.join(", ")}.`);
+  }
+  if (!databaseTarget) throw new Error("Missing CRUISE_WORKER_DATABASE_TARGET. Set it to the logical target name, for example cruises-dev.");
+  if (workerEnv === "railway-development" && databaseTarget !== CRUISE_WORKER_DATABASE_TARGET_CRUISES_DEV) {
+    throw new Error("CRUISE_WORKER_ENV=railway-development requires CRUISE_WORKER_DATABASE_TARGET=cruises-dev.");
+  }
+  if (workerEnv === "production" && env[CRUISE_WORKER_PRODUCTION_OVERRIDE] !== "true") {
+    throw new Error(`CRUISE_WORKER_ENV=production is blocked unless ${CRUISE_WORKER_PRODUCTION_OVERRIDE}=true is set.`);
+  }
+  if (profile && profile !== "railway") {
+    throw new Error(`Invalid CRUISE_WORKER_PROFILE "${profile}". Supported value: railway.`);
+  }
+
+  return { workerEnv: workerEnv as CruiseWorkerEnv, databaseTarget, profile };
+}
+
+export function getGlobalLocalFilterDefaultReportIntervalMs(env: CruiseWorkerEnvironment = process.env) {
+  return env.CRUISE_WORKER_PROFILE?.trim() === "railway" ? GLOBAL_LOCAL_FILTER_RAILWAY_REPORT_INTERVAL_MS : GLOBAL_LOCAL_FILTER_DEFAULT_REPORT_INTERVAL_MS;
+}
+
+export function formatGlobalLocalFilterStartupSafetyLog(safety: GlobalLocalFilterWorkerSafety) {
+  return [
+    "global-local-filter startup safety",
+    `workerEnv=${safety.workerEnv}`,
+    `databaseTarget=${safety.databaseTarget}`,
+    `profile=${safety.profile ?? "default"}`
+  ].join(" | ");
+}
+
+export async function flushGlobalLocalFilterShutdown(options: {
+  writer: Pick<GlobalLocalFilterWriter, "flush">;
+  timeoutMs?: number;
+  disconnectPrisma?: () => Promise<void>;
+}) {
+  await Promise.race([
+    options.writer.flush(),
+    new Promise<void>((resolveTimeout) => setTimeout(resolveTimeout, options.timeoutMs ?? GLOBAL_LOCAL_FILTER_SHUTDOWN_TIMEOUT_MS))
+  ]);
+  await options.disconnectPrisma?.();
+}
+
+export async function waitForGlobalLocalFilterPendingMessages(getPendingCount: () => number, timeoutMs = GLOBAL_LOCAL_FILTER_SHUTDOWN_TIMEOUT_MS) {
+  const startedAt = Date.now();
+  while (getPendingCount() > 0 && Date.now() - startedAt < timeoutMs) {
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  return getPendingCount();
+}
+
 export function validateGlobalLocalFilterOptions(options: { maxRuntimeMs: number | null; reportIntervalMs: number; positionRetentionDays: number; reviewQueueLimit: number; allowLongRun?: boolean }) {
   if (options.maxRuntimeMs !== null && (!Number.isFinite(options.maxRuntimeMs) || options.maxRuntimeMs <= 0)) throw new Error("--max-runtime-ms requires a positive number.");
   if (options.maxRuntimeMs !== null && options.maxRuntimeMs > GLOBAL_LOCAL_FILTER_MAX_RUNTIME_WITHOUT_OVERRIDE_MS && !options.allowLongRun) {
@@ -232,6 +306,7 @@ export function createGlobalLocalFilterState(): GlobalLocalFilterState {
 }
 
 export async function runGlobalLocalFilterIngest(options: GlobalLocalFilterOptions) {
+  const safety = validateGlobalLocalFilterWorkerEnvironment();
   const apiKey = getAisStreamApiKey();
   if (!apiKey) throw new Error("Missing AISSTREAM_API_KEY.");
   if (!options.dryRun) await assertGlobalLocalFilterWriteTablesExist();
@@ -246,6 +321,7 @@ export async function runGlobalLocalFilterIngest(options: GlobalLocalFilterOptio
   let stopped = false;
   let socket: WebSocket | null = null;
 
+  console.warn(formatGlobalLocalFilterStartupSafetyLog(safety));
   console.warn("global-local-filter is local-development only. Stop benchmark/discovery/hybrid/verified-global workers before running this mode.");
 
   await new Promise<void>((resolve) => {
@@ -269,15 +345,24 @@ export async function runGlobalLocalFilterIngest(options: GlobalLocalFilterOptio
     reportTimer.unref?.();
     flushTimer.unref?.();
 
-    const finish = async () => {
+    let finishing: Promise<void> | null = null;
+    let shutdownFallbackTimer: ReturnType<typeof setTimeout> | null = null;
+    const finish = async (reason = "complete") => {
+      if (finishing) return finishing;
+      finishing = (async () => {
       stopped = true;
       clearInterval(reportTimer);
       clearInterval(flushTimer);
       if (stopTimer) clearTimeout(stopTimer);
-      await writer.flush();
+      if (shutdownFallbackTimer) clearTimeout(shutdownFallbackTimer);
+      process.off("SIGINT", handleSignal);
+      process.off("SIGTERM", handleSignal);
+      await waitForGlobalLocalFilterPendingMessages(() => pendingMessages, GLOBAL_LOCAL_FILTER_SHUTDOWN_TIMEOUT_MS);
+      await flushGlobalLocalFilterShutdown({ writer, timeoutMs: GLOBAL_LOCAL_FILTER_SHUTDOWN_TIMEOUT_MS });
       state.endedAt = new Date();
       state.connectedDurationMs = Date.now() - startedAtMs;
-      if (state.closeCode === 1000 || state.closeReason === "global-local-filter runtime complete") state.lastError = null;
+      if (reason !== "complete" && !state.closeReason) state.closeReason = reason;
+      if (state.closeCode === 1000 || state.closeReason === "global-local-filter runtime complete" || state.closeReason?.startsWith("signal ")) state.lastError = null;
       state.cpuEnd = process.cpuUsage(state.cpuStart);
       state.averageCpuPercent = calculateProcessCpuPercent(state.cpuEnd.user + state.cpuEnd.system, state.connectedDurationMs);
       state.memoryEndMb = getRssMb();
@@ -285,7 +370,26 @@ export async function runGlobalLocalFilterIngest(options: GlobalLocalFilterOptio
       state.eventLoopP95Ms = nsToMs(histogram.percentile(95));
       histogram.disable();
       resolve();
+      })();
+      return finishing;
     };
+
+    const handleSignal = (signal: NodeJS.Signals) => {
+      stopped = true;
+      state.closeReason = `signal ${signal}`;
+      console.warn(`global-local-filter received ${signal}; closing WebSocket and flushing pending writes.`);
+      try {
+        socket?.close(1000, `signal ${signal}`);
+      } catch (error) {
+        state.lastError = sanitizeLogValue(error);
+      }
+      shutdownFallbackTimer = setTimeout(() => {
+        void finish(`signal ${signal}`);
+      }, GLOBAL_LOCAL_FILTER_SHUTDOWN_TIMEOUT_MS);
+      shutdownFallbackTimer.unref?.();
+    };
+    process.once("SIGINT", handleSignal);
+    process.once("SIGTERM", handleSignal);
 
     const connect = () => {
       if (stopped) return;
@@ -301,6 +405,7 @@ export async function runGlobalLocalFilterIngest(options: GlobalLocalFilterOptio
         console.log(`AISStream global-local-filter connected | subscription=${JSON.stringify(getGlobalLocalFilterSubscriptionSummary(payload, Date.now() - openedAtMs))}`);
       });
       socket.addEventListener("message", (event) => {
+        if (stopped) return;
         pendingMessages += 1;
         state.peakPendingMessages = Math.max(state.peakPendingMessages, pendingMessages);
         if (pendingMessages > 1000 || writer.pendingCount() > GLOBAL_LOCAL_FILTER_FLUSH_BATCH_SIZE * 10) state.backlogObserved = true;
@@ -317,7 +422,7 @@ export async function runGlobalLocalFilterIngest(options: GlobalLocalFilterOptio
         state.closeCode = typeof event.code === "number" ? event.code : null;
         state.closeReason = sanitizeLogValue(event.reason) || null;
         if (stopped || (stopAtMs && Date.now() >= stopAtMs)) {
-          void finish();
+          void finish(state.closeReason ?? "complete");
           return;
         }
         state.reconnectCount += 1;

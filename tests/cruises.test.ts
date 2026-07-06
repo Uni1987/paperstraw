@@ -111,12 +111,17 @@ import {
   classifyGlobalLocalFilterStaticData,
   createGlobalLocalFilterState,
   createGlobalLocalFilterWriter,
+  flushGlobalLocalFilterShutdown,
+  formatGlobalLocalFilterStartupSafetyLog,
   formatGlobalLocalFilterReport,
   getGlobalLocalFilterHealthStatus,
+  getGlobalLocalFilterDefaultReportIntervalMs,
   getGlobalLocalFilterSubscriptionSummary,
   handleGlobalLocalFilterMessage,
   toGlobalLocalFilterReport,
+  validateGlobalLocalFilterWorkerEnvironment,
   validateGlobalLocalFilterOptions,
+  waitForGlobalLocalFilterPendingMessages,
   type GlobalLocalFilterPosition,
   type GlobalLocalFilterWriter,
   type StaticQueueItem,
@@ -136,6 +141,10 @@ import {
 afterEach(() => {
   delete process.env.AISSTREAM_BOUNDING_BOXES;
   delete process.env.CRUISE_AIS_INGEST_MODE;
+  delete process.env.CRUISE_WORKER_ENV;
+  delete process.env.CRUISE_WORKER_DATABASE_TARGET;
+  delete process.env.CRUISE_WORKER_PROFILE;
+  delete process.env.CRUISE_WORKER_ALLOW_PRODUCTION;
 });
 
 describe("cruise emissions estimation", () => {
@@ -1915,6 +1924,92 @@ describe("global-local-filter cruise ingest", () => {
     ).not.toThrow();
   });
 
+  it("fails closed when required Railway worker safety environment is missing or invalid", () => {
+    const baseEnv = globalLocalFilterWorkerEnv();
+
+    expect(() => validateGlobalLocalFilterWorkerEnvironment({ ...baseEnv, CRUISE_WORKER_ENV: undefined })).toThrow(/CRUISE_WORKER_ENV/);
+    expect(() => validateGlobalLocalFilterWorkerEnvironment({ ...baseEnv, CRUISE_WORKER_ENV: "staging" })).toThrow(/Invalid CRUISE_WORKER_ENV/);
+    expect(() => validateGlobalLocalFilterWorkerEnvironment({ ...baseEnv, DATABASE_URL: undefined })).toThrow(/DATABASE_URL/);
+    expect(() => validateGlobalLocalFilterWorkerEnvironment({ ...baseEnv, AISSTREAM_API_KEY: "" })).toThrow(/AISSTREAM_API_KEY/);
+    expect(() => validateGlobalLocalFilterWorkerEnvironment({ ...baseEnv, CRUISE_WORKER_DATABASE_TARGET: undefined })).toThrow(/CRUISE_WORKER_DATABASE_TARGET/);
+  });
+
+  it("requires cruises-dev as the Railway development database target", () => {
+    expect(() =>
+      validateGlobalLocalFilterWorkerEnvironment(globalLocalFilterWorkerEnv({ CRUISE_WORKER_ENV: "railway-development", CRUISE_WORKER_DATABASE_TARGET: "production" }))
+    ).toThrow(/cruises-dev/);
+
+    expect(validateGlobalLocalFilterWorkerEnvironment(globalLocalFilterWorkerEnv({ CRUISE_WORKER_ENV: "railway-development" }))).toMatchObject({
+      workerEnv: "railway-development",
+      databaseTarget: "cruises-dev"
+    });
+  });
+
+  it("blocks production worker mode unless the explicit future override is present", () => {
+    expect(() => validateGlobalLocalFilterWorkerEnvironment(globalLocalFilterWorkerEnv({ CRUISE_WORKER_ENV: "production" }))).toThrow(/CRUISE_WORKER_ALLOW_PRODUCTION/);
+    expect(
+      validateGlobalLocalFilterWorkerEnvironment(
+        globalLocalFilterWorkerEnv({
+          CRUISE_WORKER_ENV: "production",
+          CRUISE_WORKER_ALLOW_PRODUCTION: "true"
+        })
+      )
+    ).toMatchObject({ workerEnv: "production" });
+  });
+
+  it("keeps explicit local development supported and applies the Railway profile report interval", () => {
+    expect(validateGlobalLocalFilterWorkerEnvironment(globalLocalFilterWorkerEnv({ CRUISE_WORKER_ENV: "development" }))).toMatchObject({
+      workerEnv: "development",
+      databaseTarget: "cruises-dev"
+    });
+    expect(getGlobalLocalFilterDefaultReportIntervalMs(globalLocalFilterWorkerEnv())).toBe(30000);
+    expect(getGlobalLocalFilterDefaultReportIntervalMs(globalLocalFilterWorkerEnv({ CRUISE_WORKER_PROFILE: "railway" }))).toBe(60000);
+  });
+
+  it("formats startup safety logs without leaking database URLs or API keys", () => {
+    const safety = validateGlobalLocalFilterWorkerEnvironment(globalLocalFilterWorkerEnv({ CRUISE_WORKER_PROFILE: "railway" }));
+    const output = formatGlobalLocalFilterStartupSafetyLog(safety);
+
+    expect(output).toContain("workerEnv=development");
+    expect(output).toContain("databaseTarget=cruises-dev");
+    expect(output).toContain("profile=railway");
+    expect(output).not.toContain("postgres://user:password@example.invalid/cruises-dev");
+    expect(output).not.toContain("secret-ais-key");
+  });
+
+  it("flushes pending writes and disconnects during bounded shutdown", async () => {
+    const calls: string[] = [];
+    await flushGlobalLocalFilterShutdown({
+      writer: {
+        async flush() {
+          calls.push("flush");
+        }
+      },
+      disconnectPrisma: async () => {
+        calls.push("disconnect");
+      },
+      timeoutMs: 50
+    });
+
+    expect(calls).toEqual(["flush", "disconnect"]);
+  });
+
+  it("waits boundedly for in-flight global-local-filter messages during shutdown", async () => {
+    let pending = 1;
+    const timer = setTimeout(() => {
+      pending = 0;
+    }, 10);
+
+    await expect(waitForGlobalLocalFilterPendingMessages(() => pending, 100)).resolves.toBe(0);
+    clearTimeout(timer);
+  });
+
+  it("does not introduce reconcile apply behavior into the global-local-filter worker", () => {
+    const source = readFileSync("lib/cruises/globalLocalFilterIngest.ts", "utf8");
+
+    expect(source).not.toMatch(/reconcileCruiseCandidate|registry:reconcile|--apply/);
+  });
+
   it("stores only known verified MMSI PositionReports and discards unknown MMSIs", async () => {
     const state = createGlobalLocalFilterState();
     const writer = fakeGlobalLocalFilterWriter();
@@ -2529,6 +2624,16 @@ function globalLocalFilterLookup(): VerifiedCruiseLookup {
       ["9837420", { registryEntryId: "registry-linked", linkedMmsi: "244123456" }],
       ["9137363", { registryEntryId: "registry-unlinked", linkedMmsi: null }]
     ])
+  };
+}
+
+function globalLocalFilterWorkerEnv(overrides: Record<string, string | undefined> = {}): Record<string, string | undefined> {
+  return {
+    DATABASE_URL: "postgres://user:password@example.invalid/cruises-dev",
+    AISSTREAM_API_KEY: "secret-ais-key",
+    CRUISE_WORKER_ENV: "development",
+    CRUISE_WORKER_DATABASE_TARGET: "cruises-dev",
+    ...overrides
   };
 }
 

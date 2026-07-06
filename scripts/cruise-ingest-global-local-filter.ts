@@ -1,9 +1,9 @@
 import { loadProjectEnv } from "@/lib/env/loadProjectEnv";
 import {
   GLOBAL_LOCAL_FILTER_DEFAULT_POSITION_RETENTION_DAYS,
-  GLOBAL_LOCAL_FILTER_DEFAULT_REPORT_INTERVAL_MS,
   GLOBAL_LOCAL_FILTER_DEFAULT_REVIEW_QUEUE_LIMIT,
   formatGlobalLocalFilterReport,
+  getGlobalLocalFilterDefaultReportIntervalMs,
   runGlobalLocalFilterIngest,
   validateGlobalLocalFilterOptions
 } from "@/lib/cruises/globalLocalFilterIngest";
@@ -29,7 +29,7 @@ function parseArgs(args: string[]) {
     allowLongRun: boolean;
   } = {
     maxRuntimeMs: null,
-    reportIntervalMs: GLOBAL_LOCAL_FILTER_DEFAULT_REPORT_INTERVAL_MS,
+    reportIntervalMs: getGlobalLocalFilterDefaultReportIntervalMs(),
     positionRetentionDays: GLOBAL_LOCAL_FILTER_DEFAULT_POSITION_RETENTION_DAYS,
     reviewQueueLimit: GLOBAL_LOCAL_FILTER_DEFAULT_REVIEW_QUEUE_LIMIT,
     dryRun: false,
