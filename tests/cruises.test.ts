@@ -137,6 +137,22 @@ import {
   summarizeObservedVerifiedPositions,
   type GlobalLocalFilterStatusReport
 } from "@/lib/cruises/globalLocalFilterStatus";
+import {
+  MMSI_REVIEW_APPLIED_MARKER,
+  assertMmsiReviewMutationTarget,
+  buildAppliedResolutionNote,
+  buildApprovalResolutionNote,
+  buildDismissalResolutionNote,
+  evaluateApprovedCandidateForApply,
+  evaluateMmsiCandidateForApproval,
+  formatMmsiReviewReport,
+  isAppliedReviewNote,
+  isApprovedReviewNote,
+  isDismissedReviewNote,
+  parseMmsiReviewArgs,
+  type MmsiReviewListReport,
+  type MmsiReviewRow
+} from "@/lib/cruises/mmsiReviewWorkflow";
 
 afterEach(() => {
   delete process.env.AISSTREAM_BOUNDING_BOXES;
@@ -2358,6 +2374,136 @@ describe("global-local-filter status reporting", () => {
     expect(summary.writeRows).toBe(0);
   });
 });
+
+describe("cruise MMSI review workflow", () => {
+  it("lists pending candidates with identifiers hidden by default", () => {
+    const report = mmsiReviewReport();
+    const output = formatMmsiReviewReport(report, "terminal");
+
+    expect(output).toContain("Cruise MMSI candidate review queue");
+    expect(output).toContain("Identifiers: hidden");
+    expect(output).toContain("NEW_MMSI_CANDIDATE_FOR_EXISTING_REGISTRY_ENTRY");
+    expect(output).not.toContain("244123456");
+    expect(output).not.toContain("9837420");
+    expect(output).not.toContain("Example Cruise");
+    expect(output).not.toContain("rawPayload");
+    expect(output).not.toContain("secret");
+  });
+
+  it("only exposes explicit review identifiers when requested", () => {
+    const report = mmsiReviewReport({ includeIdentifiers: true });
+    const output = formatMmsiReviewReport(report, "json");
+
+    expect(output).toContain("244123456");
+    expect(output).toContain("9837420");
+    expect(output).toContain("Example Cruise");
+    expect(output).toContain("registryHasLinkedMmsi");
+    expect(output).not.toContain("rawPayload");
+    expect(output).not.toContain("APIKey");
+    expect(output).not.toContain("postgres://");
+  });
+
+  it("requires explicit notes for approval and dismissal commands", () => {
+    expect(() => parseMmsiReviewArgs(["--approve", "queue-1"])).toThrow(/--note/);
+    expect(() => parseMmsiReviewArgs(["--dismiss"])).toThrow(/queue id/);
+    expect(() => parseMmsiReviewArgs(["--dismiss", "queue-1", "--note", "not enough evidence"])).not.toThrow();
+    expect(parseMmsiReviewArgs(["--apply-approved"]).action).toMatchObject({ kind: "apply-approved", dryRun: true, confirm: false });
+    expect(parseMmsiReviewArgs(["--apply-approved", "--confirm"]).action).toMatchObject({ kind: "apply-approved", dryRun: false, confirm: true });
+  });
+
+  it("approves only exact accepted registry MMSI candidates without conflicts", () => {
+    expect(evaluateMmsiCandidateForApproval(mmsiReviewRow())).toBeNull();
+    expect(evaluateMmsiCandidateForApproval(mmsiReviewRow({ classification: "MMSI_CONFLICT_REVIEW_REQUIRED" }))).toBe("wrong classification");
+    expect(evaluateMmsiCandidateForApproval(mmsiReviewRow({ reviewStatus: "REVIEWED" }))).toBe("queue record is not pending");
+    expect(evaluateMmsiCandidateForApproval(mmsiReviewRow({ registryDecision: "EXCLUDE" }))).toBe("registry decision is not ACCEPT");
+    expect(evaluateMmsiCandidateForApproval(mmsiReviewRow({ registryImo: "1234568" }))).toBe("registry IMO exact-match requirement is absent");
+    expect(evaluateMmsiCandidateForApproval(mmsiReviewRow({ observedMmsi: "bad" }))).toBe("observed MMSI is invalid");
+    expect(evaluateMmsiCandidateForApproval(mmsiReviewRow({ linkedMmsi: "111111111" }))).toBe("registry entry already has a different linked MMSI");
+    expect(evaluateMmsiCandidateForApproval(mmsiReviewRow({ observedMmsiLinkedElsewhere: true }))).toBe("observed MMSI is already linked elsewhere");
+    expect(evaluateMmsiCandidateForApproval(mmsiReviewRow({ hasUnresolvedConflict: true }))).toBe("unresolved MMSI conflict exists");
+  });
+
+  it("approval and dismissal notes do not imply a linked MMSI was applied", () => {
+    const approvalNote = buildApprovalResolutionNote("Official source reviewed", new Date("2026-07-07T10:00:00Z"));
+    const dismissalNote = buildDismissalResolutionNote("Conflicting evidence", new Date("2026-07-07T10:00:00Z"));
+
+    expect(isApprovedReviewNote(approvalNote)).toBe(true);
+    expect(isDismissedReviewNote(dismissalNote)).toBe(true);
+    expect(isAppliedReviewNote(approvalNote)).toBe(false);
+    expect(isAppliedReviewNote(dismissalNote)).toBe(false);
+  });
+
+  it("applies only previously approved eligible queue records", () => {
+    const approvedNote = buildApprovalResolutionNote("Two public sources checked", new Date("2026-07-07T10:00:00Z"));
+    expect(evaluateApprovedCandidateForApply(mmsiReviewRow({ reviewStatus: "REVIEWED", resolutionNotes: approvedNote }))).toBeNull();
+    expect(evaluateApprovedCandidateForApply(mmsiReviewRow({ reviewStatus: "PENDING", resolutionNotes: approvedNote }))).toBe("not approved");
+    expect(evaluateApprovedCandidateForApply(mmsiReviewRow({ reviewStatus: "REVIEWED", resolutionNotes: null }))).toBe("missing explicit approval note");
+    expect(evaluateApprovedCandidateForApply(mmsiReviewRow({ reviewStatus: "REVIEWED", resolutionNotes: buildAppliedResolutionNote(approvedNote) }))).toBe("already applied");
+    expect(evaluateApprovedCandidateForApply(mmsiReviewRow({ reviewStatus: "REVIEWED", resolutionNotes: approvedNote, targetShipCount: 0, targetShipId: null }))).toBe(
+      "expected exactly one existing cruise identity record for registry IMO"
+    );
+    expect(evaluateApprovedCandidateForApply(mmsiReviewRow({ reviewStatus: "REVIEWED", resolutionNotes: approvedNote, targetShipMmsi: "111111111" }))).toBe(
+      "target ship already has a different MMSI"
+    );
+  });
+
+  it("requires the cruises-dev target for mutating review actions", () => {
+    expect(() => assertMmsiReviewMutationTarget({ CRUISE_WORKER_ENV: "production", CRUISE_WORKER_DATABASE_TARGET: "cruises-dev" })).toThrow(/development/);
+    expect(() => assertMmsiReviewMutationTarget({ CRUISE_WORKER_ENV: "development", CRUISE_WORKER_DATABASE_TARGET: "production" })).toThrow(/cruises-dev/);
+    expect(assertMmsiReviewMutationTarget({ CRUISE_WORKER_ENV: "railway-development", CRUISE_WORKER_DATABASE_TARGET: "cruises-dev" })).toMatchObject({
+      databaseTarget: "cruises-dev"
+    });
+  });
+
+  it("keeps registry reconcile apply separate from queue review", () => {
+    const source = readFileSync("scripts/reconcile-cruise-registry.ts", "utf8");
+    const reviewSource = readFileSync("lib/cruises/mmsiReviewWorkflow.ts", "utf8");
+
+    expect(source).not.toContain("cruise_static_data_review_queue");
+    expect(source).not.toContain("APPROVED_MMSI_LINK");
+    expect(source).not.toContain("observedMmsi");
+    expect(reviewSource).toContain("prisma.$transaction");
+    expect(reviewSource).toContain("pnpm cruises:registry:reconcile -- --dry-run");
+    expect(reviewSource).not.toContain("pnpm cruises:registry:reconcile -- --apply");
+  });
+});
+
+function mmsiReviewReport(overrides: Partial<Omit<MmsiReviewListReport, "rows">> & { row?: Partial<MmsiReviewRow> } = {}): MmsiReviewListReport {
+  return {
+    generatedAt: "2026-07-07T10:00:00.000Z",
+    status: "pending",
+    totalRows: 1,
+    includeIdentifiers: false,
+    ...overrides,
+    rows: [mmsiReviewRow(overrides.row)]
+  };
+}
+
+function mmsiReviewRow(overrides: Partial<MmsiReviewRow> = {}): MmsiReviewRow {
+  return {
+    id: "queue-1",
+    registryEntryId: "registry-1",
+    observedMmsi: "244123456",
+    classification: "NEW_MMSI_CANDIDATE_FOR_EXISTING_REGISTRY_ENTRY",
+    reviewStatus: "PENDING",
+    occurrenceCount: 2,
+    firstSeenAt: new Date("2026-07-07T09:00:00Z"),
+    lastSeenAt: new Date("2026-07-07T10:00:00Z"),
+    resolvedAt: null,
+    resolutionNotes: null,
+    registryName: "Example Cruise",
+    registryOperator: "Example Operator",
+    registryImo: "9837420",
+    registryDecision: "ACCEPT",
+    linkedMmsi: null,
+    observedMmsiLinkedElsewhere: false,
+    hasUnresolvedConflict: false,
+    targetShipCount: 1,
+    targetShipId: "ship-1",
+    targetShipMmsi: null,
+    ...overrides
+  };
+}
 
 function identity(overrides: Partial<CruiseShipIdentityInput>): CruiseShipIdentityInput {
   return {
