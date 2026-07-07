@@ -145,13 +145,17 @@ import {
   buildDismissalResolutionNote,
   evaluateApprovedCandidateForApply,
   evaluateMmsiCandidateForApproval,
+  formatMmsiReviewDiagnosticsReport,
   formatMmsiReviewReport,
+  formatMmsiReviewRepairPlan,
   getApprovedCandidateApplyPlan,
   isAppliedReviewNote,
   isApprovedReviewNote,
   isDismissedReviewNote,
   parseMmsiReviewArgs,
+  type MmsiReviewApplyDiagnosticsReport,
   type MmsiReviewListReport,
+  type MmsiReviewRepairPlan,
   type MmsiReviewRow
 } from "@/lib/cruises/mmsiReviewWorkflow";
 
@@ -2480,6 +2484,95 @@ describe("cruise MMSI review workflow", () => {
     expect(reviewSource).toContain("pnpm cruises:registry:reconcile -- --dry-run");
     expect(reviewSource).not.toContain("pnpm cruises:registry:reconcile -- --apply");
   });
+
+  it("guarantees future apply writes verification before marking a queue row applied", () => {
+    const reviewSource = readFileSync("lib/cruises/mmsiReviewWorkflow.ts", "utf8");
+    const verificationIndex = reviewSource.indexOf("ensureApprovedMmsiLinkState(tx, row, plan.shipId, queueId)");
+    const markerIndex = reviewSource.indexOf("buildAppliedResolutionNote(row.resolutionNotes)");
+
+    expect(reviewSource).toContain("tx.cruiseVesselVerification.upsert");
+    expect(reviewSource).toContain("verifyAppliedMmsiLinkState(tx, row, shipId)");
+    expect(verificationIndex).toBeGreaterThan(-1);
+    expect(markerIndex).toBeGreaterThan(-1);
+    expect(verificationIndex).toBeLessThan(markerIndex);
+  });
+
+  it("diagnoses applied queue rows whose identity exists but verification is missing", () => {
+    const report = mmsiApplyDiagnosticsReport({
+      rows: [
+        {
+          queueId: "queue-1",
+          registryImo: "9837420",
+          observedMmsi: "244123456",
+          reviewStatus: "REVIEWED",
+          queueState: "applied",
+          registryHasLinkedMmsi: false,
+          cruiseIdentityHasMmsi: true,
+          verificationState: "missing",
+          publicEligible: false,
+          reason: "missing cruise vessel verification"
+        }
+      ]
+    });
+
+    const output = formatMmsiReviewDiagnosticsReport(report, "terminal");
+
+    expect(output).toContain("Inconsistent applied rows: 1");
+    expect(output).toContain("queue state: applied");
+    expect(output).toContain("cruise identity MMSI linkage: yes");
+    expect(output).toContain("verification state: missing");
+    expect(output).toContain("public eligible: no");
+    expect(output).toContain("missing cruise vessel verification");
+    expect(output).not.toContain("rawPayload");
+    expect(output).not.toContain("postgres://");
+  });
+
+  it("diagnoses applied rows as consistent when registry linkage and public eligibility agree", () => {
+    const report = mmsiApplyDiagnosticsReport({
+      inconsistentAppliedRows: 0,
+      rows: [
+        {
+          queueId: "queue-2",
+          registryImo: "9837420",
+          observedMmsi: "244123456",
+          reviewStatus: "REVIEWED",
+          queueState: "applied",
+          registryHasLinkedMmsi: true,
+          cruiseIdentityHasMmsi: true,
+          verificationState: "eligible",
+          publicEligible: true,
+          reason: null
+        }
+      ]
+    });
+
+    const output = formatMmsiReviewDiagnosticsReport(report, "json");
+
+    expect(output).toContain('"inconsistentAppliedRows": 0');
+    expect(output).toContain('"registryHasLinkedMmsi": true');
+    expect(output).toContain('"publicEligible": true');
+  });
+
+  it("keeps applied MMSI repair planning dry-run only", () => {
+    const plan: MmsiReviewRepairPlan = {
+      mode: "dry-run",
+      generatedAt: "2026-07-07T10:00:00.000Z",
+      rowsConsidered: 2,
+      wouldRepair: 1,
+      skipped: [{ queueId: "queue-2", reason: "already public eligible" }],
+      skippedByReason: { "already public eligible": 1 },
+      databaseWritesAttempted: 0,
+      followUp: "No confirm mode is implemented."
+    };
+
+    const output = formatMmsiReviewRepairPlan(plan, "terminal");
+
+    expect(output).toContain("Mode: dry-run");
+    expect(output).toContain("Would repair: 1");
+    expect(output).toContain("Database writes attempted: 0");
+    expect(output).not.toContain("--confirm");
+    expect(output).not.toContain("rawPayload");
+  });
 });
 
 function mmsiReviewReport(overrides: Partial<Omit<MmsiReviewListReport, "rows">> & { row?: Partial<MmsiReviewRow> } = {}): MmsiReviewListReport {
@@ -2490,6 +2583,17 @@ function mmsiReviewReport(overrides: Partial<Omit<MmsiReviewListReport, "rows">>
     includeIdentifiers: false,
     ...overrides,
     rows: [mmsiReviewRow(overrides.row)]
+  };
+}
+
+function mmsiApplyDiagnosticsReport(overrides: Partial<MmsiReviewApplyDiagnosticsReport> = {}): MmsiReviewApplyDiagnosticsReport {
+  return {
+    generatedAt: "2026-07-07T10:00:00.000Z",
+    status: "reviewed",
+    totalRows: overrides.rows?.length ?? 0,
+    inconsistentAppliedRows: overrides.rows?.filter((row) => row.queueState === "applied" && !row.publicEligible).length ?? 0,
+    rows: [],
+    ...overrides
   };
 }
 

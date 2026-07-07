@@ -37,6 +37,8 @@
     "cruises:ingest-global-local-filter": "tsx scripts/cruise-ingest-global-local-filter.ts",
     "cruises:global-local-filter:status": "tsx scripts/cruise-global-local-filter-status.ts",
     "cruises:review-mmsi-candidates": "tsx scripts/review-cruise-mmsi-candidates.ts",
+    "cruises:diagnose-mmsi-review-apply": "tsx scripts/diagnose-cruise-mmsi-review-apply.ts",
+    "cruises:repair-applied-mmsi-links": "tsx scripts/repair-applied-cruise-mmsi-links.ts",
     "cruises:cleanup-global-local-filter-data": "tsx scripts/cruise-cleanup-global-local-filter-data.ts"
   },
   "dependencies": {

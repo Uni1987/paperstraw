@@ -83,6 +83,38 @@ export type MmsiApplyPlan =
   | { action: "update-existing-identity"; shipId: string }
   | { action: "create-registry-linked-identity" };
 
+export type MmsiReviewApplyDiagnosticRow = {
+  queueId: string;
+  registryImo: string | null;
+  observedMmsi: string;
+  reviewStatus: string;
+  queueState: string;
+  registryHasLinkedMmsi: boolean;
+  cruiseIdentityHasMmsi: boolean;
+  verificationState: "eligible" | "missing" | "not-high-confidence" | "wrong-registry" | "wrong-status";
+  publicEligible: boolean;
+  reason: string | null;
+};
+
+export type MmsiReviewApplyDiagnosticsReport = {
+  generatedAt: string;
+  status: MmsiReviewStatusFilter;
+  totalRows: number;
+  inconsistentAppliedRows: number;
+  rows: MmsiReviewApplyDiagnosticRow[];
+};
+
+export type MmsiReviewRepairPlan = {
+  mode: "dry-run";
+  generatedAt: string;
+  rowsConsidered: number;
+  wouldRepair: number;
+  skipped: Array<{ queueId: string; reason: string }>;
+  skippedByReason: Record<string, number>;
+  databaseWritesAttempted: 0;
+  followUp: string;
+};
+
 type MmsiReviewSqlRow = {
   id: string;
   registryEntryId: string;
@@ -107,6 +139,20 @@ type MmsiReviewSqlRow = {
 };
 
 type MmsiReviewDbClient = typeof prisma | Prisma.TransactionClient;
+
+type MmsiReviewDiagnosticSqlRow = {
+  queue_id: string;
+  registry_imo: string | null;
+  observed_mmsi: string;
+  review_status: string;
+  queue_state: string;
+  registry_has_linked_mmsi: boolean;
+  cruise_identity_has_mmsi: boolean;
+  verification_status: string | null;
+  confidence: string | null;
+  verification_registry_entry_id: string | null;
+  public_eligible: boolean;
+};
 
 export function parseMmsiReviewArgs(args: string[]): MmsiReviewOptions {
   const options: MmsiReviewOptions = {
@@ -305,6 +351,99 @@ export function formatMmsiReviewActionResult(result: MmsiReviewActionResult | Mm
   ].join("\n") + "\n";
 }
 
+export function formatMmsiReviewDiagnosticsReport(report: MmsiReviewApplyDiagnosticsReport, format: MmsiReviewFormat) {
+  if (format === "json") return JSON.stringify(report, null, 2) + "\n";
+  if (format === "markdown") {
+    return [
+      "# Cruise MMSI Review Apply Diagnostics",
+      "",
+      `- Generated: ${report.generatedAt}`,
+      `- Status filter: ${report.status}`,
+      `- Rows: ${report.totalRows}`,
+      `- Inconsistent applied rows: ${report.inconsistentAppliedRows}`,
+      "",
+      toMarkdownTable(
+        ["Queue ID", "Registry IMO", "Observed MMSI", "State", "Registry link", "Identity link", "Verification", "Public eligible", "Reason"],
+        report.rows.map((row) => [
+          row.queueId,
+          row.registryImo ?? "Unknown",
+          row.observedMmsi,
+          row.queueState,
+          row.registryHasLinkedMmsi ? "yes" : "no",
+          row.cruiseIdentityHasMmsi ? "yes" : "no",
+          row.verificationState,
+          row.publicEligible ? "yes" : "no",
+          row.reason ?? "none"
+        ])
+      ),
+      ""
+    ].join("\n");
+  }
+  return [
+    "Cruise MMSI review apply diagnostics",
+    `Generated: ${report.generatedAt}`,
+    `Status filter: ${report.status}`,
+    `Rows: ${report.totalRows}`,
+    `Inconsistent applied rows: ${report.inconsistentAppliedRows}`,
+    "",
+    ...report.rows.flatMap((row, index) => [
+      `${index + 1}. ${row.queueId}`,
+      `   registry IMO: ${row.registryImo ?? "Unknown"}`,
+      `   observed MMSI: ${row.observedMmsi}`,
+      `   review status: ${row.reviewStatus}`,
+      `   queue state: ${row.queueState}`,
+      `   registry-level MMSI linkage: ${row.registryHasLinkedMmsi ? "yes" : "no"}`,
+      `   cruise identity MMSI linkage: ${row.cruiseIdentityHasMmsi ? "yes" : "no"}`,
+      `   verification state: ${row.verificationState}`,
+      `   public eligible: ${row.publicEligible ? "yes" : "no"}`,
+      `   reason: ${row.reason ?? "none"}`,
+      ""
+    ])
+  ].join("\n");
+}
+
+export function formatMmsiReviewRepairPlan(plan: MmsiReviewRepairPlan, format: MmsiReviewFormat) {
+  if (format === "json") return JSON.stringify(plan, null, 2) + "\n";
+  const lines = [
+    "Cruise MMSI applied-link repair plan",
+    `Generated: ${plan.generatedAt}`,
+    `Mode: ${plan.mode}`,
+    `Rows considered: ${plan.rowsConsidered}`,
+    `Would repair: ${plan.wouldRepair}`,
+    `Skipped: ${plan.skipped.length}`,
+    `Database writes attempted: ${plan.databaseWritesAttempted}`,
+    "",
+    "Skip reasons:",
+    ...formatSkipReasons(plan.skippedByReason),
+    "",
+    "Skipped rows:",
+    ...formatSkippedRows(plan.skipped),
+    "",
+    plan.followUp
+  ];
+  if (format === "markdown") {
+    return [
+      "# Cruise MMSI Applied-Link Repair Plan",
+      "",
+      `- Generated: ${plan.generatedAt}`,
+      `- Mode: ${plan.mode}`,
+      `- Rows considered: ${plan.rowsConsidered}`,
+      `- Would repair: ${plan.wouldRepair}`,
+      `- Database writes attempted: ${plan.databaseWritesAttempted}`,
+      "",
+      "Skip reasons:",
+      ...formatSkipReasons(plan.skippedByReason),
+      "",
+      "Skipped rows:",
+      ...formatSkippedRows(plan.skipped),
+      "",
+      plan.followUp,
+      ""
+    ].join("\n");
+  }
+  return `${lines.join("\n")}\n`;
+}
+
 export async function writeMmsiReviewOutput(path: string, content: string, force = false) {
   const outputPath = resolve(path);
   if (!force && existsSync(outputPath)) throw new Error(`Output file already exists: ${outputPath}. Use --force to overwrite.`);
@@ -388,19 +527,67 @@ export async function applyApprovedMmsiReviewCandidates(options: { confirm: bool
   return result;
 }
 
+export async function diagnoseMmsiReviewApplyConsistency(options: { status: MmsiReviewStatusFilter; limit: number }): Promise<MmsiReviewApplyDiagnosticsReport> {
+  const rows = await fetchReviewDiagnosticsRows(options.status, options.limit);
+  return {
+    generatedAt: new Date().toISOString(),
+    status: options.status,
+    totalRows: rows.length,
+    inconsistentAppliedRows: rows.filter((row) => row.queueState === "applied" && !row.publicEligible).length,
+    rows
+  };
+}
+
+export async function planAppliedMmsiLinkRepair(): Promise<MmsiReviewRepairPlan> {
+  const report = await diagnoseMmsiReviewApplyConsistency({ status: "reviewed", limit: 10000 });
+  const plan: MmsiReviewRepairPlan = {
+    mode: "dry-run",
+    generatedAt: new Date().toISOString(),
+    rowsConsidered: report.rows.length,
+    wouldRepair: 0,
+    skipped: [],
+    skippedByReason: {},
+    databaseWritesAttempted: 0,
+    followUp: "No confirm mode is implemented. Review this plan before designing a separately tested repair apply command."
+  };
+
+  for (const row of report.rows) {
+    if (row.queueState !== "applied") {
+      addRepairSkip(plan, row.queueId, "not applied");
+      continue;
+    }
+    if (row.publicEligible) {
+      addRepairSkip(plan, row.queueId, "already public eligible");
+      continue;
+    }
+    if (!row.cruiseIdentityHasMmsi) {
+      addRepairSkip(plan, row.queueId, "missing cruise identity MMSI link");
+      continue;
+    }
+    if (!isVerificationRepairCandidate(row.verificationState)) {
+      addRepairSkip(plan, row.queueId, row.reason ?? "not safely repairable by verification creation");
+      continue;
+    }
+    plan.wouldRepair += 1;
+  }
+
+  return plan;
+}
+
 async function applySingleApprovedMmsi(queueId: string) {
-  return prisma.$transaction(async (tx) => {
-    const row = await fetchReviewRowById(queueId, tx);
-    if (!row) return { applied: false, reason: "queue record no longer exists" };
-    const plan = getApprovedCandidateApplyPlan(row);
-    if (typeof plan === "string") return { applied: false, reason: plan };
-    try {
+  try {
+    return await prisma.$transaction(async (tx) => {
+      const row = await fetchReviewRowById(queueId, tx);
+      if (!row) return { applied: false, reason: "queue record no longer exists" };
+      const plan = getApprovedCandidateApplyPlan(row);
+      if (typeof plan === "string") return { applied: false, reason: plan };
       if (plan.action === "update-existing-identity") {
         const updated = await tx.cruiseShip.updateMany({
           where: { id: plan.shipId, OR: [{ mmsi: null }, { mmsi: row.observedMmsi }] },
           data: { mmsi: row.observedMmsi }
         });
         if (updated.count !== 1) return { applied: false, reason: "target ship MMSI changed before apply" };
+        await ensureApprovedMmsiLinkState(tx, row, plan.shipId, queueId);
       } else {
         const ship = await tx.cruiseShip.create({
           data: {
@@ -428,6 +615,7 @@ async function applySingleApprovedMmsi(queueId: string) {
             assessedAt: new Date()
           }
         });
+        await verifyAppliedMmsiLinkState(tx, row, ship.id);
       }
       await tx.cruiseStaticDataReviewQueue.update({
         where: { id: queueId },
@@ -437,13 +625,70 @@ async function applySingleApprovedMmsi(queueId: string) {
         }
       });
       return { applied: true, reason: "applied" };
-    } catch {
-      return { applied: false, reason: "database constraint prevented MMSI link" };
+    });
+  } catch {
+    return { applied: false, reason: "database constraint prevented MMSI link" };
+  }
+}
+
+async function ensureApprovedMmsiLinkState(tx: Prisma.TransactionClient, row: MmsiReviewRow, shipId: string, queueId: string) {
+  await tx.cruiseVesselVerification.upsert({
+    where: { shipId },
+    create: {
+      shipId,
+      registryEntryId: row.registryEntryId,
+      verificationStatus: "VERIFIED_OCEAN_CRUISE",
+      confidence: "HIGH",
+      decisionSource: "STATIC_DATA_REVIEW_QUEUE_APPROVED_MMSI",
+      evidence: {
+        queueRecordId: queueId,
+        source: "GLOBAL_LOCAL_FILTER",
+        method: "exact accepted registry IMO with explicit MMSI review approval"
+      },
+      assessedAt: new Date()
+    },
+    update: {
+      registryEntryId: row.registryEntryId,
+      verificationStatus: "VERIFIED_OCEAN_CRUISE",
+      confidence: "HIGH",
+      decisionSource: "STATIC_DATA_REVIEW_QUEUE_APPROVED_MMSI",
+      evidence: {
+        queueRecordId: queueId,
+        source: "GLOBAL_LOCAL_FILTER",
+        method: "exact accepted registry IMO with explicit MMSI review approval"
+      },
+      assessedAt: new Date()
     }
   });
+  await verifyAppliedMmsiLinkState(tx, row, shipId);
+}
+
+async function verifyAppliedMmsiLinkState(tx: Prisma.TransactionClient, row: MmsiReviewRow, shipId: string) {
+  const linkedRows = await tx.$queryRaw<Array<{ ok: boolean }>>`
+    SELECT EXISTS (
+      SELECT 1
+      FROM cruise_ships s
+      INNER JOIN cruise_vessel_verifications v ON v.ship_id = s.id
+      INNER JOIN cruise_vessel_registry_entries r ON r.id = v.registry_entry_id
+      WHERE s.id = ${shipId}
+        AND s.imo = ${row.registryImo}
+        AND s.mmsi = ${row.observedMmsi}
+        AND v.registry_entry_id = ${row.registryEntryId}
+        AND v.verification_status = 'VERIFIED_OCEAN_CRUISE'
+        AND v.confidence = 'HIGH'
+        AND r.registry_decision = 'ACCEPT'
+        AND r.imo = s.imo
+    ) AS ok
+  `;
+  if (!linkedRows[0]?.ok) throw new Error("MMSI apply did not produce a public-eligible registry linkage.");
 }
 
 function addApplySkip(result: MmsiApplyApprovedResult, queueId: string, reason: string) {
+  result.skipped.push({ queueId, reason });
+  result.skippedByReason[reason] = (result.skippedByReason[reason] ?? 0) + 1;
+}
+
+function addRepairSkip(result: MmsiReviewRepairPlan, queueId: string, reason: string) {
   result.skipped.push({ queueId, reason });
   result.skippedByReason[reason] = (result.skippedByReason[reason] ?? 0) + 1;
 }
@@ -526,6 +771,102 @@ async function fetchReviewRows(status: MmsiReviewStatusFilter, limit: number, qu
     LIMIT ${limit}
   `;
   return rows.map(normalizeReviewRow);
+}
+
+async function fetchReviewDiagnosticsRows(status: MmsiReviewStatusFilter, limit: number): Promise<MmsiReviewApplyDiagnosticRow[]> {
+  const statusSql = status === "all" ? null : status.toUpperCase();
+  const rows = await prisma.$queryRaw<MmsiReviewDiagnosticSqlRow[]>`
+    SELECT
+      q.id AS queue_id,
+      r.imo AS registry_imo,
+      q.observed_mmsi,
+      q.review_status::text,
+      CASE
+        WHEN q.resolution_notes LIKE ${`%${MMSI_REVIEW_APPLIED_MARKER}%`} THEN 'applied'
+        WHEN q.resolution_notes LIKE ${`%${MMSI_REVIEW_APPROVAL_MARKER}%`} THEN 'approved-not-applied'
+        WHEN q.resolution_notes LIKE ${`%${MMSI_REVIEW_DISMISSAL_MARKER}%`} THEN 'dismissed'
+        ELSE lower(q.review_status::text)
+      END AS queue_state,
+      EXISTS (
+        SELECT 1
+        FROM cruise_ships s
+        INNER JOIN cruise_vessel_verifications v ON v.ship_id = s.id
+        WHERE v.registry_entry_id = q.registry_entry_id
+          AND s.mmsi = q.observed_mmsi
+          AND s.imo = r.imo
+      ) AS registry_has_linked_mmsi,
+      EXISTS (
+        SELECT 1
+        FROM cruise_ships s
+        WHERE s.imo = r.imo
+          AND s.mmsi = q.observed_mmsi
+      ) AS cruise_identity_has_mmsi,
+      v.verification_status::text,
+      v.confidence::text,
+      v.registry_entry_id AS verification_registry_entry_id,
+      EXISTS (
+        SELECT 1
+        FROM cruise_ships s
+        INNER JOIN cruise_vessel_verifications public_v ON public_v.ship_id = s.id
+        INNER JOIN cruise_vessel_registry_entries public_r ON public_r.id = public_v.registry_entry_id
+        WHERE public_v.registry_entry_id = q.registry_entry_id
+          AND s.imo = r.imo
+          AND s.mmsi = q.observed_mmsi
+          AND public_v.verification_status = 'VERIFIED_OCEAN_CRUISE'
+          AND public_v.confidence = 'HIGH'
+          AND public_r.registry_decision = 'ACCEPT'
+          AND public_r.imo = s.imo
+      ) AS public_eligible
+    FROM cruise_static_data_review_queue q
+    INNER JOIN cruise_vessel_registry_entries r ON r.id = q.registry_entry_id
+    LEFT JOIN cruise_ships s ON s.imo = r.imo AND s.mmsi = q.observed_mmsi
+    LEFT JOIN cruise_vessel_verifications v ON v.ship_id = s.id
+    WHERE (${statusSql}::text IS NULL OR q.review_status::text = ${statusSql})
+    ORDER BY q.last_seen_at DESC
+    LIMIT ${limit}
+  `;
+  return rows.map(normalizeDiagnosticRow);
+}
+
+function normalizeDiagnosticRow(row: MmsiReviewDiagnosticSqlRow): MmsiReviewApplyDiagnosticRow {
+  const verificationState = getVerificationState(row);
+  const reason = getApplyDiagnosticReason(row, verificationState);
+  return {
+    queueId: row.queue_id,
+    registryImo: row.registry_imo,
+    observedMmsi: row.observed_mmsi,
+    reviewStatus: row.review_status,
+    queueState: row.queue_state,
+    registryHasLinkedMmsi: row.registry_has_linked_mmsi,
+    cruiseIdentityHasMmsi: row.cruise_identity_has_mmsi,
+    verificationState,
+    publicEligible: row.public_eligible,
+    reason
+  };
+}
+
+function getVerificationState(row: MmsiReviewDiagnosticSqlRow): MmsiReviewApplyDiagnosticRow["verificationState"] {
+  if (!row.verification_status) return "missing";
+  if (row.verification_registry_entry_id !== null && row.verification_registry_entry_id !== undefined && row.verification_registry_entry_id !== "") {
+    if (row.verification_status === "VERIFIED_OCEAN_CRUISE" && row.confidence === "HIGH") return row.public_eligible ? "eligible" : "wrong-registry";
+  }
+  if (row.verification_status !== "VERIFIED_OCEAN_CRUISE") return "wrong-status";
+  if (row.confidence !== "HIGH") return "not-high-confidence";
+  return row.public_eligible ? "eligible" : "wrong-registry";
+}
+
+function isVerificationRepairCandidate(state: MmsiReviewApplyDiagnosticRow["verificationState"]) {
+  return state === "missing" || state === "wrong-status" || state === "not-high-confidence" || state === "wrong-registry";
+}
+
+function getApplyDiagnosticReason(row: MmsiReviewDiagnosticSqlRow, verificationState: MmsiReviewApplyDiagnosticRow["verificationState"]) {
+  if (row.public_eligible) return null;
+  if (!row.cruise_identity_has_mmsi) return "missing cruise identity MMSI link";
+  if (verificationState === "missing") return "missing cruise vessel verification";
+  if (verificationState === "wrong-registry") return "verification is not linked to this registry entry";
+  if (verificationState === "wrong-status") return "verification status is not VERIFIED_OCEAN_CRUISE";
+  if (verificationState === "not-high-confidence") return "verification confidence is not HIGH";
+  return "not public eligible";
 }
 
 function normalizeReviewRow(row: MmsiReviewSqlRow): MmsiReviewRow {
