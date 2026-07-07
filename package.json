@@ -24,6 +24,7 @@
     "cruises:audit-scope": "tsx scripts/audit-cruise-scope.ts",
     "cruises:import-registry": "tsx scripts/import-cruise-registry.ts",
     "cruises:validate-registry": "tsx scripts/validate-cruise-registry.ts",
+    "cruises:check-registry-proposal": "tsx scripts/check-cruise-registry-proposal.ts",
     "cruises:registry:coverage": "tsx scripts/cruise-registry-coverage.ts",
     "cruises:registry:completeness": "tsx scripts/cruise-registry-completeness.ts",
     "cruises:registry:status": "tsx scripts/cruise-registry-status.ts",
