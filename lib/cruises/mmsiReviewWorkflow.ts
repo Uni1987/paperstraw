@@ -105,13 +105,16 @@ export type MmsiReviewApplyDiagnosticsReport = {
 };
 
 export type MmsiReviewRepairPlan = {
-  mode: "dry-run";
+  mode: "dry-run" | "confirm";
+  databaseTarget?: string;
   generatedAt: string;
   rowsConsidered: number;
   wouldRepair: number;
+  repaired: number;
   skipped: Array<{ queueId: string; reason: string }>;
   skippedByReason: Record<string, number>;
-  databaseWritesAttempted: 0;
+  databaseWritesAttempted: number;
+  databaseWritesCompleted: number;
   followUp: string;
 };
 
@@ -408,10 +411,13 @@ export function formatMmsiReviewRepairPlan(plan: MmsiReviewRepairPlan, format: M
     "Cruise MMSI applied-link repair plan",
     `Generated: ${plan.generatedAt}`,
     `Mode: ${plan.mode}`,
+    ...(plan.databaseTarget ? [`Database target: ${plan.databaseTarget}`] : []),
     `Rows considered: ${plan.rowsConsidered}`,
     `Would repair: ${plan.wouldRepair}`,
+    `Repaired: ${plan.repaired}`,
     `Skipped: ${plan.skipped.length}`,
     `Database writes attempted: ${plan.databaseWritesAttempted}`,
+    `Database writes completed: ${plan.databaseWritesCompleted}`,
     "",
     "Skip reasons:",
     ...formatSkipReasons(plan.skippedByReason),
@@ -427,9 +433,12 @@ export function formatMmsiReviewRepairPlan(plan: MmsiReviewRepairPlan, format: M
       "",
       `- Generated: ${plan.generatedAt}`,
       `- Mode: ${plan.mode}`,
+      ...(plan.databaseTarget ? [`- Database target: ${plan.databaseTarget}`] : []),
       `- Rows considered: ${plan.rowsConsidered}`,
       `- Would repair: ${plan.wouldRepair}`,
+      `- Repaired: ${plan.repaired}`,
       `- Database writes attempted: ${plan.databaseWritesAttempted}`,
+      `- Database writes completed: ${plan.databaseWritesCompleted}`,
       "",
       "Skip reasons:",
       ...formatSkipReasons(plan.skippedByReason),
@@ -539,36 +548,46 @@ export async function diagnoseMmsiReviewApplyConsistency(options: { status: Mmsi
 }
 
 export async function planAppliedMmsiLinkRepair(): Promise<MmsiReviewRepairPlan> {
+  return repairAppliedMmsiLinks({ confirm: false });
+}
+
+export async function repairAppliedMmsiLinks(options: { confirm: boolean; env?: Record<string, string | undefined> }): Promise<MmsiReviewRepairPlan> {
+  const target = options.confirm ? assertMmsiReviewMutationTarget(options.env ?? process.env) : null;
   const report = await diagnoseMmsiReviewApplyConsistency({ status: "reviewed", limit: 10000 });
   const plan: MmsiReviewRepairPlan = {
-    mode: "dry-run",
+    mode: options.confirm ? "confirm" : "dry-run",
+    databaseTarget: target?.databaseTarget,
     generatedAt: new Date().toISOString(),
     rowsConsidered: report.rows.length,
     wouldRepair: 0,
+    repaired: 0,
     skipped: [],
     skippedByReason: {},
     databaseWritesAttempted: 0,
-    followUp: "No confirm mode is implemented. Review this plan before designing a separately tested repair apply command."
+    databaseWritesCompleted: 0,
+    followUp: options.confirm
+      ? "Run pnpm cruises:diagnose-mmsi-review-apply -- --status reviewed to verify repaired rows are public eligible."
+      : "To apply this narrow repair, rerun with --confirm after reviewing the dry-run output and setting CRUISE_WORKER_ENV=development and CRUISE_WORKER_DATABASE_TARGET=cruises-dev."
   };
 
   for (const row of report.rows) {
-    if (row.queueState !== "applied") {
-      addRepairSkip(plan, row.queueId, "not applied");
+    const issue = evaluateAppliedMmsiRepairCandidate(row);
+    if (issue) {
+      addRepairSkip(plan, row.queueId, issue);
       continue;
     }
-    if (row.publicEligible) {
-      addRepairSkip(plan, row.queueId, "already public eligible");
+    if (!options.confirm) {
+      plan.wouldRepair += 1;
       continue;
     }
-    if (!row.cruiseIdentityHasMmsi) {
-      addRepairSkip(plan, row.queueId, "missing cruise identity MMSI link");
-      continue;
+    plan.databaseWritesAttempted += 1;
+    const repaired = await repairSingleAppliedMmsiLink(row.queueId);
+    if (repaired.repaired) {
+      plan.repaired += 1;
+      plan.databaseWritesCompleted += 1;
+    } else {
+      addRepairSkip(plan, row.queueId, repaired.reason);
     }
-    if (!isVerificationRepairCandidate(row.verificationState)) {
-      addRepairSkip(plan, row.queueId, row.reason ?? "not safely repairable by verification creation");
-      continue;
-    }
-    plan.wouldRepair += 1;
   }
 
   return plan;
@@ -663,6 +682,29 @@ async function ensureApprovedMmsiLinkState(tx: Prisma.TransactionClient, row: Mm
   await verifyAppliedMmsiLinkState(tx, row, shipId);
 }
 
+async function repairSingleAppliedMmsiLink(queueId: string) {
+  try {
+    return await prisma.$transaction(async (tx) => {
+      const row = await fetchReviewRowById(queueId, tx);
+      if (!row) return { repaired: false, reason: "queue record no longer exists" };
+      if (row.classification !== "NEW_MMSI_CANDIDATE_FOR_EXISTING_REGISTRY_ENTRY") return { repaired: false, reason: "wrong classification" };
+      if (row.reviewStatus !== "REVIEWED") return { repaired: false, reason: "not reviewed" };
+      if (!isAppliedReviewNote(row.resolutionNotes)) return { repaired: false, reason: "not applied" };
+      if (row.registryDecision !== "ACCEPT") return { repaired: false, reason: "registry decision is not ACCEPT" };
+      if (!row.registryImo || !isValidImoWithChecksum(row.registryImo)) return { repaired: false, reason: "identity validation failed" };
+      if (!isValidMmsi(row.observedMmsi)) return { repaired: false, reason: "identity validation failed" };
+      if (row.observedMmsiLinkedElsewhere) return { repaired: false, reason: "observed MMSI linked elsewhere" };
+      if (row.hasUnresolvedConflict) return { repaired: false, reason: "unresolved conflict" };
+      if (row.targetShipCount !== 1 || !row.targetShipId) return { repaired: false, reason: "expected one existing cruise identity row" };
+      if (row.targetShipMmsi !== row.observedMmsi) return { repaired: false, reason: "missing cruise identity MMSI link" };
+      await ensureApprovedMmsiLinkState(tx, row, row.targetShipId, queueId);
+      return { repaired: true, reason: "repaired" };
+    });
+  } catch {
+    return { repaired: false, reason: "database constraint prevented MMSI link repair" };
+  }
+}
+
 async function verifyAppliedMmsiLinkState(tx: Prisma.TransactionClient, row: MmsiReviewRow, shipId: string) {
   const linkedRows = await tx.$queryRaw<Array<{ ok: boolean }>>`
     SELECT EXISTS (
@@ -691,6 +733,14 @@ function addApplySkip(result: MmsiApplyApprovedResult, queueId: string, reason: 
 function addRepairSkip(result: MmsiReviewRepairPlan, queueId: string, reason: string) {
   result.skipped.push({ queueId, reason });
   result.skippedByReason[reason] = (result.skippedByReason[reason] ?? 0) + 1;
+}
+
+export function evaluateAppliedMmsiRepairCandidate(row: MmsiReviewApplyDiagnosticRow) {
+  if (row.queueState !== "applied") return "not applied";
+  if (row.publicEligible) return "already public eligible";
+  if (!row.cruiseIdentityHasMmsi) return "missing cruise identity MMSI link";
+  if (!isVerificationRepairCandidate(row.verificationState)) return row.reason ?? "not safely repairable by verification creation";
+  return null;
 }
 
 async function fetchReviewRowById(queueId: string, tx: MmsiReviewDbClient = prisma) {

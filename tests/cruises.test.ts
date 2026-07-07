@@ -143,6 +143,7 @@ import {
   buildAppliedResolutionNote,
   buildApprovalResolutionNote,
   buildDismissalResolutionNote,
+  evaluateAppliedMmsiRepairCandidate,
   evaluateApprovedCandidateForApply,
   evaluateMmsiCandidateForApproval,
   formatMmsiReviewDiagnosticsReport,
@@ -2559,9 +2560,11 @@ describe("cruise MMSI review workflow", () => {
       generatedAt: "2026-07-07T10:00:00.000Z",
       rowsConsidered: 2,
       wouldRepair: 1,
+      repaired: 0,
       skipped: [{ queueId: "queue-2", reason: "already public eligible" }],
       skippedByReason: { "already public eligible": 1 },
       databaseWritesAttempted: 0,
+      databaseWritesCompleted: 0,
       followUp: "No confirm mode is implemented."
     };
 
@@ -2569,9 +2572,68 @@ describe("cruise MMSI review workflow", () => {
 
     expect(output).toContain("Mode: dry-run");
     expect(output).toContain("Would repair: 1");
+    expect(output).toContain("Repaired: 0");
     expect(output).toContain("Database writes attempted: 0");
-    expect(output).not.toContain("--confirm");
     expect(output).not.toContain("rawPayload");
+  });
+
+  it("allows a narrow confirm repair report without changing queue review state text", () => {
+    const plan: MmsiReviewRepairPlan = {
+      mode: "confirm",
+      databaseTarget: "cruises-dev",
+      generatedAt: "2026-07-07T10:00:00.000Z",
+      rowsConsidered: 87,
+      wouldRepair: 0,
+      repaired: 10,
+      skipped: [{ queueId: "queue-2", reason: "already public eligible" }],
+      skippedByReason: { "already public eligible": 77 },
+      databaseWritesAttempted: 10,
+      databaseWritesCompleted: 10,
+      followUp: "Run pnpm cruises:diagnose-mmsi-review-apply -- --status reviewed to verify repaired rows are public eligible."
+    };
+
+    const output = formatMmsiReviewRepairPlan(plan, "terminal");
+
+    expect(output).toContain("Mode: confirm");
+    expect(output).toContain("Database target: cruises-dev");
+    expect(output).toContain("Repaired: 10");
+    expect(output).toContain("Database writes attempted: 10");
+    expect(output).toContain("Database writes completed: 10");
+    expect(output).not.toContain("rawPayload");
+    expect(output).not.toContain("postgres://");
+  });
+
+  it("repairs only applied rows with existing identity links and broken verification state", () => {
+    const baseRow = {
+      queueId: "queue-1",
+      registryImo: "9837420",
+      observedMmsi: "244123456",
+      reviewStatus: "REVIEWED",
+      queueState: "applied",
+      registryHasLinkedMmsi: false,
+      cruiseIdentityHasMmsi: true,
+      verificationState: "wrong-status" as const,
+      publicEligible: false,
+      reason: "verification status is not VERIFIED_OCEAN_CRUISE"
+    };
+
+    expect(evaluateAppliedMmsiRepairCandidate(baseRow)).toBeNull();
+    expect(evaluateAppliedMmsiRepairCandidate({ ...baseRow, queueState: "approved-not-applied" })).toBe("not applied");
+    expect(evaluateAppliedMmsiRepairCandidate({ ...baseRow, publicEligible: true })).toBe("already public eligible");
+    expect(evaluateAppliedMmsiRepairCandidate({ ...baseRow, cruiseIdentityHasMmsi: false })).toBe("missing cruise identity MMSI link");
+    expect(evaluateAppliedMmsiRepairCandidate({ ...baseRow, verificationState: "eligible", reason: null })).toBe("not safely repairable by verification creation");
+  });
+
+  it("wires the applied MMSI repair script to guarded confirm mode", () => {
+    const scriptSource = readFileSync("scripts/repair-applied-cruise-mmsi-links.ts", "utf8");
+    const reviewSource = readFileSync("lib/cruises/mmsiReviewWorkflow.ts", "utf8");
+
+    expect(scriptSource).toContain("repairAppliedMmsiLinks({ confirm: options.confirm })");
+    expect(scriptSource).toContain("if (arg === \"--confirm\")");
+    expect(scriptSource).toContain("--dry-run cannot be combined with --confirm");
+    expect(reviewSource).toContain("const target = options.confirm ? assertMmsiReviewMutationTarget");
+    expect(reviewSource).toContain("ensureApprovedMmsiLinkState(tx, row, row.targetShipId, queueId)");
+    expect(reviewSource).not.toContain("pnpm cruises:registry:reconcile -- --apply");
   });
 });
 
