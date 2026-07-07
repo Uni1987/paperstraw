@@ -75,8 +75,13 @@ export type MmsiApplyApprovedResult = {
   applied: number;
   wouldApply: number;
   skipped: Array<{ queueId: string; reason: string }>;
+  skippedByReason: Record<string, number>;
   followUpCommand: string;
 };
+
+export type MmsiApplyPlan =
+  | { action: "update-existing-identity"; shipId: string }
+  | { action: "create-registry-linked-identity" };
 
 type MmsiReviewSqlRow = {
   id: string;
@@ -209,15 +214,29 @@ export function evaluateMmsiCandidateForApproval(row: MmsiReviewRow) {
   return null;
 }
 
-export function evaluateApprovedCandidateForApply(row: MmsiReviewRow) {
-  const approvalIssue = evaluateMmsiCandidateForApproval({ ...row, reviewStatus: "PENDING", linkedMmsi: null });
+export function getApprovedCandidateApplyPlan(row: MmsiReviewRow): MmsiApplyPlan | string {
   if (row.classification !== "NEW_MMSI_CANDIDATE_FOR_EXISTING_REGISTRY_ENTRY") return "wrong classification";
   if (row.reviewStatus !== "REVIEWED") return "not approved";
-  if (!isApprovedReviewNote(row.resolutionNotes)) return "missing explicit approval note";
   if (isAppliedReviewNote(row.resolutionNotes)) return "already applied";
-  if (approvalIssue && approvalIssue !== "queue record is not pending") return approvalIssue;
-  if (row.targetShipCount !== 1 || !row.targetShipId) return "expected exactly one existing cruise identity record for registry IMO";
+  if (!isApprovedReviewNote(row.resolutionNotes)) return "not explicitly approved";
+  if (!hasApprovalNoteText(row.resolutionNotes)) return "missing approval note";
+  if (row.registryDecision !== "ACCEPT") return "registry decision is not ACCEPT";
+  if (!row.registryImo || !isValidImoWithChecksum(row.registryImo)) return "identity validation failed";
+  if (!isValidMmsi(row.observedMmsi)) return "identity validation failed";
+  if (row.linkedMmsi === row.observedMmsi) return "registry entry already linked to observed MMSI";
+  if (row.linkedMmsi && row.linkedMmsi !== row.observedMmsi) return "registry entry already linked";
+  if (row.observedMmsiLinkedElsewhere) return "observed MMSI linked elsewhere";
+  if (row.hasUnresolvedConflict) return "unresolved conflict";
+  if (row.targetShipCount > 1) return "multiple existing cruise identity records for registry IMO";
   if (row.targetShipMmsi && row.targetShipMmsi !== row.observedMmsi) return "target ship already has a different MMSI";
+  if (row.targetShipCount === 1 && row.targetShipId) return { action: "update-existing-identity", shipId: row.targetShipId };
+  if (row.targetShipCount === 0) return { action: "create-registry-linked-identity" };
+  return "expected an existing identity row or registry-backed identity creation";
+}
+
+export function evaluateApprovedCandidateForApply(row: MmsiReviewRow) {
+  const plan = getApprovedCandidateApplyPlan(row);
+  if (typeof plan === "string") return plan;
   return null;
 }
 
@@ -265,6 +284,12 @@ export function formatMmsiReviewActionResult(result: MmsiReviewActionResult | Mm
       `- Applied: ${result.applied}`,
       `- Would apply: ${result.wouldApply}`,
       `- Skipped: ${result.skipped.length}`,
+      "",
+      "Skip reasons:",
+      ...formatSkipReasons(result.skippedByReason),
+      "",
+      "Skipped rows:",
+      ...formatSkippedRows(result.skipped),
       "",
       "Follow-up:",
       "",
@@ -341,13 +366,14 @@ export async function applyApprovedMmsiReviewCandidates(options: { confirm: bool
     applied: 0,
     wouldApply: 0,
     skipped: [],
+    skippedByReason: {},
     followUpCommand: "pnpm cruises:registry:reconcile -- --dry-run"
   };
 
   for (const row of rows) {
-    const issue = evaluateApprovedCandidateForApply(row);
-    if (issue) {
-      result.skipped.push({ queueId: row.id, reason: issue });
+    const plan = getApprovedCandidateApplyPlan(row);
+    if (typeof plan === "string") {
+      addApplySkip(result, row.id, plan);
       continue;
     }
     if (!options.confirm) {
@@ -356,7 +382,7 @@ export async function applyApprovedMmsiReviewCandidates(options: { confirm: bool
     }
     const applied = await applySingleApprovedMmsi(row.id);
     if (applied.applied) result.applied += 1;
-    else result.skipped.push({ queueId: row.id, reason: applied.reason });
+    else addApplySkip(result, row.id, applied.reason);
   }
 
   return result;
@@ -366,14 +392,43 @@ async function applySingleApprovedMmsi(queueId: string) {
   return prisma.$transaction(async (tx) => {
     const row = await fetchReviewRowById(queueId, tx);
     if (!row) return { applied: false, reason: "queue record no longer exists" };
-    const issue = evaluateApprovedCandidateForApply(row);
-    if (issue) return { applied: false, reason: issue };
+    const plan = getApprovedCandidateApplyPlan(row);
+    if (typeof plan === "string") return { applied: false, reason: plan };
     try {
-      const updated = await tx.cruiseShip.updateMany({
-        where: { id: row.targetShipId as string, OR: [{ mmsi: null }, { mmsi: row.observedMmsi }] },
-        data: { mmsi: row.observedMmsi }
-      });
-      if (updated.count !== 1) return { applied: false, reason: "target ship MMSI changed before apply" };
+      if (plan.action === "update-existing-identity") {
+        const updated = await tx.cruiseShip.updateMany({
+          where: { id: plan.shipId, OR: [{ mmsi: null }, { mmsi: row.observedMmsi }] },
+          data: { mmsi: row.observedMmsi }
+        });
+        if (updated.count !== 1) return { applied: false, reason: "target ship MMSI changed before apply" };
+      } else {
+        const ship = await tx.cruiseShip.create({
+          data: {
+            imo: row.registryImo as string,
+            mmsi: row.observedMmsi,
+            name: row.registryName ?? `Verified cruise ${row.registryImo as string}`,
+            operator: row.registryOperator,
+            shipType: "Ocean cruise ship",
+            source: "CRUISE_STATIC_DATA_REVIEW_QUEUE"
+          },
+          select: { id: true }
+        });
+        await tx.cruiseVesselVerification.create({
+          data: {
+            shipId: ship.id,
+            registryEntryId: row.registryEntryId,
+            verificationStatus: "VERIFIED_OCEAN_CRUISE",
+            confidence: "HIGH",
+            decisionSource: "STATIC_DATA_REVIEW_QUEUE_APPROVED_MMSI",
+            evidence: {
+              queueRecordId: queueId,
+              source: "GLOBAL_LOCAL_FILTER",
+              method: "exact accepted registry IMO with explicit MMSI review approval"
+            },
+            assessedAt: new Date()
+          }
+        });
+      }
       await tx.cruiseStaticDataReviewQueue.update({
         where: { id: queueId },
         data: {
@@ -386,6 +441,11 @@ async function applySingleApprovedMmsi(queueId: string) {
       return { applied: false, reason: "database constraint prevented MMSI link" };
     }
   });
+}
+
+function addApplySkip(result: MmsiApplyApprovedResult, queueId: string, reason: string) {
+  result.skipped.push({ queueId, reason });
+  result.skippedByReason[reason] = (result.skippedByReason[reason] ?? 0) + 1;
 }
 
 async function fetchReviewRowById(queueId: string, tx: MmsiReviewDbClient = prisma) {
@@ -506,6 +566,17 @@ function formatMmsiReviewTerminal(report: MmsiReviewListReport) {
   return lines.join("\n") + "\n";
 }
 
+function formatSkipReasons(skippedByReason: Record<string, number>) {
+  const entries = Object.entries(skippedByReason).sort(([a], [b]) => a.localeCompare(b));
+  if (entries.length === 0) return ["- none"];
+  return entries.map(([reason, count]) => `- ${reason}: ${count}`);
+}
+
+function formatSkippedRows(skipped: Array<{ queueId: string; reason: string }>) {
+  if (skipped.length === 0) return ["- none"];
+  return skipped.map((row) => `- ${row.queueId}: ${row.reason}`);
+}
+
 function formatMmsiReviewMarkdown(report: MmsiReviewListReport) {
   const headers = report.includeIdentifiers
     ? ["#", "Queue ID", "Vessel", "Operator", "Registry IMO", "Observed MMSI", "Classification", "Status", "Occurrences", "Conflict"]
@@ -599,6 +670,12 @@ function readRequiredNote(args: string[], startIndex: number) {
 
 function sanitizeNote(value: string) {
   return value.replace(/[\r\n]+/g, " ").trim();
+}
+
+function hasApprovalNoteText(value: string | null | undefined) {
+  if (!value) return false;
+  const note = value.replace(MMSI_REVIEW_APPROVAL_MARKER, "").replace(/\d{4}-\d{2}-\d{2}T[^\s]+/g, "").trim();
+  return note.length > 0;
 }
 
 function isValidMmsi(value: string | null | undefined): value is string {

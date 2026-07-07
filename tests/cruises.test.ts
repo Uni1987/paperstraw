@@ -146,6 +146,7 @@ import {
   evaluateApprovedCandidateForApply,
   evaluateMmsiCandidateForApproval,
   formatMmsiReviewReport,
+  getApprovedCandidateApplyPlan,
   isAppliedReviewNote,
   isApprovedReviewNote,
   isDismissedReviewNote,
@@ -2436,15 +2437,28 @@ describe("cruise MMSI review workflow", () => {
   it("applies only previously approved eligible queue records", () => {
     const approvedNote = buildApprovalResolutionNote("Two public sources checked", new Date("2026-07-07T10:00:00Z"));
     expect(evaluateApprovedCandidateForApply(mmsiReviewRow({ reviewStatus: "REVIEWED", resolutionNotes: approvedNote }))).toBeNull();
+    expect(getApprovedCandidateApplyPlan(mmsiReviewRow({ reviewStatus: "REVIEWED", resolutionNotes: approvedNote }))).toMatchObject({
+      action: "update-existing-identity",
+      shipId: "ship-1"
+    });
+    expect(
+      getApprovedCandidateApplyPlan(mmsiReviewRow({ reviewStatus: "REVIEWED", resolutionNotes: approvedNote, targetShipCount: 0, targetShipId: null }))
+    ).toMatchObject({ action: "create-registry-linked-identity" });
     expect(evaluateApprovedCandidateForApply(mmsiReviewRow({ reviewStatus: "PENDING", resolutionNotes: approvedNote }))).toBe("not approved");
-    expect(evaluateApprovedCandidateForApply(mmsiReviewRow({ reviewStatus: "REVIEWED", resolutionNotes: null }))).toBe("missing explicit approval note");
+    expect(evaluateApprovedCandidateForApply(mmsiReviewRow({ reviewStatus: "DISMISSED", resolutionNotes: approvedNote }))).toBe("not approved");
+    expect(evaluateApprovedCandidateForApply(mmsiReviewRow({ reviewStatus: "REVIEWED", resolutionNotes: null }))).toBe("not explicitly approved");
     expect(evaluateApprovedCandidateForApply(mmsiReviewRow({ reviewStatus: "REVIEWED", resolutionNotes: buildAppliedResolutionNote(approvedNote) }))).toBe("already applied");
-    expect(evaluateApprovedCandidateForApply(mmsiReviewRow({ reviewStatus: "REVIEWED", resolutionNotes: approvedNote, targetShipCount: 0, targetShipId: null }))).toBe(
-      "expected exactly one existing cruise identity record for registry IMO"
+    expect(evaluateApprovedCandidateForApply(mmsiReviewRow({ reviewStatus: "REVIEWED", resolutionNotes: "[APPROVED_MMSI_LINK] 2026-07-07T10:00:00.000Z" }))).toBe("missing approval note");
+    expect(evaluateApprovedCandidateForApply(mmsiReviewRow({ reviewStatus: "REVIEWED", resolutionNotes: approvedNote, targetShipCount: 2 }))).toBe(
+      "multiple existing cruise identity records for registry IMO"
     );
     expect(evaluateApprovedCandidateForApply(mmsiReviewRow({ reviewStatus: "REVIEWED", resolutionNotes: approvedNote, targetShipMmsi: "111111111" }))).toBe(
       "target ship already has a different MMSI"
     );
+    expect(evaluateApprovedCandidateForApply(mmsiReviewRow({ reviewStatus: "REVIEWED", resolutionNotes: approvedNote, observedMmsiLinkedElsewhere: true }))).toBe(
+      "observed MMSI linked elsewhere"
+    );
+    expect(evaluateApprovedCandidateForApply(mmsiReviewRow({ reviewStatus: "REVIEWED", resolutionNotes: approvedNote, hasUnresolvedConflict: true }))).toBe("unresolved conflict");
   });
 
   it("requires the cruises-dev target for mutating review actions", () => {

@@ -112,12 +112,15 @@ pnpm cruises:review-mmsi-candidates -- --apply-approved --confirm
 Confirmed apply:
 
 - applies only approved eligible queue records;
-- updates only the MMSI on the existing exact-registry cruise identity record;
+- updates the MMSI on the existing exact-registry cruise identity record when one exists;
+- creates a minimal registry-backed cruise identity and high-confidence verification when no identity row exists yet;
 - uses a transaction per queue item;
 - skips pending, dismissed, already-applied, conflicting, or stale records;
 - updates the queue note with an applied marker;
 - does not alter registry decisions;
 - does not run full reconciliation.
+
+Dry-run and confirmed apply both report each skipped queue record with a sanitized reason and grouped skip totals.
 
 ## Post-Apply Reconciliation
 
