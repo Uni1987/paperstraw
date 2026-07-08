@@ -138,6 +138,13 @@ import {
   type GlobalLocalFilterStatusReport
 } from "@/lib/cruises/globalLocalFilterStatus";
 import {
+  buildCruiseOpsAlerts,
+  calculateRatio,
+  formatCruiseOpsSummary,
+  getCruiseOpsStatusLevel,
+  type CruiseOpsStatus
+} from "@/lib/cruises/adminOps";
+import {
   MMSI_REVIEW_APPLIED_MARKER,
   assertMmsiReviewMutationTarget,
   buildAppliedResolutionNote,
@@ -2637,6 +2644,75 @@ describe("cruise MMSI review workflow", () => {
   });
 });
 
+describe("cruise operations admin", () => {
+  it("calculates registry and observation ratios safely", () => {
+    expect(calculateRatio(222, 316)).toBe(0.7025);
+    expect(calculateRatio(0, 316)).toBe(0);
+    expect(calculateRatio(10, 0)).toBe(0);
+  });
+
+  it("builds alert thresholds for stale data, pending reviews, low coverage, conflicts and repair needs", () => {
+    const alerts = buildCruiseOpsAlerts({
+      pendingCandidates: 1,
+      pendingConflicts: 1,
+      latestPositionAgeMinutes: 45,
+      publicEligibleRatio: 0.7,
+      observed24hRatio: 0.1,
+      repairNeededCount: 2
+    });
+
+    expect(alerts.map((alert) => alert.code)).toEqual([
+      "PENDING_CANDIDATES",
+      "PENDING_CONFLICTS",
+      "STALE_POSITIONS",
+      "LOW_PUBLIC_ELIGIBILITY",
+      "LOW_24H_OBSERVATION",
+      "REPAIR_NEEDED"
+    ]);
+    expect(getCruiseOpsStatusLevel(alerts, 45)).toBe("error");
+  });
+
+  it("reports healthy when no cruise ops alerts are active", () => {
+    const alerts = buildCruiseOpsAlerts({
+      pendingCandidates: 0,
+      pendingConflicts: 0,
+      latestPositionAgeMinutes: 5,
+      publicEligibleRatio: 0.95,
+      observed24hRatio: 0.5,
+      repairNeededCount: 0
+    });
+
+    expect(alerts).toEqual([]);
+    expect(getCruiseOpsStatusLevel(alerts, 5)).toBe("healthy");
+  });
+
+  it("uses the existing safe candidate approval guard", () => {
+    expect(evaluateMmsiCandidateForApproval(mmsiReviewRow())).toBeNull();
+    expect(evaluateMmsiCandidateForApproval(mmsiReviewRow({ observedMmsiLinkedElsewhere: true }))).toBe("observed MMSI is already linked elsewhere");
+    expect(evaluateMmsiCandidateForApproval(mmsiReviewRow({ hasUnresolvedConflict: true }))).toBe("unresolved MMSI conflict exists");
+    expect(evaluateMmsiCandidateForApproval(mmsiReviewRow({ reviewStatus: "REVIEWED" }))).toBe("queue record is not pending");
+  });
+
+  it("keeps the admin apply endpoint dry-run by default and confirm explicit", () => {
+    const routeSource = readFileSync("app/api/admin/cruises/mmsi-candidates/apply-approved/route.ts", "utf8");
+
+    expect(routeSource).toContain("const confirm = body?.confirm === true");
+    expect(routeSource).toContain("applyApprovedMmsiReviewCandidates({ confirm })");
+    expect(routeSource).not.toContain("confirm = true");
+  });
+
+  it("prints a read-only cruise ops summary without secrets or raw AIS data", () => {
+    const summary = formatCruiseOpsSummary(cruiseOpsStatus());
+
+    expect(summary).toContain("Cruise operations summary");
+    expect(summary).toContain("Accepted registry entries: 316");
+    expect(summary).toContain("Verified public-eligible vessels: 222");
+    expect(summary).toContain("Observed 24h: 120");
+    expect(summary).not.toContain("postgres://");
+    expect(summary).not.toContain("rawPayload");
+  });
+});
+
 function mmsiReviewReport(overrides: Partial<Omit<MmsiReviewListReport, "rows">> & { row?: Partial<MmsiReviewRow> } = {}): MmsiReviewListReport {
   return {
     generatedAt: "2026-07-07T10:00:00.000Z",
@@ -2655,6 +2731,58 @@ function mmsiApplyDiagnosticsReport(overrides: Partial<MmsiReviewApplyDiagnostic
     totalRows: overrides.rows?.length ?? 0,
     inconsistentAppliedRows: overrides.rows?.filter((row) => row.queueState === "applied" && !row.publicEligible).length ?? 0,
     rows: [],
+    ...overrides
+  };
+}
+
+function cruiseOpsStatus(overrides: Partial<CruiseOpsStatus> = {}): CruiseOpsStatus {
+  return {
+    generatedAt: "2026-07-08T10:00:00.000Z",
+    status: "healthy",
+    alerts: [],
+    worker: {
+      latestVerifiedPositionTimestamp: "2026-07-08T09:55:00.000Z",
+      latestPositionAgeMinutes: 5,
+      storedVerifiedPositionsLast24h: 1616,
+      distinctVerifiedVesselsObservedLast24h: 120,
+      invalidOrMissingCoordinatesLast24h: 0
+    },
+    registry: {
+      acceptedRegistryEntries: 316,
+      verifiedPublicEligibleVessels: 222,
+      verifiedMmsisLoaded: 222,
+      verifiedVesselsWithLinkedMmsi: 222,
+      publicEligibleRatio: calculateRatio(222, 316),
+      linkedRatio: calculateRatio(222, 316)
+    },
+    observationCoverage: {
+      vesselsObservedLast24h: 120,
+      vesselsObservedLast7d: 180,
+      vesselsObservedLast30d: 210,
+      observed24hRatio: calculateRatio(120, 222),
+      observed7dRatio: calculateRatio(180, 222),
+      observed30dRatio: calculateRatio(210, 222)
+    },
+    reviewQueue: {
+      totalRecords: 87,
+      pendingCandidates: 0,
+      reviewedCandidates: 87,
+      dismissedCandidates: 0,
+      pendingConflicts: 0,
+      conflictsTotal: 0,
+      pendingCandidateList: []
+    },
+    safety: {
+      pendingReviewCandidateExists: false,
+      conflictExists: false,
+      repairNeededCount: 0,
+      reconcileSummary: {
+        acceptedRegistryEntries: 316,
+        verifiedPublicEligibleVessels: 222,
+        missingPublicEligibilityCount: 94,
+        note: "Read-only coverage equivalent."
+      }
+    },
     ...overrides
   };
 }
