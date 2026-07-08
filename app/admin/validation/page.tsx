@@ -21,8 +21,8 @@ export default async function ValidationPage() {
               data quality verification, not public ranking or attribution.
             </p>
           </div>
-          <Link href="/admin" className="rounded-md border border-ink/15 bg-white px-4 py-2 text-sm font-semibold text-ink hover:bg-mint">
-            Back to admin
+          <Link href="/admin/private-jets" className="rounded-md border border-ink/15 bg-white px-4 py-2 text-sm font-semibold text-ink hover:bg-mint">
+            Back to private jet admin
           </Link>
         </div>
 

@@ -171,7 +171,7 @@ export default async function CruisesPage() {
               Sources: curated ocean-cruise registry entries, AISStream vessel movement feed and EMSA THETIS-MRV public
               ship emissions disclosures where an IMO match exists.
             </p>
-            <Link href="/methodology" className="inline-flex text-sm font-semibold text-paper hover:text-white">
+            <Link href="/methodology/cruises" className="inline-flex text-sm font-semibold text-paper hover:text-white">
               Read the methodology
             </Link>
           </div>

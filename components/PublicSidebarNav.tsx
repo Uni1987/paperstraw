@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { isActivePublicRoute, isPublicNavGroup, type PublicSidebarNavItem } from "@/lib/navigation";
+import { isActivePublicRoute, isPublicNavGroup, resolveModuleAwarePublicHref, type PublicSidebarNavItem } from "@/lib/navigation";
 
 export function PublicSidebarNav({ items }: { items: PublicSidebarNavItem[] }) {
   const pathname = usePathname();
@@ -42,10 +42,11 @@ function NavLink({
   pathname: string | null;
   nested?: boolean;
 }) {
-  const active = isActivePublicRoute(pathname, item.href);
+  const href = resolveModuleAwarePublicHref(pathname, item.href);
+  const active = isActivePublicRoute(pathname, href);
   return (
     <Link
-      href={item.href}
+      href={href}
       aria-current={active ? "page" : undefined}
       className={`flex items-center justify-between rounded-xl text-sm transition ${
         nested ? "ml-3 px-4 py-2.5 text-[0.82rem]" : "px-4 py-3"

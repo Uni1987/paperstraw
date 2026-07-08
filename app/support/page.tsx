@@ -83,7 +83,7 @@ export default function SupportPage() {
             or privacy rules.
           </p>
           <Link href="/methodology" className="mt-6 inline-flex text-sm font-semibold text-paper hover:text-white">
-            Read the methodology
+            Explore methodologies
           </Link>
         </div>
       </section>

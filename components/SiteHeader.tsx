@@ -4,7 +4,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
-import { getPublicMobileNavigation, isPublicNavGroup, publicDesktopNavigation } from "@/lib/navigation";
+import { getPublicMobileNavigation, isPublicNavGroup, publicDesktopNavigation, resolveModuleAwarePublicHref } from "@/lib/navigation";
 
 export function SiteHeader({ cruisesEnabled }: { cruisesEnabled: boolean }) {
   const [open, setOpen] = useState(false);
@@ -48,7 +48,7 @@ export function SiteHeader({ cruisesEnabled }: { cruisesEnabled: boolean }) {
             <>
               <div className="hidden items-center gap-1 text-sm font-medium text-white/68 md:flex">
                 {publicDesktopNavigation.map((item) => (
-                  <Link key={item.href} className="px-2 py-2 hover:text-white sm:px-3" href={item.href}>
+                  <Link key={item.href} className="px-2 py-2 hover:text-white sm:px-3" href={resolveModuleAwarePublicHref(pathname, item.href)}>
                     {item.label}
                   </Link>
                 ))}
@@ -73,7 +73,7 @@ export function SiteHeader({ cruisesEnabled }: { cruisesEnabled: boolean }) {
                     {item.children.map((child) => (
                       <Link
                         key={child.href}
-                        href={child.href}
+                        href={resolveModuleAwarePublicHref(pathname, child.href)}
                         className="rounded-md px-6 py-2.5 text-[0.82rem] transition hover:bg-white/10 hover:text-white"
                         onClick={() => setOpen(false)}
                       >
@@ -85,7 +85,7 @@ export function SiteHeader({ cruisesEnabled }: { cruisesEnabled: boolean }) {
               ) : (
                 <Link
                   key={item.href}
-                  href={item.href}
+                  href={resolveModuleAwarePublicHref(pathname, item.href)}
                   className="rounded-md px-3 py-3 transition hover:bg-white/10 hover:text-white"
                   onClick={() => setOpen(false)}
                 >

@@ -9,6 +9,8 @@ import {
 describe("admin route protection", () => {
   it("protects admin and ingestion paths but leaves public pages public", () => {
     expect(isProtectedAdminPath("/admin")).toBe(true);
+    expect(isProtectedAdminPath("/admin/private-jets")).toBe(true);
+    expect(isProtectedAdminPath("/admin/cruises")).toBe(true);
     expect(isProtectedAdminPath("/admin/validation")).toBe(true);
     expect(isProtectedAdminPath("/api/admin/import")).toBe(true);
     expect(isProtectedAdminPath("/api/cron/ingest")).toBe(true);
