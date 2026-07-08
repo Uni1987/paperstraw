@@ -59,7 +59,7 @@ export default function CruiseMethodologyPage() {
 
           <MethodSection title="Why unverified vessels are excluded">
             AIS passenger traffic can include ferries, regional passenger vessels, river ships, excursion vessels and other
-            craft that are outside PaperStraw's cruise scope. Excluding unverified candidates protects the public dataset from
+            craft that fall outside the PaperStraw cruise scope. Excluding unverified candidates protects the public dataset from
             inflated or misleading cruise emissions totals.
           </MethodSection>
         </div>
