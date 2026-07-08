@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { getPublicMobileNavigation, getPublicSidebarNavigation, isActivePublicRoute, isPublicNavGroup } from "@/lib/navigation";
+import {
+  getActivePublicModuleSegment,
+  getPublicMobileNavigation,
+  getPublicSidebarNavigation,
+  isActivePublicRoute,
+  isPublicNavGroup,
+  resolveModuleAwarePublicHref
+} from "@/lib/navigation";
 
 describe("public navigation hierarchy", () => {
   it("groups Private Jets and Cruises under Overview when cruises are enabled", () => {
@@ -37,5 +44,19 @@ describe("public navigation hierarchy", () => {
     expect(isActivePublicRoute("/cruises", "/cruises")).toBe(true);
     expect(isActivePublicRoute("/cruises/ship-1", "/cruises")).toBe(true);
     expect(isActivePublicRoute("/cruises/ship-1", "/")).toBe(false);
+  });
+
+  it("resolves Data and Methodology links to the active module", () => {
+    expect(getActivePublicModuleSegment("/")).toBe("private-jets");
+    expect(getActivePublicModuleSegment("/cruises")).toBe("cruises");
+    expect(getActivePublicModuleSegment("/comparisons/private-jets")).toBe("private-jets");
+    expect(getActivePublicModuleSegment("/comparisons/cruises")).toBe("cruises");
+    expect(resolveModuleAwarePublicHref("/", "/comparisons")).toBe("/comparisons/private-jets");
+    expect(resolveModuleAwarePublicHref("/cruises", "/comparisons")).toBe("/comparisons/cruises");
+    expect(resolveModuleAwarePublicHref("/", "/data")).toBe("/data/private-jets");
+    expect(resolveModuleAwarePublicHref("/cruises", "/data")).toBe("/data/cruises");
+    expect(resolveModuleAwarePublicHref("/cruises/ship-1", "/methodology")).toBe("/methodology/cruises");
+    expect(resolveModuleAwarePublicHref("/comparisons/private-jets", "/methodology")).toBe("/methodology/private-jets");
+    expect(resolveModuleAwarePublicHref("/support", "/data")).toBe("/data");
   });
 });
