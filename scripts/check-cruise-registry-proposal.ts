@@ -1,8 +1,9 @@
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { requireCruisesDatabaseUrl } from "@/lib/database/config";
 import { loadProjectEnv } from "@/lib/env/loadProjectEnv";
 import { parseRegistryCsv } from "@/lib/cruises/registry";
-import { prisma } from "@/lib/prisma";
+import { prisma } from "@/lib/database/cruises";
 
 loadProjectEnv();
 
@@ -94,7 +95,7 @@ function parseArgs(args: string[]) {
 }
 
 function assertReadOnlyCruisesDevTarget(env: NodeJS.ProcessEnv) {
-  if (!env.DATABASE_URL?.trim()) throw new Error("DATABASE_URL is required for the read-only proposal duplicate check.");
+  requireCruisesDatabaseUrl(env, { allowLegacyDatabaseUrlWithCruiseTarget: true });
   if (env.CRUISE_WORKER_DATABASE_TARGET?.trim() !== "cruises-dev") {
     throw new Error("Set CRUISE_WORKER_DATABASE_TARGET=cruises-dev before running the read-only proposal duplicate check.");
   }

@@ -3,7 +3,7 @@ import { AISSTREAM_ENDPOINT, getAisStreamApiKey } from "@/lib/cruises/config";
 import { VERIFIED_GLOBAL_BOUNDING_BOX, messageDataToString, usesExactVerifiedGlobalBoundingBox } from "@/lib/cruises/aisstream";
 import { calculateAverageKbPerSecond, calculateNetworkProjection, calculateProcessCpuPercent, getUtf8ByteLength } from "@/lib/cruises/globalFeedBenchmark";
 import { isValidImoWithChecksum } from "@/lib/cruises/registry";
-import { prisma } from "@/lib/prisma";
+import { prisma } from "@/lib/database/cruises";
 
 export const GLOBAL_FEED_COVERAGE_AUDIT_DEFAULT_RUNTIME_MS = 600000;
 export const GLOBAL_FEED_COVERAGE_AUDIT_MAX_RUNTIME_WITHOUT_OVERRIDE_MS = 30 * 60 * 1000;
@@ -757,7 +757,7 @@ async function assertCoverageAuditTablesExist() {
   const row = rows[0];
   if (row?.registry_exists && row.verification_exists && row.ships_exists) return;
   throw new Error(
-    "Cruise coverage audit requires cruise registry tables in DATABASE_URL. Current database is missing one or more of cruise_vessel_registry_entries, cruise_vessel_verifications, cruise_ships."
+    "Cruise coverage audit requires cruise registry tables in the cruise database. Set CRUISES_DATABASE_URL and ensure it contains cruise_vessel_registry_entries, cruise_vessel_verifications, and cruise_ships."
   );
 }
 

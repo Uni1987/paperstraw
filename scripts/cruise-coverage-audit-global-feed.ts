@@ -11,7 +11,7 @@ import {
   validateGlobalFeedCoverageAuditOptions
 } from "@/lib/cruises/globalFeedCoverageAudit";
 import { loadProjectEnv } from "@/lib/env/loadProjectEnv";
-import { prisma } from "@/lib/prisma";
+import { prisma } from "@/lib/database/cruises";
 
 loadProjectEnv();
 

@@ -1,4 +1,5 @@
-import { loadProjectEnv, requireEnv } from "../lib/env/loadProjectEnv";
+import { requirePrivateJetsDatabaseUrl } from "../lib/database/config";
+import { loadProjectEnv } from "../lib/env/loadProjectEnv";
 
 loadProjectEnv();
 
@@ -13,7 +14,7 @@ async function main() {
   }
 
   if (provider === "daily") {
-    requireEnv("DATABASE_URL");
+    requirePrivateJetsDatabaseUrl();
     const { runDailyIngestion } = await import("../lib/ingestion/daily");
     const result = await runDailyIngestion();
     console.log(
@@ -27,7 +28,7 @@ async function main() {
   }
 
   if (provider === "historical") {
-    requireEnv("DATABASE_URL");
+    requirePrivateJetsDatabaseUrl();
     const { runHistoricalIngestion } = await import("../lib/ingestion/historical");
     const { from, to, force } = parseHistoricalDateArgs(process.argv.slice(3));
     const result = await runHistoricalIngestion({
@@ -46,7 +47,7 @@ async function main() {
     return;
   }
 
-  requireEnv("DATABASE_URL");
+  requirePrivateJetsDatabaseUrl();
   const { runScheduledIngestion } = await import("../lib/ingestion/scheduled");
   const result = await runScheduledIngestion(provider);
   console.log(`Imported ${result.imported} record(s).`);

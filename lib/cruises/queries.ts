@@ -1,5 +1,5 @@
 import { cache } from "react";
-import { prisma } from "@/lib/prisma";
+import { prisma } from "@/lib/database/cruises";
 import { CRUISE_ESTIMATION_METHOD_VERSION, CRUISE_REGIONS, isCruisesEnabled } from "@/lib/cruises/config";
 
 const reactCache = typeof cache === "function" ? cache : <T extends (...args: never[]) => unknown>(fn: T) => fn;

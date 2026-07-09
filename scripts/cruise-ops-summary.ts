@@ -1,6 +1,6 @@
 import { loadProjectEnv } from "@/lib/env/loadProjectEnv";
 import { buildCruiseOpsStatus, formatCruiseOpsSummary } from "@/lib/cruises/adminOps";
-import { prisma } from "@/lib/prisma";
+import { prisma } from "@/lib/database/cruises";
 
 loadProjectEnv();
 

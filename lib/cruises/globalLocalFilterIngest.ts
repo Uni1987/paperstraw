@@ -1,11 +1,12 @@
 import { monitorEventLoopDelay } from "node:perf_hooks";
 import { randomUUID } from "node:crypto";
+import { requireCruisesDatabaseUrl } from "@/lib/database/config";
 import { AISSTREAM_ENDPOINT, getAisStreamApiKey } from "@/lib/cruises/config";
 import { estimateAndStoreCruiseDailyEmissions } from "@/lib/cruises/estimation";
 import { VERIFIED_GLOBAL_BOUNDING_BOX, messageDataToString, usesExactVerifiedGlobalBoundingBox } from "@/lib/cruises/aisstream";
 import { calculateAverageKbPerSecond, calculateNetworkProjection, calculateProcessCpuPercent, getUtf8ByteLength } from "@/lib/cruises/globalFeedBenchmark";
 import { isValidImoWithChecksum } from "@/lib/cruises/registry";
-import { prisma } from "@/lib/prisma";
+import { prisma } from "@/lib/database/cruises";
 
 export const GLOBAL_LOCAL_FILTER_MODE = "global-local-filter";
 export const GLOBAL_LOCAL_FILTER_SOURCE = "GLOBAL_LOCAL_FILTER";
@@ -149,11 +150,10 @@ type CruiseWorkerEnvironment = Record<string, string | undefined>;
 export function validateGlobalLocalFilterWorkerEnvironment(env: CruiseWorkerEnvironment = process.env): GlobalLocalFilterWorkerSafety {
   const workerEnv = env.CRUISE_WORKER_ENV?.trim();
   const databaseTarget = env.CRUISE_WORKER_DATABASE_TARGET?.trim();
-  const databaseUrl = env.DATABASE_URL?.trim();
   const apiKey = env.AISSTREAM_API_KEY?.trim();
   const profile = env.CRUISE_WORKER_PROFILE?.trim() || null;
 
-  if (!databaseUrl) throw new Error("Missing DATABASE_URL. global-local-filter refuses to start without an explicit database URL.");
+  requireCruisesDatabaseUrl(env, { allowLegacyDatabaseUrlWithCruiseTarget: true });
   if (!apiKey) throw new Error("Missing AISSTREAM_API_KEY. global-local-filter requires AISStream credentials.");
   if (!workerEnv) throw new Error("Missing CRUISE_WORKER_ENV. Set it explicitly to development, railway-development, or production.");
   if (!(CRUISE_WORKER_ENVS as readonly string[]).includes(workerEnv)) {

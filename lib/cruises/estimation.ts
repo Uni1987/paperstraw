@@ -1,4 +1,4 @@
-import { prisma } from "@/lib/prisma";
+import { prisma } from "@/lib/database/cruises";
 import { CRUISE_ESTIMATION_METHOD_VERSION } from "@/lib/cruises/config";
 
 export type CruisePositionPoint = {

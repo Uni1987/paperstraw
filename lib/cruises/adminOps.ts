@@ -1,4 +1,4 @@
-import { prisma } from "@/lib/prisma";
+import { prisma } from "@/lib/database/cruises";
 import {
   buildGlobalLocalFilterStatusReport,
   type GlobalLocalFilterStatusReport

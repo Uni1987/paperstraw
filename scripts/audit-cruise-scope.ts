@@ -1,6 +1,6 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
-import { prisma } from "@/lib/prisma";
+import { prisma } from "@/lib/database/cruises";
 import {
   CURRENT_AIS_FILTER_RULES,
   classifyCruiseScope,

@@ -9,7 +9,7 @@ import {
   parseMmsiReviewArgs,
   writeMmsiReviewOutput
 } from "@/lib/cruises/mmsiReviewWorkflow";
-import { prisma } from "@/lib/prisma";
+import { prisma } from "@/lib/database/cruises";
 
 loadProjectEnv();
 

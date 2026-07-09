@@ -3,7 +3,7 @@ import { dirname, resolve } from "node:path";
 import { loadProjectEnv } from "@/lib/env/loadProjectEnv";
 import { needsCruiseReviewQueue } from "@/lib/cruises/registry";
 import { findCruiseRegionForPosition } from "@/lib/cruises/scopeAudit";
-import { prisma } from "@/lib/prisma";
+import { prisma } from "@/lib/database/cruises";
 
 loadProjectEnv();
 

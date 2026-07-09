@@ -1,6 +1,6 @@
 import { GLOBAL_LOCAL_FILTER_DEFAULT_POSITION_RETENTION_DAYS, cleanupGlobalLocalFilterData } from "@/lib/cruises/globalLocalFilterIngest";
 import { loadProjectEnv } from "@/lib/env/loadProjectEnv";
-import { prisma } from "@/lib/prisma";
+import { prisma } from "@/lib/database/cruises";
 
 loadProjectEnv();
 

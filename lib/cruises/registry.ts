@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import type { Prisma } from "@prisma/client";
-import { prisma } from "@/lib/prisma";
+import { prisma } from "@/lib/database/cruises";
 
 export const CRUISE_REGISTRY_DECISIONS = ["ACCEPT", "EXCLUDE"] as const;
 export const CRUISE_VESSEL_SEGMENTS = ["OCEAN_CRUISE", "EXPEDITION_CRUISE"] as const;

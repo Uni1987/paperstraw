@@ -2,7 +2,8 @@ import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { PrismaClient } from "@prisma/client";
-import { loadProjectEnv, requireEnv } from "../lib/env/loadProjectEnv";
+import { getPrivateJetsDatabaseUrl } from "../lib/database/config";
+import { loadProjectEnv } from "../lib/env/loadProjectEnv";
 
 loadProjectEnv();
 
@@ -69,10 +70,16 @@ print(json.dumps([dict(row) for row in rows], default=str))
 conn.close()
 `;
 
-const prisma = new PrismaClient();
+const prisma = new PrismaClient({
+  datasources: {
+    db: {
+      url: getPrivateJetsDatabaseUrl()
+    }
+  }
+});
 
 async function main() {
-  requireEnv("DATABASE_URL");
+  getPrivateJetsDatabaseUrl();
   const options = parseOptions(process.argv.slice(2));
   if (!existsSync(options.sqlitePath)) {
     throw new Error(`SQLite source database not found at ${options.sqlitePath}`);
@@ -80,7 +87,7 @@ async function main() {
 
   console.log(`PaperStraw SQLite -> PostgreSQL migration`);
   console.log(`Source: ${options.sqlitePath}`);
-  console.log(`Target: DATABASE_URL`);
+  console.log(`Target: private jets database`);
   console.log(`Mode: ${options.dryRun ? "dry-run" : "write"}`);
   console.log(`Batch size: ${options.batchSize.toLocaleString()}`);
   console.log(`Tables: ${(options.onlyTables ?? TABLES).join(", ")}`);

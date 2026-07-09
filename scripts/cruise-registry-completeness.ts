@@ -10,7 +10,7 @@ import {
   type CoveragePublicEligibleShip,
   type CoverageRegistryEntry
 } from "@/lib/cruises/registryCoverage";
-import { prisma } from "@/lib/prisma";
+import { prisma } from "@/lib/database/cruises";
 
 loadProjectEnv();
 

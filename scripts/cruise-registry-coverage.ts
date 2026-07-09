@@ -4,7 +4,7 @@ import { dirname, resolve } from "node:path";
 import { loadProjectEnv } from "@/lib/env/loadProjectEnv";
 import { buildRegistryCoverageReport, parseRegistryExpansionManifest, type CoverageCandidateShip, type CoverageRegistryEntry } from "@/lib/cruises/registryCoverage";
 import { parseRegistryCsv } from "@/lib/cruises/registry";
-import { prisma } from "@/lib/prisma";
+import { prisma } from "@/lib/database/cruises";
 
 loadProjectEnv();
 

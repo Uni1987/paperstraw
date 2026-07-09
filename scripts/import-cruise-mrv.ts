@@ -1,10 +1,11 @@
 import { resolve } from "node:path";
-import { loadProjectEnv, requireEnv } from "@/lib/env/loadProjectEnv";
+import { requireCruisesDatabaseUrl } from "@/lib/database/config";
+import { loadProjectEnv } from "@/lib/env/loadProjectEnv";
 import { importCruiseMrvCsv } from "@/lib/cruises/mrv";
-import { prisma } from "@/lib/prisma";
+import { prisma } from "@/lib/database/cruises";
 
 loadProjectEnv();
-requireEnv("DATABASE_URL");
+requireCruisesDatabaseUrl();
 
 const filePath = readFileArgument();
 

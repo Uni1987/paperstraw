@@ -1,7 +1,7 @@
 import { monitorEventLoopDelay } from "node:perf_hooks";
 import { AISSTREAM_ENDPOINT, getAisStreamApiKey } from "@/lib/cruises/config";
 import { AISSTREAM_FILTER_MESSAGE_TYPES, VERIFIED_GLOBAL_BOUNDING_BOX, messageDataToString, usesExactVerifiedGlobalBoundingBox } from "@/lib/cruises/aisstream";
-import { prisma } from "@/lib/prisma";
+import { prisma } from "@/lib/database/cruises";
 
 export const GLOBAL_FEED_BENCHMARK_DEFAULT_RUNTIME_MS = 120000;
 export const GLOBAL_FEED_BENCHMARK_MAX_RUNTIME_WITHOUT_OVERRIDE_MS = 15 * 60 * 1000;

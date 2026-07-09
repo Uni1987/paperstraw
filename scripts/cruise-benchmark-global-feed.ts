@@ -14,7 +14,7 @@ import {
   runGlobalFeedBenchmark,
   validateGlobalFeedBenchmarkOptions
 } from "@/lib/cruises/globalFeedBenchmark";
-import { prisma } from "@/lib/prisma";
+import { prisma } from "@/lib/database/cruises";
 
 loadProjectEnv();
 

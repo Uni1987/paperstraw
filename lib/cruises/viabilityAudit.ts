@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { prisma } from "@/lib/prisma";
+import { prisma } from "@/lib/database/cruises";
 import { AISSTREAM_MMSI_FILTER_LIMIT, splitMmsiBatches } from "@/lib/cruises/registryCoverage";
 
 export const DEFAULT_VIABILITY_RECENT_DAYS = 7;

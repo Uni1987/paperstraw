@@ -7,7 +7,7 @@ import {
   runGlobalLocalFilterIngest,
   validateGlobalLocalFilterOptions
 } from "@/lib/cruises/globalLocalFilterIngest";
-import { prisma } from "@/lib/prisma";
+import { prisma } from "@/lib/database/cruises";
 
 loadProjectEnv();
 

@@ -1,6 +1,6 @@
 import { loadProjectEnv } from "@/lib/env/loadProjectEnv";
 import { buildRegistryStatusSummary } from "@/lib/cruises/registry";
-import { prisma } from "@/lib/prisma";
+import { prisma } from "@/lib/database/cruises";
 
 loadProjectEnv();
 

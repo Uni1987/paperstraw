@@ -40,7 +40,7 @@ Set these names in Railway. Do not paste values into logs, tickets, screenshots,
 
 Required:
 
-- `DATABASE_URL`
+- `CRUISES_DATABASE_URL`
 - `AISSTREAM_API_KEY`
 - `CRUISE_WORKER_ENV`
 - `CRUISE_WORKER_DATABASE_TARGET`
@@ -131,7 +131,7 @@ The worker logs only the logical database target:
 databaseTarget=cruises-dev
 ```
 
-It does not infer or print Neon branch names from `DATABASE_URL`. Confirm in Railway that the `DATABASE_URL` secret points to the `cruises-dev` Neon branch before starting the service.
+It does not infer or print Neon branch names from `CRUISES_DATABASE_URL`. Confirm in Railway that the `CRUISES_DATABASE_URL` secret points to the `cruises-dev` Neon branch before starting the service.
 
 Never point this development worker at Neon production.
 
@@ -199,6 +199,6 @@ Before starting Railway:
 - `CRUISE_WORKER_ENV=railway-development`.
 - `CRUISE_WORKER_DATABASE_TARGET=cruises-dev`.
 - `CRUISE_WORKER_PROFILE=railway`.
-- `DATABASE_URL` points to `cruises-dev`, not production.
+- `CRUISES_DATABASE_URL` points to `cruises-dev`, not production.
 - No other AISStream worker is running with the same key unless intentionally tested.
 - No registry reconcile `--apply` command is running.

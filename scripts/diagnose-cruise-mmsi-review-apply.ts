@@ -1,6 +1,6 @@
 import { loadProjectEnv } from "@/lib/env/loadProjectEnv";
 import { diagnoseMmsiReviewApplyConsistency, formatMmsiReviewDiagnosticsReport, parseMmsiReviewArgs } from "@/lib/cruises/mmsiReviewWorkflow";
-import { prisma } from "@/lib/prisma";
+import { prisma } from "@/lib/database/cruises";
 
 loadProjectEnv();
 

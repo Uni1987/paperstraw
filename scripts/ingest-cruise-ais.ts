@@ -1,9 +1,10 @@
-import { loadProjectEnv, requireEnv } from "@/lib/env/loadProjectEnv";
+import { requireCruisesDatabaseUrl } from "@/lib/database/config";
+import { loadProjectEnv } from "@/lib/env/loadProjectEnv";
 import { runAisStreamWorker } from "@/lib/cruises/aisstream";
 
 async function main() {
   loadProjectEnv();
-  requireEnv("DATABASE_URL");
+  requireCruisesDatabaseUrl(process.env, { allowLegacyDatabaseUrlWithCruiseTarget: true });
   const options = parseArgs(process.argv.slice(2));
   await runAisStreamWorker({
     mode: options.mode,

@@ -1,7 +1,7 @@
 import { resolve } from "node:path";
 import { loadProjectEnv } from "@/lib/env/loadProjectEnv";
 import { importRegistryCsv } from "@/lib/cruises/registry";
-import { prisma } from "@/lib/prisma";
+import { prisma } from "@/lib/database/cruises";
 
 loadProjectEnv();
 

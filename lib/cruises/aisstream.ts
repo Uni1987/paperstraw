@@ -1,5 +1,5 @@
 import type { Prisma } from "@prisma/client";
-import { prisma } from "@/lib/prisma";
+import { prisma } from "@/lib/database/cruises";
 import {
   AISSTREAM_ENDPOINT,
   CRUISE_AIS_SOURCE,

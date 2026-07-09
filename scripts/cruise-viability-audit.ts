@@ -3,7 +3,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { loadProjectEnv } from "@/lib/env/loadProjectEnv";
 import { buildCruiseViabilityAuditFromDatabase, DEFAULT_VIABILITY_RECENT_DAYS, formatCruiseViabilityAudit } from "@/lib/cruises/viabilityAudit";
-import { prisma } from "@/lib/prisma";
+import { prisma } from "@/lib/database/cruises";
 
 type AuditFormat = "terminal" | "json" | "markdown";
 

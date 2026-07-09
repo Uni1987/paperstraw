@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import type { Prisma } from "@prisma/client";
-import { prisma } from "@/lib/prisma";
+import { prisma } from "@/lib/database/cruises";
 import { CRUISE_MRV_SOURCE, parseOptionalNumber } from "@/lib/cruises/config";
 
 type CsvRow = Record<string, string>;

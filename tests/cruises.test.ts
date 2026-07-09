@@ -170,6 +170,8 @@ import {
 afterEach(() => {
   delete process.env.AISSTREAM_BOUNDING_BOXES;
   delete process.env.CRUISE_AIS_INGEST_MODE;
+  delete process.env.CRUISES_DATABASE_URL;
+  delete process.env.CRUISE_DATABASE_URL;
   delete process.env.CRUISE_WORKER_ENV;
   delete process.env.CRUISE_WORKER_DATABASE_TARGET;
   delete process.env.CRUISE_WORKER_PROFILE;
@@ -1958,7 +1960,7 @@ describe("global-local-filter cruise ingest", () => {
 
     expect(() => validateGlobalLocalFilterWorkerEnvironment({ ...baseEnv, CRUISE_WORKER_ENV: undefined })).toThrow(/CRUISE_WORKER_ENV/);
     expect(() => validateGlobalLocalFilterWorkerEnvironment({ ...baseEnv, CRUISE_WORKER_ENV: "staging" })).toThrow(/Invalid CRUISE_WORKER_ENV/);
-    expect(() => validateGlobalLocalFilterWorkerEnvironment({ ...baseEnv, DATABASE_URL: undefined })).toThrow(/DATABASE_URL/);
+    expect(() => validateGlobalLocalFilterWorkerEnvironment({ ...baseEnv, CRUISES_DATABASE_URL: undefined })).toThrow(/CRUISES_DATABASE_URL/);
     expect(() => validateGlobalLocalFilterWorkerEnvironment({ ...baseEnv, AISSTREAM_API_KEY: "" })).toThrow(/AISSTREAM_API_KEY/);
     expect(() => validateGlobalLocalFilterWorkerEnvironment({ ...baseEnv, CRUISE_WORKER_DATABASE_TARGET: undefined })).toThrow(/CRUISE_WORKER_DATABASE_TARGET/);
   });
@@ -3083,7 +3085,7 @@ function globalLocalFilterLookup(): VerifiedCruiseLookup {
 
 function globalLocalFilterWorkerEnv(overrides: Record<string, string | undefined> = {}): Record<string, string | undefined> {
   return {
-    DATABASE_URL: "postgres://user:password@example.invalid/cruises-dev",
+    CRUISES_DATABASE_URL: "postgres://user:password@example.invalid/cruises-dev",
     AISSTREAM_API_KEY: "secret-ais-key",
     CRUISE_WORKER_ENV: "development",
     CRUISE_WORKER_DATABASE_TARGET: "cruises-dev",
