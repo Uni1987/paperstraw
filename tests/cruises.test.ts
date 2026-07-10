@@ -145,6 +145,22 @@ import {
   type CruiseOpsStatus
 } from "@/lib/cruises/adminOps";
 import {
+  buildInventoryReview,
+  calculateRatio as calculateLaunchRatio,
+  classifyLaunchReadiness,
+  enrichInventoryWithLiveCounts,
+  summarizeUnobservedByOperator,
+  type InventoryReviewRow,
+  type UnobservedLinkedVessel
+} from "@/lib/cruises/launchReadiness";
+import {
+  EVIDENCE_TEMPLATE_COLUMNS,
+  REGISTRY_PROPOSAL_TEMPLATE_COLUMNS,
+  buildScopeResearchOperatorRow,
+  buildScopeResearchPlan,
+  isImportReadyScopeClassification
+} from "@/lib/cruises/scopeResearchPlan";
+import {
   MMSI_REVIEW_APPLIED_MARKER,
   assertMmsiReviewMutationTarget,
   buildAppliedResolutionNote,
@@ -2712,6 +2728,192 @@ describe("cruise operations admin", () => {
     expect(summary).toContain("Observed 24h: 120");
     expect(summary).not.toContain("postgres://");
     expect(summary).not.toContain("rawPayload");
+  });
+});
+
+describe("cruise launch readiness audit", () => {
+  it("calculates launch readiness ratios without dividing by zero", () => {
+    expect(calculateLaunchRatio(245, 316)).toBeCloseTo(0.775, 3);
+    expect(calculateLaunchRatio(10, 0)).toBe(0);
+  });
+
+  it("classifies beta readiness when MMSI linkage is below the launch target but conflicts are clear", () => {
+    const result = classifyLaunchReadiness({
+      acceptedRegistryEntries: 316,
+      publicEligibleVessels: 245,
+      publicEligibleRatio: 245 / 316,
+      observed7dRatio: 0.8,
+      pendingConflicts: 0,
+      totalConflicts: 0
+    });
+
+    expect(result.status).toBe("beta ready");
+    expect(result.recommendation).toBe("wait for more MMSI candidates");
+    expect(result.blockers.join(" ")).toMatch(/85\.0% target/);
+  });
+
+  it("blocks launch when conflicts exist", () => {
+    const result = classifyLaunchReadiness({
+      acceptedRegistryEntries: 316,
+      publicEligibleVessels: 300,
+      publicEligibleRatio: 300 / 316,
+      observed7dRatio: 0.9,
+      pendingConflicts: 1,
+      totalConflicts: 1
+    });
+
+    expect(result.status).toBe("not ready");
+    expect(result.recommendation).toBe("fix data/model issue first");
+  });
+
+  it("groups unobserved linked vessels by operator across 24h, 7d and 30d windows", () => {
+    const rows: UnobservedLinkedVessel[] = [
+      { vesselName: "A", operator: "Operator A", imo: "1000001", missing24h: true, missing7d: true, missing30d: false, latestObservedAt: "2026-07-04T00:00:00Z" },
+      { vesselName: "B", operator: "Operator A", imo: "1000002", missing24h: true, missing7d: false, missing30d: false, latestObservedAt: "2026-07-08T00:00:00Z" },
+      { vesselName: "C", operator: "Operator B", imo: "1000003", missing24h: true, missing7d: true, missing30d: true, latestObservedAt: null }
+    ];
+
+    expect(summarizeUnobservedByOperator(rows)).toEqual([
+      { operator: "Operator B", missing24h: 1, missing7d: 1, missing30d: 1 },
+      { operator: "Operator A", missing24h: 2, missing7d: 1, missing30d: 0 }
+    ]);
+  });
+
+  it("summarizes completeness inventory gaps and exclusions", () => {
+    const rows: InventoryReviewRow[] = [
+      {
+        operator: "Partial Line",
+        parentGroup: "Group",
+        status: "PARTIAL",
+        officialFleetCount: 10,
+        currentRegistryCount: 8,
+        approvedMmsiLinkedCount: 7,
+        unresolvedCount: 2,
+        excludedCount: 1,
+        thirdWaveReadyCount: 3,
+        nextAction: "Review sources."
+      },
+      {
+        operator: "Scope Line",
+        parentGroup: "Group",
+        status: "SCOPE_DECISION_REQUIRED",
+        officialFleetCount: null,
+        currentRegistryCount: null,
+        approvedMmsiLinkedCount: null,
+        unresolvedCount: 4,
+        excludedCount: 6,
+        thirdWaveReadyCount: 0,
+        nextAction: "Decide scope."
+      }
+    ];
+
+    const review = buildInventoryReview(rows);
+    expect(review.partialOperators).toHaveLength(1);
+    expect(review.scopeDecisionOperators).toHaveLength(1);
+    expect(review.estimatedAdditionalSafeRegistryPotential).toBe(3);
+    expect(review.estimatedVesselsToRemainExcluded).toBe(7);
+  });
+
+  it("does not count proposal-ready inventory rows that are already present in the live registry", () => {
+    const rows: InventoryReviewRow[] = [
+      {
+        operator: "Imported Line",
+        parentGroup: "Group",
+        status: "PARTIAL",
+        officialFleetCount: 4,
+        currentRegistryCount: 0,
+        approvedMmsiLinkedCount: 0,
+        unresolvedCount: 0,
+        excludedCount: 0,
+        thirdWaveReadyCount: 4,
+        nextAction: "Review rows."
+      }
+    ];
+
+    const enriched = enrichInventoryWithLiveCounts(rows, new Map([["Imported Line", 4]]));
+    expect(enriched[0].currentRegistryCount).toBe(4);
+    expect(buildInventoryReview(enriched).estimatedAdditionalSafeRegistryPotential).toBe(0);
+  });
+});
+
+describe("cruise scope-decision research plan", () => {
+  it("keeps the evidence template columns aligned with manual review needs", () => {
+    expect([...EVIDENCE_TEMPLATE_COLUMNS]).toEqual([
+      "operator",
+      "vessel_name",
+      "imo",
+      "mmsi_if_known",
+      "decision",
+      "decision_reason",
+      "evidence_source_1",
+      "evidence_source_2",
+      "active_status",
+      "vessel_type",
+      "commercial_cruise_product",
+      "ocean_or_expedition",
+      "river_or_coastal_transport",
+      "future_ship",
+      "notes",
+      "reviewer",
+      "reviewed_at"
+    ]);
+  });
+
+  it("keeps the manual proposal template compatible with registry import rows", () => {
+    expect([...REGISTRY_PROPOSAL_TEMPLATE_COLUMNS]).toEqual([
+      "imo",
+      "canonical_name",
+      "operator",
+      "operator_group",
+      "vessel_segment",
+      "registry_decision",
+      "active_status",
+      "source_name",
+      "source_url",
+      "source_checked_at",
+      "notes"
+    ]);
+  });
+
+  it("classifies tricky scope operators without making them import-ready automatically", () => {
+    const aqua = buildScopeResearchOperatorRow("Aqua Expeditions", undefined, undefined);
+    const fourSeasons = buildScopeResearchOperatorRow("Four Seasons Yachts", undefined, undefined);
+    const hx = buildScopeResearchOperatorRow("HX / Hurtigruten Expeditions", undefined, undefined);
+
+    expect(aqua.likelyScopeClassification).toBe("PARTIAL_INCLUDE");
+    expect(aqua.riskLevel).toBe("high");
+    expect(fourSeasons.likelyScopeClassification).toBe("DEFER");
+    expect(hx.whyAmbiguousOrPartial).toMatch(/coastal express/i);
+    expect(isImportReadyScopeClassification(aqua.likelyScopeClassification)).toBe(false);
+    expect(isImportReadyScopeClassification(fourSeasons.likelyScopeClassification)).toBe(false);
+  });
+
+  it("only treats explicit include decisions as import-ready", () => {
+    expect(isImportReadyScopeClassification("INCLUDE")).toBe(true);
+    expect(isImportReadyScopeClassification("PARTIAL_INCLUDE")).toBe(false);
+    expect(isImportReadyScopeClassification("DEFER")).toBe(false);
+    expect(isImportReadyScopeClassification("EXCLUDE")).toBe(false);
+  });
+
+  it("builds a read-only plan with zero database writes", async () => {
+    const plan = await buildScopeResearchPlan(
+      { now: new Date("2026-07-10T12:00:00.000Z") },
+      {
+        $queryRaw: async <T = unknown>() =>
+          [
+            { operator: "Aqua Expeditions", accepted_count: 0, public_eligible_count: 0 },
+            { operator: "HX / Hurtigruten Expeditions", accepted_count: 4, public_eligible_count: 3 }
+          ] as T
+      }
+    );
+
+    expect(plan.safetyChecks.readOnlyDatabase).toBe(true);
+    expect(plan.safetyChecks.databaseWritesAttempted).toBe(0);
+    expect(plan.safetyChecks.registryImportsApplied).toBe(false);
+    expect(plan.safetyChecks.mmsiCandidatesApproved).toBe(false);
+    expect(plan.registrySnapshot.acceptedRegistryEntries).toBe(4);
+    expect(plan.registrySnapshot.publicEligibleVessels).toBe(3);
+    expect(plan.operators.some((row) => row.operator === "Aqua Expeditions")).toBe(true);
   });
 });
 
