@@ -4,7 +4,7 @@ import dynamic from "next/dynamic";
 import { DashboardMapSkeleton, DashboardVisualsSkeleton } from "@/components/dashboard/DashboardSkeletons";
 import type { AwarenessRankPoint, AwarenessSeriesPoint } from "@/lib/awareness/types";
 import type { ComparisonCardData } from "@/lib/comparisons";
-import type { AirportEmissionPoint } from "@/lib/dashboard/report";
+import type { AirportEmissionPoint, AirportMapPeriodPayload } from "@/lib/dashboard/mapPeriods";
 
 const DynamicAirportEmissionsMap = dynamic(
   () => import("@/components/dashboard/AirportEmissionsMap").then((mod) => mod.AirportEmissionsMap),
@@ -22,8 +22,8 @@ const DynamicDashboardVisuals = dynamic(
   }
 );
 
-export function LazyAirportEmissionsMap({ airports }: { airports: AirportEmissionPoint[] }) {
-  return <DynamicAirportEmissionsMap airports={airports} />;
+export function LazyAirportEmissionsMap({ airports, periods }: { airports?: AirportEmissionPoint[]; periods?: AirportMapPeriodPayload[] }) {
+  return <DynamicAirportEmissionsMap airports={airports} periods={periods} />;
 }
 
 export function LazyDashboardVisuals(props: {

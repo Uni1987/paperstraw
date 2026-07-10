@@ -4,7 +4,7 @@ import { DashboardMapSkeleton } from "@/components/dashboard/DashboardSkeletons"
 import { LazyAirportEmissionsMap, LazyDashboardVisuals } from "@/components/dashboard/LazyDashboardVisuals";
 import { StatCard } from "@/components/dashboard/StatCard";
 import { isSameCalendarDay, normalizeDate } from "@/lib/dates";
-import { getDashboardAirportEmissionPoints, getVisualDashboardReport } from "@/lib/dashboard/report";
+import { getDashboardAirportEmissionPeriods, getVisualDashboardReport } from "@/lib/dashboard/report";
 import type { ImportFreshness } from "@/lib/ingestion/freshness";
 
 export async function DashboardHome() {
@@ -93,8 +93,8 @@ export async function DashboardHome() {
 }
 
 async function DashboardMapSection() {
-  const airportEmissionPoints = await getDashboardAirportEmissionPoints();
-  return <LazyAirportEmissionsMap airports={airportEmissionPoints} />;
+  const airportEmissionPeriods = await getDashboardAirportEmissionPeriods();
+  return <LazyAirportEmissionsMap periods={airportEmissionPeriods} />;
 }
 
 function DataStatusWidget({ freshness }: { freshness: ImportFreshness }) {

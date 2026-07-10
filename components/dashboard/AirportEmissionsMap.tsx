@@ -1,8 +1,16 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import type { Map as MapLibreMap, MapGeoJSONFeature } from "maplibre-gl";
-import type { AirportEmissionPoint } from "@/lib/dashboard/report";
+import {
+  DEFAULT_AIRPORT_MAP_PERIOD,
+  filterAirportMapPeriodPayloads,
+  normalizeAirportMapPeriod,
+  type AirportEmissionPoint,
+  type AirportMapPeriodId,
+  type AirportMapPeriodPayload
+} from "@/lib/dashboard/mapPeriods";
 import {
   PAPERSTRAW_CARTO_VECTOR_SOURCE_ID,
   PAPERSTRAW_LEGEND_GRADIENT_CLASS,
@@ -43,14 +51,49 @@ const pointCoreLayerId = "airport-emissions-point-core";
 const interactiveLayerIds = [clusterCoreLayerId, pointCoreLayerId];
 const cartoVectorSourceId = PAPERSTRAW_CARTO_VECTOR_SOURCE_ID;
 
-export function AirportEmissionsMap({ airports }: { airports: AirportEmissionPoint[] }) {
+export function AirportEmissionsMap({
+  airports = [],
+  periods
+}: {
+  airports?: AirportEmissionPoint[];
+  periods?: AirportMapPeriodPayload[];
+}) {
+  const searchParams = useSearchParams();
+  const requestedPeriod = searchParams.get("period");
+  const [selectedPeriodId, setSelectedPeriodId] = useState(() => normalizeAirportMapPeriod(requestedPeriod));
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const [tooltip, setTooltip] = useState<TooltipState>(null);
   const [mapReady, setMapReady] = useState(false);
   const [dataVisible, setDataVisible] = useState(true);
-  const maxCo2Kg = useMemo(() => Math.max(...airports.map((airport) => airport.totalCo2Kg), 1), [airports]);
-  const geojson = useMemo(() => buildAirportGeoJson(airports, maxCo2Kg), [airports, maxCo2Kg]);
+  const supportedPeriods = useMemo(() => filterAirportMapPeriodPayloads(periods), [periods]);
+  const selectedPeriod = useMemo(() => {
+    if (!supportedPeriods.length) return null;
+    return supportedPeriods.find((period) => period.id === selectedPeriodId) ?? supportedPeriods.find((period) => period.id === DEFAULT_AIRPORT_MAP_PERIOD) ?? supportedPeriods[0];
+  }, [supportedPeriods, selectedPeriodId]);
+  const displayAirports = selectedPeriod?.points ?? airports;
+  const maxCo2Kg = useMemo(() => Math.max(...displayAirports.map((airport) => airport.totalCo2Kg), 1), [displayAirports]);
+  const geojson = useMemo(() => buildAirportGeoJson(displayAirports, maxCo2Kg), [displayAirports, maxCo2Kg]);
+  const initialGeojsonRef = useRef(geojson);
+  const initialMaxCo2KgRef = useRef(maxCo2Kg);
+  const subtitle = selectedPeriod?.subtitle ?? "Aggregate CO2 emissions from private jet activity at airports year to date.";
+
+  useEffect(() => {
+    if (!requestedPeriod) return;
+    const normalizedPeriod = normalizeAirportMapPeriod(requestedPeriod);
+    setSelectedPeriodId(normalizedPeriod);
+
+    if (typeof window === "undefined" || requestedPeriod === normalizedPeriod) return;
+
+    const params = new URLSearchParams(window.location.search);
+    if (normalizedPeriod === DEFAULT_AIRPORT_MAP_PERIOD) {
+      params.delete("period");
+    } else {
+      params.set("period", normalizedPeriod);
+    }
+    const query = params.toString();
+    window.history.replaceState(null, "", query ? `${window.location.pathname}?${query}` : window.location.pathname);
+  }, [requestedPeriod]);
 
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return;
@@ -80,7 +123,7 @@ export function AirportEmissionsMap({ airports }: { airports: AirportEmissionPoi
         if (disposed) return;
         map.addSource(sourceId, {
           type: "geojson",
-          data: geojson,
+          data: initialGeojsonRef.current,
           cluster: true,
           clusterMaxZoom: 4,
           clusterRadius: 34,
@@ -90,10 +133,10 @@ export function AirportEmissionsMap({ airports }: { airports: AirportEmissionPoi
         } as never);
         map.addSource(rawSourceId, {
           type: "geojson",
-          data: geojson
+          data: initialGeojsonRef.current
         } as never);
 
-        addEmissionLayers(map, maxCo2Kg, isMobile);
+        addEmissionLayers(map, initialMaxCo2KgRef.current, isMobile);
         applyInitialView(map, initialView, 0);
         setMapReady(true);
       });
@@ -137,7 +180,7 @@ export function AirportEmissionsMap({ airports }: { airports: AirportEmissionPoi
       mapRef.current?.remove();
       mapRef.current = null;
     };
-  }, [geojson, maxCo2Kg]);
+  }, []);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -145,7 +188,8 @@ export function AirportEmissionsMap({ airports }: { airports: AirportEmissionPoi
     const rawSource = map?.getSource(rawSourceId) as { setData?: (data: ReturnType<typeof buildAirportGeoJson>) => void } | undefined;
     source?.setData?.(geojson);
     rawSource?.setData?.(geojson);
-  }, [geojson]);
+    if (map) updateEmissionLayerScales(map, maxCo2Kg, isMobileViewport());
+  }, [geojson, maxCo2Kg]);
 
   function setLayerVisibility(visible: boolean) {
     const map = mapRef.current;
@@ -164,11 +208,42 @@ export function AirportEmissionsMap({ airports }: { airports: AirportEmissionPoi
     applyInitialView(map, initialView, 650);
   }
 
+  function selectPeriod(periodId: AirportMapPeriodId) {
+    setSelectedPeriodId(periodId);
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    params.set("period", periodId);
+    const query = params.toString();
+    window.history.replaceState(null, "", query ? `${window.location.pathname}?${query}` : window.location.pathname);
+  }
+
   return (
     <div className="relative overflow-hidden rounded-2xl border border-white/10 bg-[#030807] shadow-2xl shadow-black/35">
-      <div className="absolute left-4 top-4 z-10 max-w-[15rem] md:left-5 md:top-5 md:max-w-md">
-        <p className="text-sm font-semibold uppercase tracking-[0.14em] text-white">World airport emissions heatmap</p>
-        <p className="mt-2 hidden text-sm leading-5 text-white/58 sm:block">Aggregate CO2 emissions from private jet activity at airports.</p>
+      <div className="absolute left-4 right-4 top-4 z-10 flex flex-col gap-3 md:left-5 md:right-5 md:top-5 md:flex-row md:items-start md:justify-between">
+        <div className="max-w-[15rem] md:max-w-md">
+          <p className="text-sm font-semibold uppercase tracking-[0.14em] text-white">World airport emissions heatmap</p>
+          <p className="mt-2 hidden text-sm leading-5 text-white/58 sm:block">{subtitle}</p>
+        </div>
+        {supportedPeriods.length ? (
+          <div className="flex w-fit max-w-full overflow-hidden rounded-full border border-white/10 bg-[#07100f]/88 p-1 shadow-2xl backdrop-blur">
+            {supportedPeriods.map((period) => {
+              const active = selectedPeriod?.id === period.id;
+              return (
+                <button
+                  key={period.id}
+                  type="button"
+                  aria-pressed={active}
+                  className={`whitespace-nowrap rounded-full px-3 py-1.5 text-[0.68rem] font-semibold transition focus:outline-none focus:ring-2 focus:ring-paper/70 focus:ring-offset-2 focus:ring-offset-[#07100f] md:px-3.5 ${
+                    active ? "bg-paper text-black shadow-lg shadow-paper/10" : "text-white/58 hover:bg-white/10 hover:text-white"
+                  }`}
+                  onClick={() => selectPeriod(period.id)}
+                >
+                  {period.label}
+                </button>
+              );
+            })}
+          </div>
+        ) : null}
       </div>
 
       <div ref={containerRef} className="h-[23rem] w-full md:h-[36rem]" />
@@ -176,6 +251,15 @@ export function AirportEmissionsMap({ airports }: { airports: AirportEmissionPoi
       {!mapReady ? (
         <div className="absolute inset-0 flex items-center justify-center bg-[#030807] text-sm text-white/58">
           Loading emissions map...
+        </div>
+      ) : null}
+
+      {mapReady && displayAirports.length === 0 ? (
+        <div className="absolute inset-0 flex items-center justify-center bg-[#030807]/72 p-6 text-center backdrop-blur-[1px]">
+          <div className="max-w-sm rounded-2xl border border-white/10 bg-[#07100f]/92 p-6 shadow-2xl">
+            <p className="text-lg font-semibold text-white">No private jet airport emissions for this period yet.</p>
+            <p className="mt-3 text-sm leading-6 text-white/58">The selected period remains active; no fallback data is shown.</p>
+          </div>
         </div>
       ) : null}
 
@@ -315,6 +399,37 @@ function addEmissionLayers(map: MapLibreMap, maxCo2Kg: number, isMobile: boolean
       "circle-opacity": 0.88
     }
   } as never);
+}
+
+function updateEmissionLayerScales(map: MapLibreMap, maxCo2Kg: number, isMobile: boolean) {
+  const glowScale = isMobile ? 0.88 : 1;
+  const glowOpacityScale = isMobile ? 0.86 : 1;
+  const colorExpression = paperStrawScoreColorExpression("emissionScore");
+
+  if (map.getLayer(rawGlowLayerId)) {
+    map.setPaintProperty(rawGlowLayerId, "circle-color", colorExpression);
+    map.setPaintProperty(rawGlowLayerId, "circle-radius", ["interpolate", ["linear"], ["get", "emissionScore"], 0, 2.4 * glowScale, 0.5, 5.5 * glowScale, 1, 13 * glowScale]);
+    map.setPaintProperty(rawGlowLayerId, "circle-opacity", ["interpolate", ["linear"], ["get", "emissionScore"], 0, 0.18 * glowOpacityScale, 0.45, 0.38 * glowOpacityScale, 1, 0.68 * glowOpacityScale]);
+  }
+  if (map.getLayer(rawCoreLayerId)) {
+    map.setPaintProperty(rawCoreLayerId, "circle-color", colorExpression);
+  }
+  if (map.getLayer(clusterGlowLayerId)) {
+    map.setPaintProperty(clusterGlowLayerId, "circle-color", paperStrawValueColorExpression("totalCo2Kg", maxCo2Kg));
+    map.setPaintProperty(clusterGlowLayerId, "circle-radius", ["interpolate", ["linear"], ["get", "totalCo2Kg"], 0, 10, maxCo2Kg, 34]);
+    map.setPaintProperty(clusterGlowLayerId, "circle-opacity", 0.32 * glowOpacityScale);
+  }
+  if (map.getLayer(clusterCoreLayerId)) {
+    map.setPaintProperty(clusterCoreLayerId, "circle-radius", ["interpolate", ["linear"], ["get", "totalCo2Kg"], 0, 2.5, maxCo2Kg, 9]);
+  }
+  if (map.getLayer(pointGlowLayerId)) {
+    map.setPaintProperty(pointGlowLayerId, "circle-color", colorExpression);
+    map.setPaintProperty(pointGlowLayerId, "circle-radius", ["interpolate", ["linear"], ["get", "emissionScore"], 0, 2.8 * glowScale, 0.55, 7 * glowScale, 1, 16 * glowScale]);
+    map.setPaintProperty(pointGlowLayerId, "circle-opacity", 0.5 * glowOpacityScale);
+  }
+  if (map.getLayer(pointCoreLayerId)) {
+    map.setPaintProperty(pointCoreLayerId, "circle-color", colorExpression);
+  }
 }
 
 function buildAirportGeoJson(airports: AirportEmissionPoint[], maxCo2Kg: number) {
