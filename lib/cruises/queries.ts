@@ -64,6 +64,7 @@ export type CruiseMapPoint = {
   shipId: string;
   name: string;
   operator: string;
+  imo: string | null;
   mmsi: string;
   latitude: number;
   longitude: number;
@@ -76,6 +77,7 @@ export type CruiseMapPoint = {
   observationCount?: number;
   vesselCount?: number;
   periodLabel?: string;
+  verificationStatus?: string | null;
 };
 
 export type CruiseMapPeriodPayload = {
@@ -124,12 +126,15 @@ type CruisePositionSqlRow = {
   shipId: string;
   name: string;
   operator: string | null;
+  imo: string | null;
   mmsi: string;
   latitude: unknown;
   longitude: unknown;
   speedOverGround: unknown;
   destination: string | null;
   timestamp: Date;
+  observationCount?: bigint | number | null;
+  verificationStatus?: string | null;
 };
 
 export type CruiseActivityCellSqlRow = {
@@ -276,14 +281,17 @@ async function getLatestCruisePositions(recentSince: Date, now = new Date(), ver
       p.ship_id AS "shipId",
       s.name AS "name",
       s.operator AS "operator",
+      s.imo AS "imo",
       p.mmsi AS "mmsi",
       p.latitude AS "latitude",
       p.longitude AS "longitude",
       p.speed_over_ground AS "speedOverGround",
       p.destination AS "destination",
-      p.timestamp AS "timestamp"
+      p.timestamp AS "timestamp",
+      v.verification_status AS "verificationStatus"
     FROM cruise_positions p
     INNER JOIN cruise_ships s ON s.id = p.ship_id
+    LEFT JOIN cruise_vessel_verifications v ON v.ship_id = s.id
     WHERE p.timestamp >= ${recentSince}
       AND p.timestamp <= ${now}
       AND p.ship_id = ANY(${verifiedShipIds})
@@ -298,6 +306,7 @@ async function getLatestCruisePositions(recentSince: Date, now = new Date(), ver
       shipId: row.shipId,
       name: row.name,
       operator: row.operator ?? "Unknown operator",
+      imo: row.imo,
       mmsi: row.mmsi,
       latitude: Number(row.latitude),
       longitude: Number(row.longitude),
@@ -305,7 +314,8 @@ async function getLatestCruisePositions(recentSince: Date, now = new Date(), ver
       destination: row.destination,
       timestamp: row.timestamp,
       activityWeight: 1,
-      estimatedCo2Tonnes: null
+      estimatedCo2Tonnes: null,
+      verificationStatus: row.verificationStatus ?? null
     })),
     now,
     CRUISE_POSITION_FRESHNESS_WINDOW_MS
@@ -396,10 +406,74 @@ async function getCruiseMapPeriodPayloads(verifiedShipIds: string[], monitoringS
   return Promise.all(
     CRUISE_MAP_PERIODS.map(async (period) => {
       const range = getCruiseMapPeriodRange(period.id, now, monitoringStart);
-      const points = await getCruiseActivityCells(range.start, range.end, verifiedShipIds, period.label);
+      const points = await getCruiseVesselMapPointsForPeriod(range.start, range.end, verifiedShipIds, period.label);
       return { ...period, points };
     })
   );
+}
+
+async function getCruiseVesselMapPointsForPeriod(start: Date, end: Date, verifiedShipIds: string[], periodLabel: string): Promise<CruiseMapPoint[]> {
+  if (!verifiedShipIds.length || start.getTime() > end.getTime()) return [];
+  const [positionRows, estimateRows] = await Promise.all([getLatestCruisePositionRowsForPeriod(start, end, verifiedShipIds), getCruiseEstimateRows(start, end, verifiedShipIds)]);
+  return buildCruiseActivityMapPoints(buildCruisePeriodVesselMapPoints(positionRows, periodLabel), estimateRows);
+}
+
+async function getLatestCruisePositionRowsForPeriod(start: Date, end: Date, verifiedShipIds: string[]) {
+  return prisma.$queryRaw<CruisePositionSqlRow[]>`
+    WITH period_positions AS (
+      SELECT
+        p.*,
+        COUNT(*) OVER (PARTITION BY p.ship_id)::int AS observation_count
+      FROM cruise_positions p
+      WHERE p.timestamp >= ${start}
+        AND p.timestamp <= ${end}
+        AND p.ship_id = ANY(${verifiedShipIds})
+        AND p.latitude BETWEEN -90 AND 90
+        AND p.longitude BETWEEN -180 AND 180
+        AND NOT (p.latitude = 0 AND p.longitude = 0)
+    )
+    SELECT DISTINCT ON (p.ship_id)
+      p.ship_id AS "shipId",
+      s.name AS "name",
+      s.operator AS "operator",
+      s.imo AS "imo",
+      p.mmsi AS "mmsi",
+      p.latitude AS "latitude",
+      p.longitude AS "longitude",
+      p.speed_over_ground AS "speedOverGround",
+      p.destination AS "destination",
+      p.timestamp AS "timestamp",
+      p.observation_count AS "observationCount",
+      v.verification_status AS "verificationStatus"
+    FROM period_positions p
+    INNER JOIN cruise_ships s ON s.id = p.ship_id
+    LEFT JOIN cruise_vessel_verifications v ON v.ship_id = s.id
+    ORDER BY p.ship_id, p.timestamp DESC, p.id DESC
+  `;
+}
+
+export function buildCruisePeriodVesselMapPoints(rows: CruisePositionSqlRow[], periodLabel: string): CruiseMapPoint[] {
+  return rows
+    .map((row) => ({
+      shipId: row.shipId,
+      name: row.name || row.imo || row.mmsi || "Unknown cruise ship",
+      operator: row.operator ?? "Unknown operator",
+      imo: row.imo,
+      mmsi: row.mmsi,
+      latitude: Number(row.latitude),
+      longitude: Number(row.longitude),
+      speedOverGround: row.speedOverGround === null || row.speedOverGround === undefined ? null : Number(row.speedOverGround),
+      destination: row.destination,
+      timestamp: row.timestamp,
+      activityWeight: 1,
+      estimatedCo2Tonnes: null,
+      isAggregate: false,
+      observationCount: Number(row.observationCount ?? 1),
+      vesselCount: 1,
+      periodLabel,
+      verificationStatus: row.verificationStatus ?? null
+    }))
+    .filter((point) => isValidCruiseCoordinate(point.latitude, point.longitude));
 }
 
 async function getCruiseActivityCells(start: Date, end: Date, verifiedShipIds: string[], periodLabel: string): Promise<CruiseMapPoint[]> {
@@ -435,6 +509,7 @@ export function buildCruiseActivityCellPoints(rows: CruiseActivityCellSqlRow[], 
         shipId: "",
         name: "Verified cruise activity",
         operator: `${vesselCount.toLocaleString("en-US")} verified ship${vesselCount === 1 ? "" : "s"}`,
+        imo: null,
         mmsi: "",
         latitude: Number(row.latitude),
         longitude: Number(row.longitude),
@@ -446,7 +521,8 @@ export function buildCruiseActivityCellPoints(rows: CruiseActivityCellSqlRow[], 
         isAggregate: true,
         observationCount,
         vesselCount,
-        periodLabel
+        periodLabel,
+        verificationStatus: null
       } satisfies CruiseMapPoint;
     })
     .filter((point) => isValidCruiseCoordinate(point.latitude, point.longitude));
@@ -714,11 +790,15 @@ export function estimateCruiseMapPayloadBytes(points: CruiseMapPoint[]) {
         longitude: point.longitude,
         activityWeight: point.activityWeight,
         estimatedCo2Tonnes: point.estimatedCo2Tonnes,
+        imo: point.imo,
         name: point.name,
         operator: point.operator,
         speedOverGround: point.speedOverGround,
         destination: point.destination,
-        timestamp: point.timestamp.toISOString()
+        timestamp: point.timestamp.toISOString(),
+        observationCount: point.observationCount ?? null,
+        isAggregate: Boolean(point.isAggregate),
+        verificationStatus: point.verificationStatus ?? null
       }))
     )
   ).length;

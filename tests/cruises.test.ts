@@ -62,6 +62,7 @@ import {
   buildCruiseSegmentBreakdown,
   buildDailyCruiseEmissionSeries,
   buildCruiseActivityMapPoints,
+  buildCruisePeriodVesselMapPoints,
   buildTopCruiseShipChartRows,
   dedupeCruiseEstimateRows,
   estimateCruiseMapPayloadBytes,
@@ -74,6 +75,7 @@ import {
   selectLatestCruisePositionPerShip,
   summarizeCruiseEstimateRows
 } from "@/lib/cruises/queries";
+import { buildVesselGeoJson, featureToTooltip, getCruiseShipDetailHref } from "@/components/cruises/CruiseVesselMap";
 import { buildCruiseViabilityAudit, parseOperatorCoverageManifest } from "@/lib/cruises/viabilityAudit";
 import {
   buildGlobalFeedSubscriptionPayload,
@@ -1361,6 +1363,86 @@ describe("cruise dashboard query helpers", () => {
     expect(getCruiseMapPeriodRange("since-monitoring", monday, monitoringStart).start.toISOString()).toBe("2026-06-01T00:00:00.000Z");
   });
 
+  it("preserves cruise vessel identity for period map points", () => {
+    const points = buildCruisePeriodVesselMapPoints(
+      [
+        {
+          shipId: "ship-mein-schiff-1",
+          name: "MEIN SCHIFF 1",
+          operator: "TUI Cruises",
+          imo: "9783564",
+          mmsi: "249660000",
+          latitude: "36.4",
+          longitude: "14.2",
+          speedOverGround: "12.4",
+          destination: "PALMA",
+          timestamp: new Date("2026-07-08T12:00:00.000Z"),
+          observationCount: 9,
+          verificationStatus: "VERIFIED_OCEAN_CRUISE"
+        }
+      ],
+      "This month"
+    );
+
+    expect(points).toHaveLength(1);
+    expect(points[0]).toMatchObject({
+      isAggregate: false,
+      shipId: "ship-mein-schiff-1",
+      name: "MEIN SCHIFF 1",
+      operator: "TUI Cruises",
+      imo: "9783564",
+      mmsi: "249660000",
+      observationCount: 9,
+      periodLabel: "This month",
+      verificationStatus: "VERIFIED_OCEAN_CRUISE"
+    });
+  });
+
+  it("keeps cruise period map tooltips vessel-specific instead of generic activity copy", () => {
+    const [point] = buildCruisePeriodVesselMapPoints(
+      [
+        {
+          shipId: "ship-arvia",
+          name: "ARVIA",
+          operator: "P&O Cruises",
+          imo: "9849693",
+          mmsi: "232040520",
+          latitude: 28.1,
+          longitude: -15.4,
+          speedOverGround: 16.2,
+          destination: "TENERIFE",
+          timestamp: new Date("2026-07-08T12:00:00.000Z"),
+          observationCount: 4,
+          verificationStatus: "VERIFIED_OCEAN_CRUISE"
+        }
+      ],
+      "Since monitoring began"
+    );
+    const feature = buildVesselGeoJson([point]).features[0];
+    const tooltip = featureToTooltip({ properties: feature.properties }, 12, 18);
+
+    expect(feature.properties.shipId).toBe("ship-arvia");
+    expect(feature.properties.name).toBe("ARVIA");
+    expect(feature.properties.imo).toBe("9849693");
+    expect(feature.properties.isAggregate).toBe(false);
+    expect(tooltip).toMatchObject({
+      name: "ARVIA",
+      operator: "P&O Cruises",
+      imo: "9849693",
+      mmsi: "232040520",
+      shipId: "ship-arvia",
+      isAggregate: false,
+      observationCount: 4
+    });
+    expect(tooltip?.name).not.toBe("Verified cruise activity");
+    expect(tooltip?.operator).not.toBe("1 verified ship");
+  });
+
+  it("uses the internal cruise ship id for detail navigation", () => {
+    expect(getCruiseShipDetailHref("ship-mein-schiff-1")).toBe("/cruises/ship-mein-schiff-1");
+    expect(getCruiseShipDetailHref("ship with spaces")).toBe("/cruises/ship%20with%20spaces");
+  });
+
   it("builds aggregate cruise activity map cells without exposing vessel identity fields", () => {
     const points = buildCruiseActivityCellPoints(
       [
@@ -1394,6 +1476,74 @@ describe("cruise dashboard query helpers", () => {
       periodLabel: "This week"
     });
     expect(points[1]?.activityWeight).toBe(0.5);
+  });
+
+  it("keeps aggregate cruise map cells non-navigable and aggregate-labelled", () => {
+    const points = buildCruiseActivityCellPoints(
+      [
+        {
+          latitude: 36.4,
+          longitude: 14.2,
+          observationCount: 16,
+          vesselCount: 4,
+          latestTimestamp: new Date("2026-07-08T12:00:00.000Z")
+        }
+      ],
+      "This week"
+    );
+    const feature = buildVesselGeoJson(points).features[0];
+    const tooltip = featureToTooltip({ properties: feature.properties }, 0, 0);
+
+    expect(feature.properties.shipId).toBe("");
+    expect(feature.properties.isAggregate).toBe(true);
+    expect(tooltip).toMatchObject({
+      name: "Verified cruise activity",
+      operator: "4 verified ships",
+      shipId: "",
+      isAggregate: true,
+      observationCount: 16,
+      vesselCount: 4
+    });
+  });
+
+  it("preserves cruise vessel identity across all cruise map period labels", () => {
+    for (const period of CRUISE_MAP_PERIODS) {
+      const [point] = buildCruisePeriodVesselMapPoints(
+        [
+          {
+            shipId: "ship-celebrity-apex",
+            name: "CELEBRITY APEX",
+            operator: "Celebrity Cruises",
+            imo: "9838383",
+            mmsi: "215105000",
+            latitude: 42.1,
+            longitude: 11.8,
+            speedOverGround: null,
+            destination: null,
+            timestamp: new Date("2026-07-08T12:00:00.000Z"),
+            observationCount: 2,
+            verificationStatus: "VERIFIED_OCEAN_CRUISE"
+          }
+        ],
+        period.label
+      );
+
+      expect(point).toMatchObject({
+        shipId: "ship-celebrity-apex",
+        name: "CELEBRITY APEX",
+        isAggregate: false,
+        periodLabel: period.label
+      });
+    }
+  });
+
+  it("keeps private-jet airport tooltip code separate from cruise detail navigation", () => {
+    const airportMapSource = readFileSync("components/dashboard/AirportEmissionsMap.tsx", "utf8");
+
+    expect(airportMapSource).toContain("Private jet emissions hotspot");
+    expect(airportMapSource).toContain("Aggregated airport activity within this map cell");
+    expect(airportMapSource).not.toContain("/cruises/");
+    expect(airportMapSource).not.toContain("shipId");
   });
 
   it("uses the shared PaperStraw heatmap palette for cruise activity maps", () => {
@@ -3047,6 +3197,7 @@ function positionBase() {
     shipId: "ship",
     name: "Example Cruise",
     operator: "Example Operator",
+    imo: null,
     mmsi: "244123456",
     latitude: 40,
     longitude: 4,
@@ -3054,7 +3205,8 @@ function positionBase() {
     destination: "TEST",
     timestamp: new Date("2026-07-01T11:00:00Z"),
     activityWeight: 1,
-    estimatedCo2Tonnes: null
+    estimatedCo2Tonnes: null,
+    verificationStatus: null
   };
 }
 

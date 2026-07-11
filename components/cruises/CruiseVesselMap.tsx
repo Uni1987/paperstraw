@@ -17,6 +17,7 @@ type TooltipState = {
   y: number;
   name: string;
   operator: string;
+  imo: string | null;
   mmsi: string;
   speedOverGround: number | null;
   destination: string | null;
@@ -27,6 +28,7 @@ type TooltipState = {
   observationCount: number | null;
   vesselCount: number | null;
   periodLabel: string | null;
+  verificationStatus: string | null;
 } | null;
 
 const sourceId = "cruise-vessels";
@@ -130,7 +132,7 @@ export function CruiseVesselMap({
         if (feature.properties?.isAggregate) return;
 
         const shipId = String(feature.properties?.shipId ?? "");
-        if (shipId) window.location.href = `/cruises/${encodeURIComponent(shipId)}`;
+        if (shipId) window.location.href = getCruiseShipDetailHref(shipId);
       });
     }
 
@@ -272,8 +274,12 @@ export function CruiseVesselMap({
             ) : (
               <>
                 <div>
-                  <dt className="text-white/42">MMSI</dt>
-                  <dd className="mt-1 font-semibold tabular-nums text-white">{tooltip.mmsi}</dd>
+                  <dt className="text-white/42">Identity</dt>
+                  <dd className="mt-1 font-semibold tabular-nums text-white">
+                    {tooltip.imo ? `IMO ${tooltip.imo}` : null}
+                    {tooltip.imo && tooltip.mmsi ? <br /> : null}
+                    {tooltip.mmsi ? `MMSI ${tooltip.mmsi}` : "n/a"}
+                  </dd>
                 </div>
                 <div>
                   <dt className="text-white/42">Speed</dt>
@@ -288,10 +294,16 @@ export function CruiseVesselMap({
             {tooltip.isAggregate ? `Period: ${tooltip.periodLabel ?? "Selected period"}` : `Destination: ${tooltip.destination ?? "Unknown"}`}
             <br />
             Updated: {tooltip.timestamp}
+            {!tooltip.isAggregate && tooltip.observationCount !== null ? (
+              <>
+                <br />
+                Observations: {tooltip.observationCount.toLocaleString("en-US")}
+              </>
+            ) : null}
             {tooltip.estimatedCo2Tonnes !== null ? (
               <>
                 <br />
-                Estimated CO₂ today: {tooltip.estimatedCo2Tonnes.toLocaleString("en-US", { maximumFractionDigits: 1 })} t
+                Estimated CO2: {tooltip.estimatedCo2Tonnes.toLocaleString("en-US", { maximumFractionDigits: 1 })} t
               </>
             ) : null}
           </p>
@@ -341,7 +353,7 @@ function addVesselLayers(map: MapLibreMap) {
   } as never);
 }
 
-function buildVesselGeoJson(points: CruiseMapPoint[]) {
+export function buildVesselGeoJson(points: CruiseMapPoint[]) {
   return {
     type: "FeatureCollection" as const,
     features: points.map((point) => ({
@@ -354,6 +366,7 @@ function buildVesselGeoJson(points: CruiseMapPoint[]) {
         shipId: point.shipId,
         name: point.name,
         operator: point.operator,
+        imo: point.imo,
         mmsi: point.mmsi,
         speedOverGround: point.speedOverGround,
         destination: point.destination,
@@ -363,31 +376,57 @@ function buildVesselGeoJson(points: CruiseMapPoint[]) {
         isAggregate: Boolean(point.isAggregate),
         observationCount: point.observationCount ?? null,
         vesselCount: point.vesselCount ?? null,
-        periodLabel: point.periodLabel ?? null
+        periodLabel: point.periodLabel ?? null,
+        verificationStatus: point.verificationStatus ?? null
       }
     }))
   };
 }
 
-function featureToTooltip(feature: MapGeoJSONFeature, x: number, y: number): TooltipState {
+export function getCruiseShipDetailHref(shipId: string) {
+  return `/cruises/${encodeURIComponent(shipId)}`;
+}
+
+export function featureToTooltip(feature: Pick<MapGeoJSONFeature, "properties">, x: number, y: number): TooltipState {
   const properties = feature.properties ?? {};
+  const isAggregate = Boolean(properties.isAggregate);
+  const imo = nullablePropertyString(properties.imo);
+  const mmsi = nullablePropertyString(properties.mmsi);
+  const fallbackName = imo ? `IMO ${imo}` : mmsi ? `MMSI ${mmsi}` : "Unknown cruise ship";
+  const name = isAggregate ? String(properties.name ?? "Verified cruise activity") : nonEmptyPropertyString(properties.name) ?? fallbackName;
+  const operator = isAggregate
+    ? String(properties.operator ?? "Verified cruise activity")
+    : nonEmptyPropertyString(properties.operator) ?? "Operator not published";
 
   return {
     x,
     y,
-    name: String(properties.name ?? "Unknown vessel"),
-    operator: String(properties.operator ?? "Unknown operator"),
-    mmsi: String(properties.mmsi ?? "n/a"),
+    name,
+    operator,
+    imo,
+    mmsi: mmsi ?? "",
     speedOverGround: properties.speedOverGround === null ? null : Number(properties.speedOverGround),
     destination: properties.destination ? String(properties.destination) : null,
     timestamp: formatDateTime(new Date(String(properties.timestamp))),
     shipId: String(properties.shipId ?? ""),
     estimatedCo2Tonnes: properties.estimatedCo2Tonnes === null || properties.estimatedCo2Tonnes === undefined ? null : Number(properties.estimatedCo2Tonnes),
-    isAggregate: Boolean(properties.isAggregate),
+    isAggregate,
     observationCount: properties.observationCount === null || properties.observationCount === undefined ? null : Number(properties.observationCount),
     vesselCount: properties.vesselCount === null || properties.vesselCount === undefined ? null : Number(properties.vesselCount),
-    periodLabel: properties.periodLabel ? String(properties.periodLabel) : null
+    periodLabel: properties.periodLabel ? String(properties.periodLabel) : null,
+    verificationStatus: nullablePropertyString(properties.verificationStatus)
   };
+}
+
+function nonEmptyPropertyString(value: unknown) {
+  const text = nullablePropertyString(value);
+  return text && text.trim().length > 0 ? text : null;
+}
+
+function nullablePropertyString(value: unknown) {
+  if (value === null || value === undefined) return null;
+  const text = String(value);
+  return text.length > 0 ? text : null;
 }
 
 function fitWorld(map: MapLibreMap, duration: number) {
