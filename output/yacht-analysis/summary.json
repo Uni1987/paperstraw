@@ -1,0 +1,52 @@
+{
+  "generatedAt": "read-only-yacht-analysis",
+  "dataSourcesInspected": [
+    "cruise_ships: identity, AIS/static metadata, dimensions",
+    "cruise_positions: movement observation counts and first/latest timestamps",
+    "cruise_emissions_daily_estimates: existing CO2/fuel estimates",
+    "cruise_emissions_annual: existing MRV annual baseline availability",
+    "cruise_vessel_verifications and cruise_vessel_registry_entries: known cruise exclusions/context"
+  ],
+  "identity": {
+    "totalRawVesselRecords": 3150,
+    "totalUniqueVesselIdentities": 3150,
+    "duplicatesMerged": 0,
+    "conflictingMetadataIdentities": 0,
+    "duplicateImoValues": 0,
+    "duplicateMmsiValues": 0
+  },
+  "candidateCounts": {
+    "VERIFIED_YACHT": 1,
+    "PROBABLE_YACHT": 0,
+    "UNCERTAIN": 1448,
+    "LIKELY_FALSE_POSITIVE": 1701,
+    "total": 3150
+  },
+  "dimensionQualityCounts": {
+    "RELIABLE": 2573,
+    "PLAUSIBLE_BUT_UNVERIFIED": 2,
+    "MISSING": 191,
+    "IMPLAUSIBLE": 384
+  },
+  "reliableDimensionPercentage": 81.7,
+  "thresholdsReliable": {
+    "gte24m": 1899,
+    "gte40m": 1154,
+    "gte80m": 695
+  },
+  "thresholdsIncludingPlausible": {
+    "gte24m": 1900,
+    "gte40m": 1154,
+    "gte80m": 695
+  },
+  "feasibility": "viable only after metadata enrichment",
+  "databaseRowsInspected": {
+    "cruiseShips": 3150,
+    "cruisePositions": 343423,
+    "cruiseEmissionsDailyEstimates": 6231,
+    "cruiseEmissionsAnnual": 0,
+    "cruiseVesselVerifications": 3150,
+    "cruiseVesselRegistryEntries": 316
+  },
+  "warning": "Existing cruise daily emissions estimates are reused only as a feasibility signal. They are not validated yacht emissions factors."
+}

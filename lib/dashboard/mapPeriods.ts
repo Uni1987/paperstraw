@@ -1,4 +1,10 @@
 export type AirportEmissionPoint = {
+  airportIdent?: string;
+  airportName?: string;
+  iataCode?: string | null;
+  municipality?: string | null;
+  countryCode?: string;
+  countryName?: string;
   latitude: number;
   longitude: number;
   totalCo2Kg: number;

@@ -25,9 +25,19 @@ type TooltipState = {
   title: string;
   detail: string;
   totalCo2Kg: number;
+  airportIdent: string | null;
+  iataCode: string | null;
+  location: string | null;
+  isCluster: boolean;
 } | null;
 
 type AirportFeatureProperties = {
+  airportIdent?: string;
+  airportName?: string;
+  iataCode?: string | null;
+  municipality?: string | null;
+  countryCode?: string;
+  countryName?: string;
   totalCo2Kg: number;
   totalCo2Tons: number;
   emissionScore: number;
@@ -313,6 +323,15 @@ export function AirportEmissionsMap({
               <dt className="text-white/42">Estimated CO2</dt>
               <dd className="mt-1 font-semibold tabular-nums text-paper">{formatTonnes(tooltip.totalCo2Kg)} t</dd>
             </div>
+            {!tooltip.isCluster ? (
+              <div className="mt-3">
+                <dt className="text-white/42">Airport</dt>
+                <dd className="mt-1 font-semibold tabular-nums text-white">
+                  {tooltip.airportIdent ?? "n/a"}
+                  {tooltip.iataCode ? ` / ${tooltip.iataCode}` : ""}
+                </dd>
+              </div>
+            ) : null}
           </dl>
         </div>
       ) : null}
@@ -442,6 +461,12 @@ function buildAirportGeoJson(airports: AirportEmissionPoint[], maxCo2Kg: number)
         coordinates: [airport.longitude, airport.latitude]
       },
       properties: {
+        airportIdent: airport.airportIdent,
+        airportName: airport.airportName,
+        iataCode: airport.iataCode,
+        municipality: airport.municipality,
+        countryCode: airport.countryCode,
+        countryName: airport.countryName,
         totalCo2Kg: airport.totalCo2Kg,
         totalCo2Tons: Math.round(airport.totalCo2Kg / 1000),
         emissionScore: Math.log1p(airport.totalCo2Kg) / Math.log1p(maxCo2Kg)
@@ -499,17 +524,38 @@ function featureToTooltip(feature: MapGeoJSONFeature, x: number, y: number): Too
       y,
       title: `${Number(properties.point_count ?? 0).toLocaleString()} emission cells`,
       detail: "Zoom in for a more detailed hotspot view",
-      totalCo2Kg: Number(properties.totalCo2Kg ?? 0)
+      totalCo2Kg: Number(properties.totalCo2Kg ?? 0),
+      airportIdent: null,
+      iataCode: null,
+      location: null,
+      isCluster: true
     };
   }
+
+  const municipality = nullableFeatureString(properties.municipality);
+  const countryName = nullableFeatureString(properties.countryName);
+  const countryCode = nullableFeatureString(properties.countryCode);
+  const location = [municipality, countryName ?? countryCode].filter(Boolean).join(", ");
+  const airportIdent = nullableFeatureString(properties.airportIdent);
+  const iataCode = nullableFeatureString(properties.iataCode);
 
   return {
     x,
     y,
-    title: "Private jet emissions hotspot",
-    detail: "Aggregated airport activity within this map cell",
-    totalCo2Kg: Number(properties.totalCo2Kg ?? 0)
+    title: nullableFeatureString(properties.airportName) ?? airportIdent ?? iataCode ?? "Private jet airport",
+    detail: location || [airportIdent, iataCode].filter(Boolean).join(" / ") || "Airport-level private jet activity",
+    totalCo2Kg: Number(properties.totalCo2Kg ?? 0),
+    airportIdent,
+    iataCode,
+    location: location || null,
+    isCluster: false
   };
+}
+
+function nullableFeatureString(value: unknown) {
+  if (value === null || value === undefined) return null;
+  const text = String(value).trim();
+  return text.length ? text : null;
 }
 
 function formatTonnes(valueKg: number) {

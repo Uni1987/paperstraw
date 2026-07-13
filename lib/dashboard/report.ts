@@ -157,9 +157,8 @@ async function getAirportEmissionPointsForPeriod(period: AirportMapPeriodId, lat
     `;
 
     const airportPoints = buildAirportEmissionPointsFromEndpointRows(rows);
-    const aggregatedPoints = aggregateAirportEmissionPointsToGrid(airportPoints);
-    logAirportMapPayloadSize(aggregatedPoints, airportPoints.length, period);
-    return aggregatedPoints;
+    logAirportMapPayloadSize(airportPoints, airportPoints.length, period);
+    return airportPoints;
   } catch {
     return [];
   }
@@ -186,6 +185,12 @@ export function buildAirportEmissionPointsFromEndpointRows(rows: AirportEndpoint
     }
 
     pointsByIdent.set(airport.ident, {
+      airportIdent: airport.ident,
+      airportName: airport.name,
+      iataCode: airport.iataCode,
+      municipality: airport.municipality,
+      countryCode: airport.countryCode,
+      countryName: airport.countryName,
       latitude: airport.latitude,
       longitude: airport.longitude,
       totalCo2Kg: co2
@@ -198,7 +203,7 @@ export function buildAirportEmissionPointsFromEndpointRows(rows: AirportEndpoint
 }
 
 export function aggregateAirportEmissionPointsToGrid(points: AirportEmissionPoint[], gridDegrees = AIRPORT_MAP_GRID_DEGREES): AirportEmissionPoint[] {
-  const cells = new Map<string, { weightedLatitude: number; weightedLongitude: number; totalCo2Kg: number }>();
+  const cells = new Map<string, { weightedLatitude: number; weightedLongitude: number; totalCo2Kg: number; point: AirportEmissionPoint }>();
 
   for (const point of points) {
     if (!Number.isFinite(point.latitude) || !Number.isFinite(point.longitude) || !Number.isFinite(point.totalCo2Kg) || point.totalCo2Kg <= 0) {
@@ -208,15 +213,17 @@ export function aggregateAirportEmissionPointsToGrid(points: AirportEmissionPoin
     const latIndex = Math.floor((point.latitude + 90) / gridDegrees);
     const lonIndex = Math.floor((point.longitude + 180) / gridDegrees);
     const key = `${latIndex}:${lonIndex}`;
-    const current = cells.get(key) ?? { weightedLatitude: 0, weightedLongitude: 0, totalCo2Kg: 0 };
+    const current = cells.get(key) ?? { weightedLatitude: 0, weightedLongitude: 0, totalCo2Kg: 0, point };
     current.weightedLatitude += point.latitude * point.totalCo2Kg;
     current.weightedLongitude += point.longitude * point.totalCo2Kg;
     current.totalCo2Kg += point.totalCo2Kg;
+    if (point.totalCo2Kg > current.point.totalCo2Kg) current.point = point;
     cells.set(key, current);
   }
 
   return [...cells.values()]
     .map((cell) => ({
+      ...cell.point,
       latitude: roundCoordinate(cell.weightedLatitude / cell.totalCo2Kg),
       longitude: roundCoordinate(cell.weightedLongitude / cell.totalCo2Kg),
       totalCo2Kg: Math.round(cell.totalCo2Kg)

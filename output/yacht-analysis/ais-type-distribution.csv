@@ -1,0 +1,14 @@
+raw_ais_type,type_label,candidate_count,percentage_of_candidates,verified_yacht,probable_yacht,uncertain,likely_false_positive,reliable_dimensions,length_gte_24_m,length_gte_40_m,length_gte_80_m
+Passenger ship,Passenger ship,2555,81.1,1,0,1167,1387,2176,1603,945,558
+60,Passenger,245,7.8,0,0,161,84,205,172,126,80
+69,Passenger,196,6.2,0,0,101,95,169,104,68,43
+Ocean cruise ship,Ocean cruise ship,129,4.1,0,0,0,129,0,0,0,0
+61,Passenger,9,0.3,0,0,8,1,9,9,8,8
+65,Passenger,4,0.1,0,0,2,2,4,2,2,2
+0,AIS type 0,3,0.1,0,0,2,1,2,2,0,0
+62,Passenger,2,0.1,0,0,2,0,2,2,2,2
+63,Passenger,2,0.1,0,0,2,0,2,2,2,2
+67,Passenger,2,0.1,0,0,2,0,2,2,0,0
+51,AIS type 51,1,0,0,0,0,1,1,0,0,0
+66,Passenger,1,0,0,0,1,0,1,1,1,0
+68,Passenger,1,0,0,0,0,1,0,0,0,0
