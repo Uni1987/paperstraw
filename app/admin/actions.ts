@@ -2,9 +2,10 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { runDailyIngestion } from "@/lib/ingestion/daily";
 import { parseFlightCsv } from "@/lib/ingestion/csv";
 import { importFlights } from "@/lib/ingestion/importer";
+import { dispatchHistoricalImportWorkflow } from "@/lib/ingestion/githubHistoricalWorkflow";
+import { parseManualHistoricalImportForm } from "@/lib/ingestion/historicalRequest";
 import { DataSourceProviders } from "@/lib/ingestion/providerConstants";
 
 export async function uploadCsvAction(formData: FormData) {
@@ -32,34 +33,19 @@ export async function uploadCsvAction(formData: FormData) {
   redirect(`/admin/private-jets?success=${encodeURIComponent(`Imported ${result.imported} flight record(s).`)}`);
 }
 
-export async function runDailyImportAction(formData: FormData) {
-  const adsbLolUrl = String(formData.get("adsbLolUrl") ?? "").trim();
-  if (adsbLolUrl) {
-    process.env.ADSB_LOL_DAILY_URL = adsbLolUrl;
-  }
-
+export async function startHistoricalImportAction(formData: FormData) {
   let targetUrl: string;
   try {
-    const result = await runDailyIngestion();
-    revalidatePath("/");
-    revalidatePath("/data");
-    revalidatePath("/data/private-jets");
-    revalidatePath("/leaderboard");
-    revalidatePath("/aircraft-types");
-    revalidatePath("/comparisons");
+    const request = parseManualHistoricalImportForm(formData);
+    const result = await dispatchHistoricalImportWorkflow(request);
     revalidatePath("/admin/private-jets");
-
-    const detail = result.imported === 0
-      ? `Latest data refresh ran via ${result.provider}, fetched ${result.fetched} record(s), considered ${result.considered} newer record(s), and imported 0 new private jet record(s).`
-      : `Latest data refresh used ${result.provider}, fetched ${result.fetched} record(s), considered ${result.considered} newer record(s), imported ${result.imported} record(s), skipped ${result.skipped} duplicate record(s), and recalculated ${result.rollups} aggregate rollup(s).`;
-
+    const detail = result.status === "skipped"
+      ? `No job was started. ${result.skippedDateKeys.length} requested date(s) were already imported successfully.`
+      : `Historical import job ${result.jobId} was dispatched for ${request.from.toISOString().slice(0, 10)} through ${request.to.toISOString().slice(0, 10)}. Refresh this page to see completion status.`;
     targetUrl = `/admin/private-jets?success=${encodeURIComponent(detail)}`;
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Latest data refresh failed";
-    const hint = message.includes("DATABASE_URL") || message.includes("datasource")
-      ? `${message} Restart pnpm dev after changing .env. Expected PostgreSQL DATABASE_URL is the pooled Neon connection string.`
-      : message;
-    targetUrl = `/admin/private-jets?error=${encodeURIComponent(hint)}`;
+    const message = error instanceof Error ? error.message : "Historical import dispatch failed";
+    targetUrl = `/admin/private-jets?error=${encodeURIComponent(message)}`;
   }
 
   redirect(targetUrl);

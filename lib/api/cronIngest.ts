@@ -1,20 +1,19 @@
 import { NextResponse } from "next/server";
-import { runDailyIngestion } from "@/lib/ingestion/daily";
+import { dispatchHistoricalImportWorkflow } from "@/lib/ingestion/githubHistoricalWorkflow";
 import { isAuthorizedCronRequest } from "@/lib/ingestion/cronAuth";
+import { buildScheduledHistoricalRequest, formatUtcDateKey, type HistoricalImportRequest } from "@/lib/ingestion/historicalRequest";
 
-type CronIngestResult = {
-  provider: string;
-  imported: number;
-  skipped: number;
-  fetched: number;
-  considered: number;
-  lastImportedAt: Date | null;
-  errors: string[];
-  rollups: number;
+type CronDispatchResult = {
+  jobId: string;
+  status: "queued" | "skipped";
+  claimedDateKeys: string[];
+  skippedDateKeys: string[];
+  workflowUrl: string | null;
 };
 
 type CronIngestDependencies = {
-  runRecentIngestion?: () => Promise<CronIngestResult>;
+  now?: () => Date;
+  dispatch?: (request: HistoricalImportRequest) => Promise<CronDispatchResult>;
 };
 
 export async function handleCronIngest(request: Request, dependencies: CronIngestDependencies = {}) {
@@ -22,31 +21,41 @@ export async function handleCronIngest(request: Request, dependencies: CronInges
     return NextResponse.json({ error: "Unauthorized cron request" }, { status: 401 });
   }
 
-  const runRecentIngestion = dependencies.runRecentIngestion ?? runDailyIngestion;
+  const historicalRequest = buildScheduledHistoricalRequest((dependencies.now ?? (() => new Date()))());
+  const dateKey = formatUtcDateKey(historicalRequest.from);
 
   try {
-    const result = await runRecentIngestion();
+    const result = await (dependencies.dispatch ?? dispatchHistoricalImportWorkflow)(historicalRequest);
     return NextResponse.json(
       {
-        provider: result.provider,
-        status: result.errors.length ? "partial" : "success",
-        fetched: result.fetched,
-        considered: result.considered,
-        imported: result.imported,
-        skipped: result.skipped,
-        rollups: result.rollups,
-        lastImportedAt: result.lastImportedAt,
-        errors: result.errors
+        jobId: result.jobId,
+        status: result.status,
+        execution: result.status === "queued" ? "github-actions-dispatched" : "not-dispatched",
+        source: "scheduled",
+        timezone: "UTC",
+        from: dateKey,
+        to: dateKey,
+        force: false,
+        claimedDates: result.claimedDateKeys,
+        skippedDates: result.skippedDateKeys,
+        workflowUrl: result.workflowUrl
       },
-      { status: result.errors.length ? 207 : 200 }
+      { status: result.status === "queued" ? 202 : 200 }
     );
   } catch (error) {
+    const message = error instanceof Error ? error.message : "Scheduled historical import dispatch failed";
+    const conflict = message.includes("already queued or running");
     return NextResponse.json(
       {
-        status: "failed",
-        error: error instanceof Error ? error.message : "Cron ingest failed"
+        status: conflict ? "skipped" : "failed",
+        source: "scheduled",
+        timezone: "UTC",
+        from: dateKey,
+        to: dateKey,
+        force: false,
+        error: message
       },
-      { status: 500 }
+      { status: conflict ? 200 : 500 }
     );
   }
 }

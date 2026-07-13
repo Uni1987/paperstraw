@@ -41,7 +41,7 @@ export default function PrivateJetsMethodologyPage() {
           </MethodSection>
 
           <MethodSection title="Data sources and aircraft filtering">
-            ADSB.lol is treated as the primary recent-data source. OpenSky is available as a fallback and research source, and CSV
+            ADSB.lol historical archive releases are the primary scheduled data source. OpenSky is available as a fallback and research source, and CSV
             upload remains available for audited backfills. Imported records are filtered to configured private and business
             jet aircraft type codes before aggregation.
           </MethodSection>

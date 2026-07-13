@@ -1,5 +1,6 @@
-import { requirePrivateJetsDatabaseUrl } from "../lib/database/config";
+import { requireExplicitPrivateJetsDatabaseUrl, requirePrivateJetsDatabaseUrl } from "../lib/database/config";
 import { loadProjectEnv } from "../lib/env/loadProjectEnv";
+import type { HistoricalExecutionSource } from "../lib/ingestion/historicalRequest";
 
 loadProjectEnv();
 
@@ -28,17 +29,20 @@ async function main() {
   }
 
   if (provider === "historical") {
-    requirePrivateJetsDatabaseUrl();
-    const { runHistoricalIngestion } = await import("../lib/ingestion/historical");
-    const { from, to, force } = parseHistoricalDateArgs(process.argv.slice(3));
-    const result = await runHistoricalIngestion({
+    requireExplicitPrivateJetsDatabaseUrl();
+    const { runHistoricalImportJob } = await import("../lib/ingestion/historicalRunner");
+    const { from, to, force, source, jobId } = parseHistoricalDateArgs(process.argv.slice(3));
+    const result = await runHistoricalImportJob({
       from,
       to,
       force,
+      source
+    }, {
+      jobId,
       onProgress: (message) => console.log(message)
     });
     console.log(
-      `Historical bootstrap processed ${result.datesProcessed} day(s), skipped ${result.datesSkipped} already-processed day(s), imported ${result.imported} record(s), updated attribution on ${result.attributionUpdated} duplicate record(s), skipped ${result.datesUnavailable} unavailable/failed day(s), recalculated ${result.rollups} rollup(s).`
+      `Historical job ${result.jobId} finished with ${result.jobStatus}: processed ${result.datesProcessed} day(s), skipped ${result.datesSkipped} already-processed day(s), imported ${result.imported} record(s), updated attribution on ${result.attributionUpdated} duplicate record(s), encountered ${result.datesUnavailable} unavailable/failed day(s), recalculated ${result.rollups} rollup(s).`
     );
     if (result.errors.length) {
       console.error(result.errors.join("\n"));
@@ -68,10 +72,17 @@ function parseHistoricalDateArgs(args: string[]) {
   const defaultTo = formatDateArg(today);
   const fromArg = getFlagValue(args, "--from") ?? defaultFrom;
   const toArg = getFlagValue(args, "--to") ?? defaultTo;
+  const sourceValue = getFlagValue(args, "--execution-source") ?? "cli";
+  if (sourceValue !== "cli" && sourceValue !== "manual" && sourceValue !== "scheduled") {
+    throw new Error("--execution-source must be cli, manual, or scheduled.");
+  }
+  const source: HistoricalExecutionSource = sourceValue;
   return {
     from: parseDateArg(fromArg, "--from"),
     to: parseDateArg(toArg, "--to"),
-    force: hasFlag(args, "--force") || hasFlag(args, "--reprocess")
+    force: hasFlag(args, "--force") || hasFlag(args, "--reprocess"),
+    source,
+    jobId: getFlagValue(args, "--job-id")
   };
 }
 

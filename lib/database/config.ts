@@ -38,6 +38,13 @@ export function requirePrivateJetsDatabaseUrl(env: DatabaseEnv = process.env) {
   return getPrivateJetsDatabaseUrl(env);
 }
 
+export function requireExplicitPrivateJetsDatabaseUrl(env: DatabaseEnv = process.env) {
+  if (!env.PRIVATE_JETS_DATABASE_URL?.trim()) {
+    throw new Error("Missing PRIVATE_JETS_DATABASE_URL. Historical Private Jets ingestion does not use the legacy DATABASE_URL fallback.");
+  }
+  return getPrivateJetsDatabaseUrl({ ...env, DATABASE_URL: undefined });
+}
+
 export function getCruisesDatabaseUrl(
   env: DatabaseEnv = process.env,
   options: { allowLegacyDatabaseUrlWithCruiseTarget?: boolean } = {}

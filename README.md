@@ -42,7 +42,7 @@ Server-side aggregate functions live in `lib/awareness/aggregates.ts` and stored
 
 Airport and country totals split a flight's distance and estimated CO₂ evenly between origin and destination airports. Unknown airports are grouped as `Unknown` until airport enrichment is added.
 
-## Frequent Recent Import
+## Explicit Recent Import Compatibility
 
 Run the incremental recent-data API refresh with:
 
@@ -50,10 +50,10 @@ Run the incremental recent-data API refresh with:
 pnpm ingest:daily
 ```
 
-Despite the script name, this command is safe to run as a regular scheduled refresh. It is still a scheduled batch refresh, not live
-flight tracking.
+This compatibility command is available for explicit operator testing. It is not used by the production cron or the normal
+Private Jets admin workflow, and it is not live flight tracking.
 
-The recent refresh job:
+The compatibility command:
 
 - fetches recent aircraft-type API snapshots from ADSB.lol
 - reads the `ADSB_LOL / DAILY_API` cursor from the PostgreSQL database
@@ -67,10 +67,11 @@ The recent refresh job:
 - recalculates daily, monthly, yearly, country, airport, and aircraft type aggregate rollups
 - writes an `ImportLog` with start time, end time, status, records fetched, records considered, records imported, and any error message
 
-The app does not implement live flight tracking, does not show aircraft positions, and recent operation does not reprocess
-ADSB.lol historical archives.
+The app does not implement live flight tracking or show aircraft positions.
 
 ## Historical Bootstrap
+
+Complete historical days are now the canonical scheduled Private Jets ingest. Vercel dispatches yesterday UTC to GitHub Actions at 06:00 UTC, and `/admin/private-jets` can dispatch an inclusive range of up to 31 completed days. See [`docs/private-jets-historical-ingestion.md`](docs/private-jets-historical-ingestion.md) for setup, environment variables, retries, and PowerShell verification.
 
 Run a historical ADSB.lol archive bootstrap with:
 
@@ -88,8 +89,8 @@ Reprocess mode keeps duplicate protection enabled. Existing matching flights are
 fields (`originAirportIdent`, `destinationAirportIdent`, `originCountryCode`, `destinationCountryCode`,
 `attributionSource`, and `attributionConfidence`) are refreshed before rollups are recalculated.
 
-Historical bootstrap is intended for one-time backfills of a selected date range. After that, use `pnpm ingest:daily` for
-frequent recent operation.
+The same historical implementation is used by CLI, protected admin dispatch, and the scheduled GitHub Actions runner.
+`pnpm ingest:daily` remains an explicit compatibility command but is no longer the production cron workflow.
 
 Recommended first run:
 
@@ -163,15 +164,13 @@ Do not wipe production data automatically. For a full attribution rebuild:
 8. Run the full intended historical range only after the small-range verification looks correct.
 9. Verify rollups, homepage totals, `/data`, `/admin/validation`, and Neon usage before promoting the rebuilt database.
 
-The `/admin` page includes a manual **Refresh latest data now** button plus an import status dashboard showing
-daily/recent cursors, recently processed historical archive dates, and recent import logs.
+The `/admin/private-jets` page includes a protected **Historical data import** form plus job and processed-date status.
 
 ### Providers
 
 Primary provider:
 
-- ADSB.lol API data for frequent recent incremental operation
-- ADSB.lol GitHub historical archives for one-time historical bootstrap
+- ADSB.lol GitHub historical archives for complete daily Private Jets imports
 
 Research/fallback provider:
 
@@ -198,11 +197,11 @@ can trigger additional refreshes manually from `/admin`:
 pnpm ingest:daily
 ```
 
-Recommended Vercel Hobby schedule:
+Vercel Hobby schedule:
 
 ```cron
-# Once per day at 01:00 UTC
-0 1 * * *
+# Once per day at 06:00 UTC
+0 6 * * *
 ```
 
 Vercel Cron can call the protected endpoint:
@@ -212,38 +211,17 @@ GET /api/cron/ingest
 Authorization: Bearer $CRON_SECRET
 ```
 
-GitHub Actions can run the script on a schedule:
+Vercel dispatches `.github/workflows/private-jets-historical-ingest.yml`. That workflow accepts the validated inclusive
+date range, force flag, execution source, and existing database job ID, then runs the shared historical CLI on a GitHub
+runner with the `PRIVATE_JETS_DATABASE_URL` repository secret.
 
-```yaml
-name: PaperStraw recent ingest
-on:
-  schedule:
-    - cron: "0 1 * * *"
-jobs:
-  ingest:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm ingest:daily
-        env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          DATA_REFRESH_INTERVAL_MINUTES: "1440"
-```
-
-Linux cron can run:
+For self-hosted equivalents, schedule the historical command for yesterday only after the upstream daily release is available. The hosted PaperStraw workflow uses GitHub Actions instead of running archive work inside the Vercel request.
 
 ```cron
-0 1 * * * cd /path/to/paperstraw && pnpm ingest:daily
+0 6 * * * cd /path/to/paperstraw && pnpm ingest:historical --from YESTERDAY_UTC --to YESTERDAY_UTC
 ```
 
-Windows Task Scheduler can run `pnpm ingest:daily` on the same daily schedule from the project folder. Make sure the task has
-`DATABASE_URL` and provider variables available.
+Windows Task Scheduler can run the same historical command. Historical jobs require `PRIVATE_JETS_DATABASE_URL` explicitly.
 
 ## Equivalent Values
 
@@ -416,16 +394,14 @@ To test improved airport/country attribution against dates that were previously 
 pnpm ingest:historical --from 2026-01-01 --to 2026-01-07 --force
 ```
 
-`pnpm ingest:daily` uses ADSB.lol public `/type/{aircraftType}` API snapshots for the configured private/business jet
-allowlist and advances the `ADSB_LOL / DAILY_API` cursor after a successful or partial run. It can run on a regular schedule
-without rescanning historical archives. Historical archives are only scanned by `pnpm ingest:historical`.
+`pnpm ingest:daily` remains available for explicit compatibility/research use. The production scheduler and normal admin
+workflow use `pnpm ingest:historical` through the shared GitHub Actions runner.
 
 `ADMIN_USERNAME` and `ADMIN_PASSWORD` protect `/admin`, admin server actions, `/api/admin/*`, `/api/cron/*`, and `/api/ingest`.
 If either value is missing, protected routes return `401 Unauthorized`.
 
-`DATA_REFRESH_INTERVAL_MINUTES` controls next-update calculations and how ADSB.lol snapshot fallback records
-are bucketed. The default is `1440` to match the hosted daily cron schedule. `CRON_SECRET` can also authorize `/api/cron/ingest`
-for schedulers that send bearer tokens.
+`CRON_SECRET` authorizes `/api/cron/ingest` for the daily historical workflow dispatcher. Historical execution requires
+`PRIVATE_JETS_DATABASE_URL`; it does not silently fall back to an ambiguous generic database variable.
 
 `ADSB_EXCHANGE_RECENT_FLIGHTS_URL` is retained for the older ADS-B Exchange adapter, but `pnpm ingest:daily` uses ADSB.lol first.
 
@@ -485,7 +461,7 @@ pnpm ingest:adsb
 pnpm ingest:opensky
 ```
 
-There is also a protected cron endpoint for frequent recent refreshes:
+There is also a protected cron endpoint that dispatches yesterday UTC to the historical GitHub Actions workflow:
 
 ```bash
 curl -H "Authorization: Bearer $CRON_SECRET" http://localhost:3000/api/cron/ingest
@@ -503,12 +479,10 @@ The older generic endpoint remains available for local/manual provider testing, 
 curl -u "$ADMIN_USERNAME:$ADMIN_PASSWORD" "http://localhost:3000/api/ingest?provider=daily"
 ```
 
-`vercel.json` includes a once-per-day cron schedule for Vercel Hobby deployments.
+`vercel.json` includes a once-per-day 06:00 UTC cron schedule for Vercel Hobby deployments.
 
-Historical ingestion and recent ingestion are intentionally separate:
-
-- `pnpm ingest:historical` is for one-time backfill from ADSB.lol archive releases and can scan large archive assets.
-- `pnpm ingest:daily` is for frequent recent updates from the API/cursor path and does not scan historical archives.
+`pnpm ingest:historical` is the canonical scheduled and manual Private Jets workflow. `pnpm ingest:daily` is retained only
+for explicit compatibility use and is not invoked by Vercel Cron.
 
 Every imported flight stores `dataSource` and `sourceAttribution`, and every job writes an `ImportLog`.
 
@@ -519,11 +493,14 @@ Use these copy-pasteable commands from the project folder.
 Start the site locally:
 
 ```powershell
-$env:DATABASE_URL="postgresql://USER:PASSWORD@HOST.neon.tech/DB?sslmode=require"
+  $env:PRIVATE_JETS_DATABASE_URL="postgresql://USER:PASSWORD@NON_PRODUCTION_HOST/PRIVATE_JETS_DB?sslmode=require"
+  $env:DATABASE_URL=$env:PRIVATE_JETS_DATABASE_URL
 $env:ADMIN_USERNAME="admin"
 $env:ADMIN_PASSWORD="replace-this-password"
 $env:CRON_SECRET="replace-this-cron-secret"
-$env:DATA_REFRESH_INTERVAL_MINUTES="1440"
+  $env:GITHUB_ACTIONS_TOKEN="replace-with-workflow-dispatch-token"
+  $env:GITHUB_ACTIONS_REPOSITORY="OWNER/REPOSITORY"
+  $env:GITHUB_ACTIONS_REF="feature/private-jets-historical-ingest"
 pnpm dev
 ```
 
@@ -567,9 +544,9 @@ $env:DATABASE_URL="postgresql://USER:PASSWORD@HOST.neon.tech/DB?sslmode=require"
 pnpm prisma studio
 ```
 
-Open the `ImportLog` table and check the latest row. You should see provider `ADSB_LOL`, mode `DAILY_API`, status, records
-fetched, records considered, and records imported. You can also open `/admin` with your Basic Auth credentials and check
-the Cron refresh status panel.
+Open the `ImportLog` table and check the latest row. You should see provider `ADSB_LOL`, mode `HISTORICAL_BOOTSTRAP`, the
+queued/running/final status, records fetched, records considered, and records imported. You can also open
+`/admin/private-jets` and check the Scheduled historical import panel.
 
 ## Deploying Automatic Refresh On Vercel
 
@@ -580,13 +557,13 @@ the Cron refresh status panel.
   "crons": [
     {
       "path": "/api/cron/ingest",
-      "schedule": "0 1 * * *"
+        "schedule": "0 6 * * *"
     }
   ]
 }
 ```
 
-That schedule means once per day at 01:00 UTC. It matches the default:
+That schedule means once per day at 06:00 UTC. Required Vercel variables are:
 
 ```bash
 DATA_REFRESH_INTERVAL_MINUTES=1440
@@ -595,9 +572,11 @@ DATA_REFRESH_INTERVAL_MINUTES=1440
 Required Vercel environment variables:
 
 ```bash
-DATABASE_URL="postgresql://USER:PASSWORD@HOST.neon.tech/DB?sslmode=require"
+  PRIVATE_JETS_DATABASE_URL="postgresql://USER:PASSWORD@HOST.neon.tech/PRIVATE_JETS_DB?sslmode=require"
 CRON_SECRET="use-a-long-random-token"
-DATA_REFRESH_INTERVAL_MINUTES=1440
+  GITHUB_ACTIONS_TOKEN="least-privilege-actions-dispatch-token"
+  GITHUB_ACTIONS_REPOSITORY="OWNER/REPOSITORY"
+  GITHUB_ACTIONS_REF="main"
 ADMIN_USERNAME="admin"
 ADMIN_PASSWORD="use-a-long-random-password"
 PAYPAL_URL="https://www.paypal.com/ncp/payment/8JHGP7DSZ28XW"
@@ -616,8 +595,8 @@ AIRPORT_MATCH_MAX_RADIUS_KM=75
 OURAIRPORTS_INCLUDE_HELIPORTS=false
 ```
 
-Use `ADSB_LOL_DAILY_URL` only if you have a specific ADSB.lol export/API URL to use instead of the built-in public type
-snapshot path. Use `GITHUB_TOKEN` for historical archive backfills if GitHub rate limits become a problem.
+Set the GitHub Actions repository secret `PRIVATE_JETS_DATABASE_URL` to the same Private Jets database. `GITHUB_TOKEN`
+remains optional for historical source API rate limits.
 
 Cruise module variables are optional and disabled by default:
 
@@ -630,10 +609,10 @@ AISSTREAM_API_KEY=""
 After deployment:
 
 - Open Vercel project settings and confirm the environment variables are set for Production.
-- Open the Vercel Cron page and confirm `/api/cron/ingest` is listed with schedule `0 1 * * *`.
-- After the next scheduled run, check Vercel function logs for `/api/cron/ingest`.
-- Open PaperStraw `/admin` with Basic Auth and check the Cron refresh status panel.
-- Confirm the latest `ImportLog` row has provider `ADSB_LOL`, mode `DAILY_API`, and a recent timestamp.
+- Open the Vercel Cron page and confirm `/api/cron/ingest` is listed with schedule `0 6 * * *`.
+- After the next scheduled dispatch, check Vercel logs for a short queued/skipped response and GitHub Actions for execution.
+- Open `/admin/private-jets` with Basic Auth and check Scheduled historical import.
+- Confirm the latest `ImportLog` row has provider `ADSB_LOL`, mode `HISTORICAL_BOOTSTRAP`, and the expected UTC date range.
 
 ## Admin Authentication
 

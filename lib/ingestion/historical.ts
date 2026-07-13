@@ -1,5 +1,4 @@
 import { gunzipSync } from "node:zlib";
-import { prisma } from "@/lib/prisma";
 import { recalculateAggregateRollups } from "@/lib/awareness/rollups";
 import { estimateCoordinateDistanceKm, findNearestKnownAirport } from "./airports";
 import { importFlights } from "./importer";
@@ -14,25 +13,39 @@ import {
   upsertProcessedArchiveDate
 } from "./state";
 import type { NormalizedFlightRecord } from "./types";
+import { enumerateUtcDateRange, formatUtcDateKey } from "./historicalRequest";
 
 const RELEASE_PODS = ["planes-readsb-prod-0", "planes-readsb-prod-1", "planes-readsb-staging-0"];
 const GITHUB_API_BASE = "https://api.github.com/repos/adsblol";
 const FILE_SAMPLE_LIMIT = 80;
 
-type HistoricalIngestionOptions = {
+export type HistoricalIngestionOptions = {
   from: Date;
   to: Date;
   force?: boolean;
   onProgress?: (message: string) => void;
 };
 
-type HistoricalIngestionResult = {
+export type HistoricalDateResult = {
+  dateKey: string;
+  status: "imported" | "skipped" | "partial" | "failed";
+  recordsFetched: number;
+  recordsConsidered: number;
+  recordsImported: number;
+  attributionUpdated: number;
+  error: string | null;
+};
+
+export type HistoricalIngestionResult = {
   imported: number;
   datesProcessed: number;
   datesUnavailable: number;
   datesSkipped: number;
   attributionUpdated: number;
   rollups: number;
+  recordsFetched: number;
+  recordsConsidered: number;
+  dateResults: HistoricalDateResult[];
   errors: string[];
 };
 
@@ -123,13 +136,17 @@ type TarEntry = {
 export async function runHistoricalIngestion(options: HistoricalIngestionOptions): Promise<HistoricalIngestionResult> {
   validateDateRange(options.from, options.to);
 
-  const dates = enumerateDates(options.from, options.to);
+  const dates = enumerateUtcDateRange(options.from, options.to);
   const years = new Set<number>();
   const errors: string[] = [];
+  const dateResults: HistoricalDateResult[] = [];
+  const pendingDateUpdates: Array<Parameters<typeof upsertProcessedArchiveDate>[0]> = [];
   let imported = 0;
   let attributionUpdated = 0;
   let datesUnavailable = 0;
   let datesSkipped = 0;
+  let recordsFetched = 0;
+  let recordsConsidered = 0;
 
   options.onProgress?.(`Historical import range: ${formatDateKey(options.from)} to ${formatDateKey(options.to)} (${dates.length} day(s)).`);
   if (options.force) {
@@ -140,13 +157,13 @@ export async function runHistoricalIngestion(options: HistoricalIngestionOptions
 
   for (const date of dates) {
     const dateKey = formatDateKey(date);
-    years.add(date.getUTCFullYear());
     options.onProgress?.(`[${dateKey}] Checking ADSB.lol GitHub archive...`);
 
     try {
       const processedDate = await getProcessedArchiveDate(ADSB_LOL_DATA_SOURCE, dateKey);
       if (shouldSkipHistoricalDate({ force: options.force, processedStatus: processedDate?.status, existingHistoricalRecords: 0 })) {
         datesSkipped += 1;
+        dateResults.push(emptyDateResult(dateKey, "skipped"));
         options.onProgress?.(`[${dateKey}] Already processed successfully; skipping archive scan.`);
         continue;
       }
@@ -161,6 +178,10 @@ export async function runHistoricalIngestion(options: HistoricalIngestionOptions
           recordsImported: existingHistoricalRecords,
           error: "Marked processed from existing historical flight records."
         });
+        dateResults.push({
+          ...emptyDateResult(dateKey, "skipped"),
+          recordsImported: existingHistoricalRecords
+        });
         options.onProgress?.(
           `[${dateKey}] Found ${existingHistoricalRecords} existing historical record(s); marked date processed and skipped archive scan.`
         );
@@ -171,7 +192,15 @@ export async function runHistoricalIngestion(options: HistoricalIngestionOptions
       if (!release) {
         datesUnavailable += 1;
         options.onProgress?.(`[${dateKey}] No archive release found; skipped.`);
-        await logUnavailableDate(dateKey);
+        const message = `ADSB.lol historical archive unavailable for ${dateKey}; retry after the upstream release is published.`;
+        pendingDateUpdates.push({
+          provider: ADSB_LOL_DATA_SOURCE,
+          dateKey,
+          status: ImportStatuses.PARTIAL,
+          recordsImported: 0,
+          error: message
+        });
+        dateResults.push({ ...emptyDateResult(dateKey, "partial"), error: message });
         continue;
       }
 
@@ -183,6 +212,8 @@ export async function runHistoricalIngestion(options: HistoricalIngestionOptions
       options.onProgress?.(`[${dateKey}] Split tar assets selected: ${release.assets.map((asset) => asset.name).join(", ")}`);
 
       const { records, stats } = await fetchHistoricalRecordsForRelease(date, release, options.onProgress);
+      recordsFetched += stats.recordsParsed;
+      recordsConsidered += stats.privateJetMatches;
       options.onProgress?.(
         `[${dateKey}] Files scanned: ${stats.filesScanned}; files matched: ${stats.filesMatched}; records parsed: ${stats.recordsParsed}; private jet matches: ${stats.privateJetMatches}.`
       );
@@ -199,12 +230,14 @@ export async function runHistoricalIngestion(options: HistoricalIngestionOptions
       }
       options.onProgress?.(`[${dateKey}] Top-level archive entries: ${formatTopLevelEntries(stats.topLevelEntries)}`);
       const result = await importFlights(records, ADSB_LOL_DATA_SOURCE, {
+        writeImportLog: false,
         updateDuplicateAttribution: Boolean(options.force)
       });
       imported += result.imported;
       attributionUpdated += result.updatedAttribution;
       if (result.errors.length) errors.push(...result.errors.map((error) => `${dateKey}: ${error}`));
-      await upsertProcessedArchiveDate({
+      years.add(date.getUTCFullYear());
+      pendingDateUpdates.push({
         provider: ADSB_LOL_DATA_SOURCE,
         dateKey,
         status: result.errors.length ? ImportStatuses.PARTIAL : ImportStatuses.SUCCESS,
@@ -217,6 +250,15 @@ export async function runHistoricalIngestion(options: HistoricalIngestionOptions
         recordsImported: result.imported,
         error: result.errors.join("\n") || null
       });
+      dateResults.push({
+        dateKey,
+        status: result.errors.length ? "partial" : "imported",
+        recordsFetched: stats.recordsParsed,
+        recordsConsidered: stats.privateJetMatches,
+        recordsImported: result.imported,
+        attributionUpdated: result.updatedAttribution,
+        error: result.errors.join("\n") || null
+      });
       options.onProgress?.(
         `[${dateKey}] Records imported: ${result.imported}; duplicate attribution updates: ${result.updatedAttribution}.`
       );
@@ -224,6 +266,7 @@ export async function runHistoricalIngestion(options: HistoricalIngestionOptions
       const message = `${dateKey}: ${error instanceof Error ? error.message : "Unknown historical import error"}`;
       errors.push(message);
       datesUnavailable += 1;
+      dateResults.push({ ...emptyDateResult(dateKey, "failed"), error: message });
       options.onProgress?.(`[${dateKey}] ${message}; skipped.`);
       await upsertProcessedArchiveDate({
         provider: ADSB_LOL_DATA_SOURCE,
@@ -232,28 +275,42 @@ export async function runHistoricalIngestion(options: HistoricalIngestionOptions
         recordsImported: 0,
         error: message
       });
-      await prisma.importLog.create({
-        data: {
-          provider: ADSB_LOL_DATA_SOURCE,
-          status: ImportStatuses.FAILED,
-          recordsImported: 0,
-          errors: message
-        }
-      });
+      if (isSystemicHistoricalError(error)) throw error;
     }
   }
 
   let rollups = 0;
-  for (const year of years) {
-    const result = await recalculateAggregateRollups(new Date(Date.UTC(year, 0, 1)));
-    rollups += result.rollups;
+  try {
+    for (const year of years) {
+      const result = await recalculateAggregateRollups(new Date(Date.UTC(year, 0, 1)));
+      rollups += result.rollups;
+    }
+    for (const update of pendingDateUpdates) {
+      await upsertProcessedArchiveDate(update);
+    }
+  } catch (error) {
+    const message = `Aggregate rollup rebuild failed: ${error instanceof Error ? error.message : "Unknown rollup error"}`;
+    errors.push(message);
+    for (const update of pendingDateUpdates) {
+      await upsertProcessedArchiveDate({
+        ...update,
+        status: ImportStatuses.FAILED,
+        error: [update.error, message].filter(Boolean).join("\n")
+      });
+      const result = dateResults.find((item) => item.dateKey === update.dateKey);
+      if (result) {
+        result.status = "failed";
+        result.error = [result.error, message].filter(Boolean).join("\n");
+      }
+    }
   }
 
   options.onProgress?.(`Recalculated ${rollups} aggregate rollup row(s).`);
+  const finalStatus = getHistoricalResultStatus(dateResults, errors);
   await updateIngestionCursor({
     provider: ADSB_LOL_DATA_SOURCE,
     mode: IngestionModes.HISTORICAL_BOOTSTRAP,
-    status: errors.length ? (imported > 0 || datesSkipped > 0 ? ImportStatuses.PARTIAL : ImportStatuses.FAILED) : ImportStatuses.SUCCESS,
+    status: finalStatus,
     recordsImported: imported,
     lastImportedAt: dates.length ? dates[dates.length - 1] : null,
     error: errors.join("\n") || null
@@ -266,8 +323,39 @@ export async function runHistoricalIngestion(options: HistoricalIngestionOptions
     datesSkipped,
     attributionUpdated,
     rollups,
+    recordsFetched,
+    recordsConsidered,
+    dateResults,
     errors
   };
+}
+
+function emptyDateResult(dateKey: string, status: HistoricalDateResult["status"]): HistoricalDateResult {
+  return {
+    dateKey,
+    status,
+    recordsFetched: 0,
+    recordsConsidered: 0,
+    recordsImported: 0,
+    attributionUpdated: 0,
+    error: null
+  };
+}
+
+export function getHistoricalResultStatus(dateResults: HistoricalDateResult[], errors: string[]) {
+  if (dateResults.length > 0 && dateResults.every((result) => result.status === "skipped")) return ImportStatuses.SKIPPED;
+  const failed = dateResults.filter((result) => result.status === "failed").length;
+  const partial = dateResults.filter((result) => result.status === "partial").length;
+  const completed = dateResults.filter((result) => result.status === "imported" || result.status === "skipped").length;
+  if (failed || errors.length) return completed > 0 || partial > 0 ? ImportStatuses.PARTIAL : ImportStatuses.FAILED;
+  if (partial) return ImportStatuses.PARTIAL;
+  return ImportStatuses.SUCCESS;
+}
+
+export function isSystemicHistoricalError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  return /\b(?:P\d{4}|Prisma|database|ECONN(?:REFUSED|RESET)|ETIMEDOUT|fetch failed)\b/i.test(message) ||
+    /GitHub (?:release lookup|asset download) failed.*(?:401|403|429|5\d\d)/i.test(message);
 }
 
 export function shouldSkipHistoricalDate({
@@ -678,42 +766,9 @@ function parseHistoryTimestamp(value: number | undefined, fallbackDate: Date) {
   return new Date(Date.UTC(fallbackDate.getUTCFullYear(), fallbackDate.getUTCMonth(), fallbackDate.getUTCDate(), 12, 0, 0));
 }
 
-async function logUnavailableDate(dateKey: string) {
-  await upsertProcessedArchiveDate({
-    provider: ADSB_LOL_DATA_SOURCE,
-    dateKey,
-    status: ImportStatuses.PARTIAL,
-    recordsImported: 0,
-    error: `ADSB.lol historical archive unavailable for ${dateKey}; skipped.`
-  });
-  await prisma.importLog.create({
-    data: {
-      provider: ADSB_LOL_DATA_SOURCE,
-      status: ImportStatuses.PARTIAL,
-      recordsImported: 0,
-      errors: `ADSB.lol historical archive unavailable for ${dateKey}; skipped.`
-    }
-  });
-}
-
 function validateDateRange(from: Date, to: Date) {
   if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) throw new Error("Historical import dates must be valid YYYY-MM-DD values.");
   if (from.getTime() > to.getTime()) throw new Error("--from must be before or equal to --to.");
-}
-
-function enumerateDates(from: Date, to: Date) {
-  const dates: Date[] = [];
-  const current = startOfUtcDay(from);
-  const end = startOfUtcDay(to);
-  while (current.getTime() <= end.getTime()) {
-    dates.push(new Date(current));
-    current.setUTCDate(current.getUTCDate() + 1);
-  }
-  return dates;
-}
-
-function startOfUtcDay(date: Date) {
-  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
 }
 
 function formatReleaseDate(date: Date) {
@@ -721,7 +776,7 @@ function formatReleaseDate(date: Date) {
 }
 
 export function formatDateKey(date: Date) {
-  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
+  return formatUtcDateKey(date);
 }
 
 function formatBytes(bytes: number) {

@@ -1,8 +1,10 @@
-import { runDailyImportAction, uploadCsvAction } from "../actions";
-import { RefreshSubmitButton } from "../RefreshSubmitButton";
+import { startHistoricalImportAction, uploadCsvAction } from "../actions";
+import { HistoricalImportForm } from "../HistoricalImportForm";
 import { getCronOperationalStatus } from "@/lib/config/cron";
 import { getAttributionQualityReport } from "@/lib/data/attributionQuality";
-import { getImportFreshness } from "@/lib/ingestion/freshness";
+import { getRecentHistoricalJobs, type HistoricalJobMetadata } from "@/lib/ingestion/historicalDispatch";
+import { getGitHubHistoricalWorkflowOperationalStatus } from "@/lib/ingestion/githubHistoricalWorkflow";
+import { formatUtcDateKey, getYesterdayUtc } from "@/lib/ingestion/historicalRequest";
 import { getImportStatusSummary } from "@/lib/ingestion/state";
 import Link from "next/link";
 import type { ReactNode } from "react";
@@ -19,12 +21,15 @@ type AdminProps = {
 };
 
 export default async function PrivateJetsAdminPage({ searchParams }: AdminProps) {
-  const [status, attributionQuality, freshness] = await Promise.all([
+  const [status, attributionQuality, historicalJobs] = await Promise.all([
     getImportStatusSummary(),
     getAttributionQualityReport(),
-    getImportFreshness()
+    getRecentHistoricalJobs()
   ]);
   const cronStatus = getCronOperationalStatus();
+  const workflowStatus = getGitHubHistoricalWorkflowOperationalStatus();
+  const latestScheduledJob = historicalJobs.find((job) => job.metadata?.source === "scheduled") ?? null;
+  const yesterdayKey = formatUtcDateKey(getYesterdayUtc());
 
   return (
     <main className="min-h-screen bg-[#f7faf8] px-4 py-10 text-ink sm:px-6 lg:px-8">
@@ -41,64 +46,60 @@ export default async function PrivateJetsAdminPage({ searchParams }: AdminProps)
       {cronStatus.cronSecretIsDefault ? (
         <StatusMessage type="warning" message="CRON_SECRET is still set to change-me. Replace it before production deployment." />
       ) : null}
-      {!cronStatus.scheduleMatchesRefresh ? (
-        <StatusMessage
-          type="warning"
-          message={`Vercel cron schedule is ${cronStatus.scheduleLabel}, but DATA_REFRESH_INTERVAL_MINUTES is ${cronStatus.refreshIntervalMinutes} minutes.`}
-        />
+      {!workflowStatus.configured ? (
+        <StatusMessage type="warning" message={`Historical workflow dispatch is missing: ${workflowStatus.missing.join(", ")}.`} />
       ) : null}
 
       <section className="mt-8 rounded-lg border border-ink/10 bg-white p-6 shadow-soft">
-        <div className="grid gap-6 lg:grid-cols-[0.8fr_1.2fr] lg:items-end">
+        <div className="grid gap-6 lg:grid-cols-[0.8fr_1.2fr] lg:items-start">
           <div>
-            <h2 className="text-lg font-semibold text-ink">Latest real-data import</h2>
+            <h2 className="text-lg font-semibold text-ink">Historical data import</h2>
             <p className="mt-3 text-sm leading-6 text-ink/65">
-              Runs the same recent-data refresh manually, outside the automatic cron schedule. It filters to
-              private/business jet aircraft types, writes aggregate rollups, and refreshes the public pages. Leave the URL
-              blank to use ADSB.lol public aircraft-type snapshots.
+              Import complete historical Private Jets data for a selected inclusive date range. The protected action
+              validates and dispatches a GitHub Actions job; the browser does not wait for archive processing to finish.
             </p>
           </div>
-          <form action={runDailyImportAction} className="grid gap-3">
-            <label className="text-sm font-semibold text-ink" htmlFor="adsbLolUrl">
-              ADSB.lol source URL
-            </label>
-            <input
-              id="adsbLolUrl"
-              name="adsbLolUrl"
-              type="url"
-              placeholder="Optional: historical/export URL. Blank uses public type snapshots."
-              className="w-full rounded-md border border-ink/15 bg-white px-3 py-2 text-sm"
-            />
-            <RefreshSubmitButton />
-          </form>
+          <HistoricalImportForm action={startHistoricalImportAction} defaultDate={yesterdayKey} maximumDate={yesterdayKey} />
         </div>
       </section>
 
       <section className="mt-8 rounded-lg border border-ink/10 bg-white p-6 shadow-soft">
-        <h2 className="text-lg font-semibold text-ink">Cron refresh status</h2>
+        <h2 className="text-lg font-semibold text-ink">Scheduled historical import</h2>
         <p className="mt-2 text-sm leading-6 text-ink/65">
-          Vercel Cron should call the protected endpoint on the schedule below. The endpoint runs the same recent-data
-          logic as <code>pnpm ingest:daily</code>, while administrators can trigger additional manual refreshes when needed.
+          Vercel Cron calls the protected dispatcher once daily. It queues the previous completed UTC day in GitHub Actions;
+          no archive is scanned inside the Vercel request.
         </p>
         <div className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <QualityCard label="Cron endpoint" value={cronStatus.endpointPath} />
           <QualityCard label="Cron schedule" value={cronStatus.vercelSchedule} />
-          <QualityCard label="Automatic refresh" value={cronStatus.scheduleLabel} />
+          <QualityCard label="Schedule timezone" value={cronStatus.timezone} />
+          <QualityCard label="Automatic date" value="Previous UTC day" />
           <QualityCard label="Secret configured" value={cronStatus.cronSecretConfigured ? "Yes" : "No"} />
         </div>
         <div className="mt-5 grid gap-4 lg:grid-cols-2">
-          <StatusPanel title="Latest scheduled refresh">
-            <StatusRow label="Last successful refresh" value={formatDateTime(freshness.lastSuccessfulUpdateAt)} detail="Most recent successful or partial scheduled ingestion run." />
-            <StatusRow label="Latest refresh status" value={freshness.latestStatus ?? "n/a"} detail={`Latest run ended: ${formatDateTime(freshness.latestRunEndedAt)}`} />
-            <StatusRow label="Records fetched" value={freshness.latestRecordsFetched.toLocaleString()} detail="Provider records returned before cursor filtering." />
-            <StatusRow label="Records imported" value={freshness.latestRecordsImported.toLocaleString()} detail="New records written during the latest run." />
+          <StatusPanel title="Latest scheduled historical run">
+            <StatusRow label="Requested range" value={formatJobRange(latestScheduledJob?.metadata)} detail="Scheduled runs always request exactly yesterday in UTC." />
+            <StatusRow label="Status" value={latestScheduledJob?.status ?? "n/a"} detail={`Started: ${formatDateTime(latestScheduledJob?.runStartedAt)} | Completed: ${formatDateTime(latestScheduledJob?.runEndedAt)}`} />
+            <StatusRow label="Dates imported / skipped / failed" value={formatJobDateCounts(latestScheduledJob?.metadata)} detail="Partial dates remain retryable and are not treated as complete." />
+            <StatusRow label="Records fetched / imported" value={`${(latestScheduledJob?.recordsFetched ?? 0).toLocaleString()} / ${(latestScheduledJob?.recordsImported ?? 0).toLocaleString()}`} detail="Fetched archive records and newly written flight rows." />
+            {latestScheduledJob?.metadata?.workflowUrl ? (
+              <a
+                href={latestScheduledJob.metadata.workflowUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex text-sm font-semibold text-clay hover:text-ink"
+              >
+                View GitHub Actions workflow runs
+              </a>
+            ) : null}
           </StatusPanel>
           <StatusPanel title="Configuration checks">
             <StatusRow
-              label="Schedule matches interval"
-              value={cronStatus.scheduleMatchesRefresh ? "Yes" : "No"}
-              detail={`vercel.json is ${cronStatus.scheduleLabel}; DATA_REFRESH_INTERVAL_MINUTES is ${cronStatus.refreshIntervalMinutes} minutes.`}
+              label="Execution architecture"
+              value="GitHub Actions"
+              detail="Vercel only validates and dispatches; archive scanning runs on a background workflow runner."
             />
+            <StatusRow label="Workflow dispatch" value={workflowStatus.configured ? "Configured" : "Missing configuration"} detail={`Workflow: ${workflowStatus.workflow}`} />
             <StatusRow
               label="CRON_SECRET safety"
               value={!cronStatus.cronSecretConfigured ? "Missing" : cronStatus.cronSecretIsDefault ? "Unsafe default" : "Configured"}
@@ -113,8 +114,8 @@ export default async function PrivateJetsAdminPage({ searchParams }: AdminProps)
           <div>
             <h2 className="text-lg font-semibold text-ink">Import status</h2>
             <p className="mt-2 text-sm leading-6 text-ink/65">
-              Recent operation uses the ADSB.lol API cursor. Historical bootstrap dates are recorded so multi-GB archives are
-              not scanned again after a successful import.
+              Historical archive dates are processed deterministically and recorded so large archives are not scanned again
+              after a successful import. CLI, scheduled, and manual runs share the same importer.
             </p>
           </div>
           <Link
@@ -157,18 +158,18 @@ export default async function PrivateJetsAdminPage({ searchParams }: AdminProps)
           </StatusPanel>
         </div>
 
-        <StatusPanel className="mt-4" title="Recent import logs">
-          {status.recentImportLogs.length ? (
-            status.recentImportLogs.map((log) => (
+        <StatusPanel className="mt-4" title="Recent historical import jobs">
+          {historicalJobs.length ? (
+            historicalJobs.map((job) => (
               <StatusRow
-                key={log.id}
-                label={`${log.provider} / ${log.status}`}
-                value={`${log.recordsImported.toLocaleString()} records`}
-                detail={`${formatDateTime(log.timestamp)} | Fetched: ${log.recordsFetched.toLocaleString()} | Considered: ${log.recordsConsidered.toLocaleString()}${log.errors ? ` | ${log.errors.slice(0, 140)}` : ""}`}
+                key={job.id}
+                label={`${job.metadata?.source ?? "unknown"} / ${formatJobRange(job.metadata)}`}
+                value={job.status}
+                detail={`Imported: ${job.recordsImported.toLocaleString()} | Fetched: ${job.recordsFetched.toLocaleString()} | Started: ${formatDateTime(job.runStartedAt)} | Completed: ${formatDateTime(job.runEndedAt)}${job.error ? ` | ${job.error.slice(0, 140)}` : ""}`}
               />
             ))
           ) : (
-            <p className="text-sm text-ink/60">No import logs yet.</p>
+            <p className="text-sm text-ink/60">No historical import jobs yet.</p>
           )}
         </StatusPanel>
       </section>
@@ -290,6 +291,16 @@ function formatDateTime(value: Date | string | null | undefined) {
     hour: "2-digit",
     minute: "2-digit"
   });
+}
+
+function formatJobRange(metadata: HistoricalJobMetadata | null | undefined) {
+  if (!metadata) return "n/a";
+  return metadata.from === metadata.to ? metadata.from : `${metadata.from} to ${metadata.to}`;
+}
+
+function formatJobDateCounts(metadata: HistoricalJobMetadata | null | undefined) {
+  if (!metadata) return "0 / 0 / 0";
+  return `${metadata.datesImported} / ${metadata.datesSkipped} / ${metadata.datesFailed}`;
 }
 
 function StatusMessage({ type, message }: { type: "success" | "warning" | "error"; message?: string }) {

@@ -52,7 +52,7 @@ export async function getImportFreshness(): Promise<ImportFreshness> {
       "errors"
     FROM "ImportLog"
     WHERE "provider" = ${ADSB_LOL_DATA_SOURCE}
-      AND ("mode" = ${IngestionModes.DAILY_API} OR "mode" IS NULL)
+      AND "mode" = ${IngestionModes.HISTORICAL_BOOTSTRAP}
     ORDER BY "timestamp" DESC
     LIMIT 25
   `;

@@ -29,9 +29,9 @@ describe("refresh interval configuration", () => {
     expect(formatRefreshInterval(30)).toBe("Updated throughout the day using scheduled and manual data imports.");
   });
 
-  it("recognizes Vercel cron schedules and matches the default refresh interval", () => {
-    expect(getCronScheduleIntervalMinutes("0 1 * * *")).toBe(1440);
-    expect(formatCronScheduleLabel("0 1 * * *")).toBe("Daily");
+  it("recognizes the daily Vercel historical dispatch schedule", () => {
+    expect(getCronScheduleIntervalMinutes("0 6 * * *")).toBe(1440);
+    expect(formatCronScheduleLabel("0 6 * * *")).toBe("Daily");
     expect(
       getCronOperationalStatus({
         DATA_REFRESH_INTERVAL_MINUTES: "1440",
@@ -41,7 +41,7 @@ describe("refresh interval configuration", () => {
       endpointPath: "/api/cron/ingest",
       scheduleIntervalMinutes: 1440,
       scheduleLabel: "Daily",
-      scheduleMatchesRefresh: true,
+      timezone: "UTC",
       cronSecretConfigured: true,
       cronSecretIsDefault: false
     });

@@ -1,20 +1,19 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { handleCronIngest } from "@/lib/api/cronIngest";
+import type { HistoricalImportRequest } from "@/lib/ingestion/historicalRequest";
 
-function successfulResult(imported = 1) {
+function queuedResult(request: HistoricalImportRequest) {
+  const dateKey = request.from.toISOString().slice(0, 10);
   return {
-    provider: "adsb_lol",
-    imported,
-    skipped: 0,
-    fetched: imported,
-    considered: imported,
-    lastImportedAt: new Date("2026-06-23T10:00:00Z"),
-    errors: [],
-    rollups: 4
+    jobId: "job-1",
+    status: "queued" as const,
+    claimedDateKeys: [dateKey],
+    skippedDateKeys: [],
+    workflowUrl: "https://github.com/example/paperstraw/actions/workflows/private-jets-historical-ingest.yml"
   };
 }
 
-describe("cron ingest handler", () => {
+describe("cron historical ingest dispatcher", () => {
   beforeEach(() => {
     process.env.CRON_SECRET = "cron-secret";
   });
@@ -22,9 +21,9 @@ describe("cron ingest handler", () => {
   it("returns 401 for unauthenticated cron requests", async () => {
     let called = false;
     const response = await handleCronIngest(new Request("https://paperstraw.test/api/cron/ingest"), {
-      runRecentIngestion: async () => {
+      dispatch: async (request) => {
         called = true;
-        return successfulResult();
+        return queuedResult(request);
       }
     });
 
@@ -39,9 +38,9 @@ describe("cron ingest handler", () => {
         headers: { authorization: "Bearer wrong-secret" }
       }),
       {
-        runRecentIngestion: async () => {
+        dispatch: async (request) => {
           called = true;
-          return successfulResult();
+          return queuedResult(request);
         }
       }
     );
@@ -50,45 +49,75 @@ describe("cron ingest handler", () => {
     expect(called).toBe(false);
   });
 
-  it("runs recent ingestion for valid bearer tokens", async () => {
-    let calls = 0;
+  it("dispatches exactly the previous completed UTC day", async () => {
+    const requests: HistoricalImportRequest[] = [];
     const response = await handleCronIngest(
       new Request("https://paperstraw.test/api/cron/ingest", {
         headers: { authorization: "Bearer cron-secret" }
       }),
       {
-        runRecentIngestion: async () => {
-          calls += 1;
-          return successfulResult(3);
+        now: () => new Date("2026-07-13T00:05:00-07:00"),
+        dispatch: async (request) => {
+          requests.push(request);
+          return queuedResult(request);
         }
       }
     );
 
     const body = await response.json();
-    expect(response.status).toBe(200);
-    expect(calls).toBe(1);
-    expect(body).toMatchObject({ status: "success", imported: 3, fetched: 3, rollups: 4 });
+    expect(response.status).toBe(202);
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).toMatchObject({ force: false, source: "scheduled" });
+    expect(requests[0].from.toISOString()).toBe("2026-07-12T00:00:00.000Z");
+    expect(requests[0].to.toISOString()).toBe("2026-07-12T00:00:00.000Z");
+    expect(body).toMatchObject({ status: "queued", from: "2026-07-12", to: "2026-07-12", timezone: "UTC" });
   });
 
-  it("does not call historical ingestion and repeated runs can report duplicate skips", async () => {
-    let calls = 0;
-    const runRecentIngestion = async () => {
-      calls += 1;
-      return calls === 1 ? successfulResult(1) : { ...successfulResult(0), skipped: 1, fetched: 1, considered: 0 };
+  it("handles month and leap-year boundaries in UTC", async () => {
+    const dates: string[] = [];
+    const dispatch = async (request: HistoricalImportRequest) => {
+      dates.push(request.from.toISOString().slice(0, 10));
+      return queuedResult(request);
     };
+    const authorized = { headers: { authorization: "Bearer cron-secret" } };
 
-    const request = () =>
-      new Request("https://paperstraw.test/api/cron/ingest", {
-        headers: { authorization: "Bearer cron-secret" }
-      });
+    await handleCronIngest(new Request("https://paperstraw.test/api/cron/ingest", authorized), {
+      now: () => new Date("2028-03-01T00:30:00Z"),
+      dispatch
+    });
+    await handleCronIngest(new Request("https://paperstraw.test/api/cron/ingest", authorized), {
+      now: () => new Date("2027-03-01T00:30:00Z"),
+      dispatch
+    });
 
-    const first = await handleCronIngest(request(), { runRecentIngestion });
-    const second = await handleCronIngest(request(), { runRecentIngestion });
-    const secondBody = await second.json();
+    expect(dates).toEqual(["2028-02-29", "2027-02-28"]);
+  });
 
-    expect(first.status).toBe(200);
+  it("does not start a duplicate when the date is already complete", async () => {
+    let calls = 0;
+    const dispatch = async (request: HistoricalImportRequest) => {
+      calls += 1;
+      if (calls === 1) return queuedResult(request);
+      return {
+        ...queuedResult(request),
+        jobId: "job-2",
+        status: "skipped" as const,
+        claimedDateKeys: [],
+        skippedDateKeys: [request.from.toISOString().slice(0, 10)],
+        workflowUrl: null
+      };
+    };
+    const request = () => new Request("https://paperstraw.test/api/cron/ingest", {
+      headers: { authorization: "Bearer cron-secret" }
+    });
+    const now = () => new Date("2026-07-13T07:00:00Z");
+
+    const first = await handleCronIngest(request(), { now, dispatch });
+    const second = await handleCronIngest(request(), { now, dispatch });
+    const body = await second.json();
+
+    expect(first.status).toBe(202);
     expect(second.status).toBe(200);
-    expect(calls).toBe(2);
-    expect(secondBody).toMatchObject({ imported: 0, skipped: 1 });
+    expect(body).toMatchObject({ status: "skipped", execution: "not-dispatched" });
   });
 });

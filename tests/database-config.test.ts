@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   getCruisesDatabaseUrl,
   getPrivateJetsDatabaseUrl,
-  looksLikeCruiseDatabaseUrl
+  looksLikeCruiseDatabaseUrl,
+  requireExplicitPrivateJetsDatabaseUrl
 } from "@/lib/database/config";
 
 describe("module database URL resolution", () => {
@@ -17,6 +18,15 @@ describe("module database URL resolution", () => {
 
   it("keeps DATABASE_URL as the private jets backwards-compatible fallback", () => {
     expect(getPrivateJetsDatabaseUrl({ DATABASE_URL: "postgres://example.invalid/private-jets" })).toBe(
+      "postgres://example.invalid/private-jets"
+    );
+  });
+
+  it("requires the module-specific database variable for historical ingestion", () => {
+    expect(() => requireExplicitPrivateJetsDatabaseUrl({ DATABASE_URL: "postgres://example.invalid/private-jets" })).toThrow(
+      /PRIVATE_JETS_DATABASE_URL/
+    );
+    expect(requireExplicitPrivateJetsDatabaseUrl({ PRIVATE_JETS_DATABASE_URL: "postgres://example.invalid/private-jets" })).toBe(
       "postgres://example.invalid/private-jets"
     );
   });

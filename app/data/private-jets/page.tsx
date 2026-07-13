@@ -181,7 +181,7 @@ export default async function PrivateJetsDataPage() {
             </p>
             <p>
               Historical ingestion processes ADSB.lol archive dates and records import status so large archives do not
-              need to be rescanned repeatedly. Recent operation uses scheduled data refreshes for latest imported flight data.
+              need to be rescanned repeatedly. Scheduled operation imports the previous completed UTC archive day.
             </p>
             <p>
               Aircraft are included by aircraft type allowlist for likely private or business jets. CO2 values are

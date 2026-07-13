@@ -6,7 +6,7 @@ PaperStraw modules use separate databases. Do not merge private-jet data and cru
 
 | Module | Database URL env var | Backwards-compatible fallback | Writes |
 | --- | --- | --- | --- |
-| Private Jets | `PRIVATE_JETS_DATABASE_URL` | `DATABASE_URL` | private-jet ingestion, rollups, admin refresh |
+| Private Jets | `PRIVATE_JETS_DATABASE_URL` | `DATABASE_URL` for legacy non-historical paths only | private-jet ingestion, rollups, admin historical import |
 | Cruises | `CRUISES_DATABASE_URL` | `CRUISE_DATABASE_URL` | cruise AIS/MRV/registry tooling |
 
 `DATABASE_URL` remains supported only as the private-jet default for existing production deployments. New cruise code should not use `DATABASE_URL`.
@@ -73,6 +73,8 @@ Set both module databases for branch previews that render both modules:
 - existing public/admin variables such as `ADMIN_USERNAME`, `ADMIN_PASSWORD`, `CRON_SECRET`, and `PAYPAL_URL`
 
 Private-jet cron/API routes use the private-jet database. Cruise pages and cruise admin/API routes use the cruise database.
+
+The production Private Jets cron dispatches the previous completed UTC day to GitHub Actions. Historical CLI, admin, and scheduled execution require `PRIVATE_JETS_DATABASE_URL` explicitly and share the same server-side runner. See `docs/private-jets-historical-ingestion.md` for schedule, security, retry, and environment details.
 
 ## Railway cruise worker variables
 

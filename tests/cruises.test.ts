@@ -1540,8 +1540,13 @@ describe("cruise dashboard query helpers", () => {
   it("keeps private-jet airport tooltip code separate from cruise detail navigation", () => {
     const airportMapSource = readFileSync("components/dashboard/AirportEmissionsMap.tsx", "utf8");
 
-    expect(airportMapSource).toContain("Private jet emissions hotspot");
-    expect(airportMapSource).toContain("Aggregated airport activity within this map cell");
+    expect(airportMapSource).toContain("airportName");
+    expect(airportMapSource).toContain("airportIdent");
+    expect(airportMapSource).toContain("iataCode");
+    expect(airportMapSource).toContain("Airport-level private jet activity");
+    expect(airportMapSource).toContain("Private jet airport");
+    expect(airportMapSource).not.toContain("Private jet emissions hotspot");
+    expect(airportMapSource).not.toContain("Aggregated airport activity within this map cell");
     expect(airportMapSource).not.toContain("/cruises/");
     expect(airportMapSource).not.toContain("shipId");
   });

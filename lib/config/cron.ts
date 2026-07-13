@@ -1,7 +1,6 @@
-import { getDataRefreshIntervalMinutes } from "./refresh";
-
 export const CRON_ENDPOINT_PATH = "/api/cron/ingest";
-export const VERCEL_CRON_SCHEDULE = "0 1 * * *";
+export const VERCEL_CRON_SCHEDULE = "0 6 * * *";
+export const CRON_TIMEZONE = "UTC";
 
 export function getCronScheduleIntervalMinutes(schedule = VERCEL_CRON_SCHEDULE) {
   const normalized = schedule.trim().replace(/\s+/g, " ");
@@ -23,17 +22,15 @@ export function formatCronScheduleLabel(schedule = VERCEL_CRON_SCHEDULE) {
 }
 
 export function getCronOperationalStatus(env: NodeJS.ProcessEnv = process.env) {
-  const refreshIntervalMinutes = getDataRefreshIntervalMinutes(env);
   const scheduleIntervalMinutes = getCronScheduleIntervalMinutes();
   const cronSecret = env["CRON_SECRET"]?.trim() ?? "";
 
   return {
     endpointPath: CRON_ENDPOINT_PATH,
     vercelSchedule: VERCEL_CRON_SCHEDULE,
+    timezone: CRON_TIMEZONE,
     scheduleLabel: formatCronScheduleLabel(),
-    refreshIntervalMinutes,
     scheduleIntervalMinutes,
-    scheduleMatchesRefresh: scheduleIntervalMinutes === refreshIntervalMinutes,
     cronSecretConfigured: Boolean(cronSecret),
     cronSecretIsDefault: cronSecret === "change-me"
   };
