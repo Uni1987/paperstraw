@@ -6,13 +6,13 @@ const modules = [
     title: "Private Jets",
     href: "/comparisons/private-jets",
     status: "Established module",
-    description: "Private jet CO2 translated into everyday climate-awareness comparisons using the existing PaperStraw factors."
+    description: "Private jet CO₂ translated into relatable everyday scale comparisons using the existing PaperStraw factors."
   },
   {
     title: "Cruises",
     href: "/comparisons/cruises",
     status: "Verified tracked vessels",
-    description: "Cruise comparisons are being prepared around verified AIS tracking and since-monitoring-began estimates."
+    description: "Estimated CO₂ from verified tracked cruise vessels since monitoring began, translated into everyday comparisons."
   }
 ];
 
@@ -25,7 +25,7 @@ export default function ComparisonsHubPage() {
           Understand emissions by module
         </h1>
         <p className="mt-6 max-w-3xl text-lg leading-8 text-white/64">
-          Comparisons turn large CO2 numbers into everyday reference points. Choose a module to keep the context clear.
+          Comparisons turn large CO₂ numbers into everyday reference points. Choose a module to keep the context clear.
         </p>
       </section>
 

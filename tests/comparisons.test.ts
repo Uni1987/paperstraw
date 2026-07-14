@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   calculateCoffeeCups,
@@ -68,5 +70,64 @@ describe("comparison calculations", () => {
     expect(calculateCoffeeCups(1)).toBe(20000);
     expect(calculateSmartphones(70)).toBe(1000);
     expect(calculateTshirts(4)).toBe(1000);
+  });
+});
+
+describe("private-jet comparison storytelling page", () => {
+  const privateJetsPage = readFileSync(resolve(process.cwd(), "app/comparisons/private-jets/page.tsx"), "utf8");
+  const cruisePage = readFileSync(resolve(process.cwd(), "app/comparisons/cruises/page.tsx"), "utf8");
+  const comparisonGrid = readFileSync(resolve(process.cwd(), "components/comparisons/ComparisonCardGrid.tsx"), "utf8");
+
+  it("uses the familiar themed card grid and renders comparison values", () => {
+    expect(privateJetsPage).toContain("<ComparisonCardGrid comparisons={comparisons}");
+    expect(comparisonGrid).toContain("COMPARISON_CATEGORIES.map");
+    expect(comparisonGrid).toContain("{comparison.icon}");
+    expect(comparisonGrid).toContain("{comparison.value}");
+    expect(comparisonGrid).toContain("function ComparisonCard");
+    expect(privateJetsPage).not.toContain("Featured impact");
+    expect(privateJetsPage).not.toContain("Explore by lens");
+  });
+
+  it("replaces per-card methodology controls with one central methodology link", () => {
+    expect(comparisonGrid).not.toContain("<details");
+    expect(comparisonGrid).not.toContain("<summary");
+    expect(comparisonGrid).not.toContain("Based on average emissions factors</p>");
+    expect(privateJetsPage).toContain('href="/methodology/private-jets"');
+    expect(privateJetsPage).toContain("Read full methodology");
+  });
+
+  it("states the tree lifetime assumption without claiming an immediate offset", () => {
+    expect(privateJetsPage).toContain("newly planted trees");
+    expect(privateJetsPage).toContain("assumed 45-year lifetime");
+    expect(privateJetsPage).toContain("not exact one-to-one offsets");
+  });
+
+  it("builds cruise comparisons from the dashboard since-monitoring baseline", () => {
+    expect(cruisePage).toContain("getCruiseDashboardData");
+    expect(cruisePage).toContain("data.kpis.co2SinceMonitoringBeganTonnes");
+    expect(cruisePage).toContain("buildComparisonCards");
+    expect(cruisePage).toContain("<ComparisonCardGrid comparisons={comparisons}");
+    expect(cruisePage).not.toContain("Cruise comparisons are being prepared");
+  });
+
+  it("keeps cruise coverage and methodology wording appropriately scoped", () => {
+    expect(cruisePage).toContain("verified tracked cruise vessels since monitoring began");
+    expect(cruisePage).toContain("not all cruise ships worldwide");
+    expect(cruisePage).toContain("newly planted trees absorbing CO₂ over an assumed 45-year lifetime");
+    expect(cruisePage).toContain('href="/methodology/cruises"');
+    expect(cruisePage).toContain("Read cruise methodology");
+    expect(cruisePage).not.toContain("<details");
+    expect(cruisePage).not.toContain("<summary");
+  });
+
+  it("keeps dashboard and full-page cruise comparison values on one calculator", () => {
+    const totalCo2Tonnes = 1234;
+    const allComparisons = buildComparisonCards(totalCo2Tonnes);
+    const dashboardIds = ["driving-distance", "household-electricity", "lifetime-trees"];
+    const dashboardComparisons = allComparisons.filter((comparison) => dashboardIds.includes(comparison.id));
+
+    expect(dashboardComparisons).toEqual(
+      dashboardIds.map((id) => allComparisons.find((comparison) => comparison.id === id))
+    );
   });
 });

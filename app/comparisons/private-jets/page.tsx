@@ -1,6 +1,8 @@
+import Link from "next/link";
+import { ComparisonCardGrid } from "@/components/comparisons/ComparisonCardGrid";
 import { PublicShell } from "@/components/PublicShell";
 import { ModuleInfoNav } from "@/components/ModuleInfoNav";
-import { buildComparisonCards, COMPARISON_CATEGORIES, type ComparisonCardData } from "@/lib/comparisons";
+import { buildComparisonCards } from "@/lib/comparisons";
 import { getAwarenessDashboardData } from "@/lib/awareness/aggregates";
 
 export const dynamic = "force-dynamic";
@@ -20,94 +22,42 @@ export default async function PrivateJetsComparisonsPage() {
           siblingHref="/comparisons/cruises"
           siblingLabel="View Cruise Comparisons"
         />
-        <div className="max-w-4xl">
+
+        <header className="max-w-4xl">
           <p className="text-sm font-semibold uppercase tracking-[0.18em] text-paper">Comparisons</p>
           <h1 className="mt-4 text-5xl font-semibold leading-tight tracking-normal text-white sm:text-7xl">
             More ways to understand this number
           </h1>
-          <p className="mt-6 max-w-3xl text-lg leading-8 text-white/62">
-            Private jet CO2 emissions translated into everyday comparisons.
+          <p className="mt-6 max-w-3xl text-lg leading-8 text-white/64">
+            Private jet CO₂ emissions translated into relatable everyday scale comparisons.
           </p>
-        </div>
+        </header>
 
-        <div className="mt-14 space-y-20">
-          {COMPARISON_CATEGORIES.map((category) => {
-            const cards = comparisons.filter((comparison) => comparison.category === category);
-            return (
-              <section key={category}>
-                <div className="mb-7 flex flex-wrap items-end justify-between gap-4 border-b border-white/10 pb-5">
-                  <div>
-                    <h2 className="text-3xl font-semibold tracking-normal text-white">{category}</h2>
-                    <p className="mt-2 text-sm text-white/50">{cards.length} comparison{cards.length === 1 ? "" : "s"}</p>
-                  </div>
-                </div>
+        <ComparisonCardGrid comparisons={comparisons} />
 
-                <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-                  {cards.map((comparison) => (
-                    <ComparisonCard key={comparison.id} comparison={comparison} />
-                  ))}
-                </div>
-              </section>
-            );
-          })}
-        </div>
-
-        <footer className="mt-20 rounded-lg border border-white/10 bg-white/[0.035] p-6 text-sm leading-6 text-white/58">
-          All comparisons are estimates based on widely used average emissions factors. Actual emissions vary by country,
-          technology, fuel mix, manufacturing process and individual circumstances.
-        </footer>
+        <section className="mt-20 border-y border-white/10 py-10" aria-labelledby="comparison-methodology-title">
+          <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
+            <div className="max-w-4xl">
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-paper">Assumptions</p>
+              <h2 id="comparison-methodology-title" className="mt-3 text-3xl font-semibold tracking-normal text-white">
+                How to read these comparisons
+              </h2>
+              <p className="mt-5 text-base leading-7 text-white/60">
+                These comparisons are illustrative. They use average emissions factors and should be read as scale indicators,
+                not exact one-to-one offsets. Tree comparisons estimate how many newly planted trees would be required to
+                absorb the same amount of CO₂ over an assumed 45-year lifetime. Actual values vary by country, technology,
+                fuel mix, species, climate, survival rate, soil conditions, and individual circumstances.
+              </p>
+            </div>
+            <Link
+              href="/methodology/private-jets"
+              className="inline-flex w-fit items-center gap-2 text-sm font-semibold text-paper transition hover:text-white"
+            >
+              Read full methodology <span aria-hidden="true">→</span>
+            </Link>
+          </div>
+        </section>
       </section>
     </PublicShell>
   );
-}
-
-function ComparisonCard({ comparison }: { comparison: ComparisonCardData }) {
-  return (
-    <article className="flex min-h-[24rem] flex-col rounded-lg border border-white/10 bg-white/[0.045] p-6 shadow-2xl shadow-black/20">
-      <div className="text-4xl" aria-hidden="true">
-        {comparison.icon}
-      </div>
-      <h3 className="mt-7 text-xl font-semibold text-white">{comparison.title}</h3>
-      <p className="mt-5 text-5xl font-semibold tracking-normal text-paper">{comparison.value}</p>
-      <p className="mt-2 text-sm font-semibold uppercase tracking-[0.14em] text-white/44">{comparison.unit}</p>
-      <p className="mt-5 text-sm leading-6 text-white/60">{formatComparisonDescription(comparison)}</p>
-
-      {comparison.extraMetrics?.length ? (
-        <div className="mt-5 grid gap-2 rounded-md border border-white/10 bg-charcoal/45 p-3">
-          {comparison.extraMetrics.map((metric) => (
-            <div key={metric.label} className="flex items-center justify-between gap-3 text-xs">
-              <span className="text-white/46">{metric.label}</span>
-              <span className="font-semibold text-white/82">{metric.value}</span>
-            </div>
-          ))}
-        </div>
-      ) : null}
-
-      <div className="mt-auto pt-6">
-        <p className="text-xs text-white/38">Based on average emissions factors</p>
-        <details className="mt-4 rounded-md border border-white/10 bg-charcoal/55 p-3 text-sm">
-          <summary className="cursor-pointer font-semibold text-paper">Methodology</summary>
-          <div className="mt-3 space-y-2 text-xs leading-5 text-white/58">
-            <p>
-              <span className="font-semibold text-white/78">Factor used:</span> {comparison.factorLabel}
-            </p>
-            <p>
-              <span className="font-semibold text-white/78">Formula:</span> {comparison.formulaLabel}
-            </p>
-            <p>
-              <span className="font-semibold text-white/78">Assumptions:</span> {comparison.sourceAssumption}
-            </p>
-          </div>
-        </details>
-      </div>
-    </article>
-  );
-}
-
-function formatComparisonDescription(comparison: ComparisonCardData) {
-  return comparison.description
-    .replace("X million ", `${comparison.value} `)
-    .replace("X billion ", `${comparison.value} `)
-    .replace("X ", `${comparison.value} `)
-    .replace("X", comparison.value);
 }
