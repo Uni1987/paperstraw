@@ -19,7 +19,7 @@ export async function getAwarenessDashboardData(now = new Date()): Promise<Aware
     const rollupWindowStart = new Date(yearStart);
     rollupWindowStart.setDate(rollupWindowStart.getDate() - 1);
     const aggregateRollup = (prisma as unknown as { aggregateRollup?: { findMany: Function } }).aggregateRollup;
-    const rollups = aggregateRollup ? await getDashboardRollups(aggregateRollup, rollupWindowStart, nextYearStart) : [];
+    const rollups = aggregateRollup ? await getDashboardRollups(aggregateRollup, rollupWindowStart, nextYearStart, now) : [];
     const yearGlobalRollup = findCurrentYearRollup(rollups, now);
     if (yearGlobalRollup && Number(yearGlobalRollup.flights) > 0) {
       return buildAwarenessDashboardDataFromRollups(rollups, now);
@@ -34,30 +34,31 @@ export async function getAwarenessDashboardData(now = new Date()): Promise<Aware
 async function getDashboardRollups(
   aggregateRollup: { findMany: Function },
   rollupWindowStart: Date,
-  nextYearStart: Date
+  nextYearStart: Date,
+  now: Date
 ): Promise<StoredAggregateRollup[]> {
+  const globalRollups = (await aggregateRollup.findMany({
+    where: {
+      group: AggregateGroups.GLOBAL,
+      periodStart: {
+        gte: rollupWindowStart,
+        lt: nextYearStart
+      }
+    },
+    orderBy: { periodStart: "asc" }
+  })) as StoredAggregateRollup[];
+  const currentYearRollup = findCurrentYearRollup(globalRollups, now);
+  if (!currentYearRollup) return globalRollups;
+
   const yearGroupWhere = {
     period: AggregatePeriods.YEAR,
-    periodStart: {
-      gte: rollupWindowStart,
-      lt: nextYearStart
-    },
+    periodStart: currentYearRollup.periodStart,
     estimatedCo2Kg: {
       gt: 0
     }
   };
 
-  const [globalRollups, topCountries, topAirports, aircraftTypes] = await Promise.all([
-    aggregateRollup.findMany({
-      where: {
-        group: AggregateGroups.GLOBAL,
-        periodStart: {
-          gte: rollupWindowStart,
-          lt: nextYearStart
-        }
-      },
-      orderBy: { periodStart: "asc" }
-    }),
+  const [topCountries, topAirports, aircraftTypes] = await Promise.all([
     aggregateRollup.findMany({
       where: {
         ...yearGroupWhere,
@@ -72,7 +73,7 @@ async function getDashboardRollups(
         group: AggregateGroups.AIRPORT
       },
       orderBy: { estimatedCo2Kg: "desc" },
-      take: 6
+      take: 24
     }),
     aggregateRollup.findMany({
       where: {
@@ -119,9 +120,9 @@ export function buildAwarenessDashboardDataFromRollups(rollups: StoredAggregateR
         estimatedCo2Kg: Number(rollup.estimatedCo2Kg),
         flights: rollup.flights
       })),
-    topCountries: rollupsToRankPoints(rollups, AggregateGroups.COUNTRY),
-    topAirports: rollupsToRankPoints(rollups, AggregateGroups.AIRPORT),
-    aircraftTypes: rollupsToRankPoints(rollups, AggregateGroups.AIRCRAFT_TYPE)
+    topCountries: rollupsToRankPoints(rollups, AggregateGroups.COUNTRY, yearRollup?.periodStart),
+    topAirports: rollupsToRankPoints(rollups, AggregateGroups.AIRPORT, yearRollup?.periodStart),
+    aircraftTypes: rollupsToRankPoints(rollups, AggregateGroups.AIRCRAFT_TYPE, yearRollup?.periodStart)
   };
 }
 
@@ -174,9 +175,20 @@ export function buildAwarenessDashboardData(
   };
 }
 
-function rollupsToRankPoints(rollups: StoredAggregateRollup[], group: AggregateGroupValue): AwarenessRankPoint[] {
-  return rollups
+function rollupsToRankPoints(
+  rollups: StoredAggregateRollup[],
+  group: AggregateGroupValue,
+  periodStart?: Date
+): AwarenessRankPoint[] {
+  const matchingRollups = rollups
     .filter((rollup) => rollup.period === AggregatePeriods.YEAR && rollup.group === group)
+    .filter((rollup) => !periodStart || rollup.periodStart.getTime() === periodStart.getTime());
+
+  if (group === AggregateGroups.AIRPORT) {
+    return buildAirportRankPointsFromRollups(matchingRollups);
+  }
+
+  return matchingRollups
     .map((rollup) => ({
       label: rollup.key,
       estimatedCo2Kg: Number(rollup.estimatedCo2Kg),
@@ -184,6 +196,36 @@ function rollupsToRankPoints(rollups: StoredAggregateRollup[], group: AggregateG
       distanceKm: Number(rollup.distanceKm)
     }))
     .sort((a, b) => b.estimatedCo2Kg - a.estimatedCo2Kg)
+    .slice(0, 6);
+}
+
+function buildAirportRankPointsFromRollups(rollups: StoredAggregateRollup[]): AwarenessRankPoint[] {
+  const airports = new Map<string, AwarenessRankPoint>();
+
+  for (const rollup of rollups) {
+    const resolved = resolveAirport(rollup.key);
+    const fallbackLabel = rollup.key.trim();
+    if (!resolved && !fallbackLabel) continue;
+    const stableKey = resolved?.code ?? `NAME:${fallbackLabel.toUpperCase()}`;
+    const current = airports.get(stableKey) ?? {
+      label: resolved?.label ?? fallbackLabel,
+      estimatedCo2Kg: 0,
+      flights: 0,
+      distanceKm: 0
+    };
+    current.estimatedCo2Kg += Number(rollup.estimatedCo2Kg);
+    current.flights += rollup.flights;
+    current.distanceKm += Number(rollup.distanceKm);
+    airports.set(stableKey, current);
+  }
+
+  return [...airports.values()]
+    .map((airport) => ({
+      ...airport,
+      estimatedCo2Kg: roundToTwo(airport.estimatedCo2Kg),
+      distanceKm: roundToTwo(airport.distanceKm)
+    }))
+    .sort((left, right) => right.estimatedCo2Kg - left.estimatedCo2Kg)
     .slice(0, 6);
 }
 

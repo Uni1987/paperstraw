@@ -127,6 +127,97 @@ describe("stored aggregate rollups", () => {
     expect(dashboard.yearCo2Kg).toBe(6223324000);
   });
 
+  it("uses one yearly snapshot for airport rankings instead of rendering duplicate snapshot rows", () => {
+    const primaryPeriodStart = new Date("2025-12-31T23:00:00.000Z");
+    const secondaryPeriodStart = new Date("2026-01-01T00:00:00.000Z");
+    const dashboard = buildAwarenessDashboardDataFromRollups(
+      [
+        {
+          period: AggregatePeriods.YEAR,
+          group: AggregateGroups.GLOBAL,
+          key: "ALL",
+          periodStart: primaryPeriodStart,
+          flights: 100,
+          distanceKm: 10000,
+          estimatedCo2Kg: 1000000
+        },
+        {
+          period: AggregatePeriods.YEAR,
+          group: AggregateGroups.GLOBAL,
+          key: "ALL",
+          periodStart: secondaryPeriodStart,
+          flights: 4,
+          distanceKm: 400,
+          estimatedCo2Kg: 40000
+        },
+        {
+          period: AggregatePeriods.YEAR,
+          group: AggregateGroups.AIRPORT,
+          key: "Teterboro Airport",
+          periodStart: primaryPeriodStart,
+          flights: 20,
+          distanceKm: 2000,
+          estimatedCo2Kg: 200000
+        },
+        {
+          period: AggregatePeriods.YEAR,
+          group: AggregateGroups.AIRPORT,
+          key: "Teterboro Airport",
+          periodStart: secondaryPeriodStart,
+          flights: 2,
+          distanceKm: 200,
+          estimatedCo2Kg: 20000
+        }
+      ],
+      now
+    );
+
+    expect(dashboard.topAirports).toHaveLength(1);
+    expect(dashboard.topAirports[0]).toMatchObject({
+      label: "Teterboro Airport",
+      estimatedCo2Kg: 200000,
+      flights: 20
+    });
+  });
+
+  it("aggregates airport aliases into one stable airport ranking row", () => {
+    const periodStart = new Date("2025-12-31T23:00:00.000Z");
+    const airportRollup = (key: string, estimatedCo2Kg: number) => ({
+      period: AggregatePeriods.YEAR,
+      group: AggregateGroups.AIRPORT,
+      key,
+      periodStart,
+      flights: 1,
+      distanceKm: estimatedCo2Kg / 10,
+      estimatedCo2Kg
+    });
+    const dashboard = buildAwarenessDashboardDataFromRollups(
+      [
+        {
+          period: AggregatePeriods.YEAR,
+          group: AggregateGroups.GLOBAL,
+          key: "ALL",
+          periodStart,
+          flights: 6,
+          distanceKm: 3200,
+          estimatedCo2Kg: 320000
+        },
+        airportRollup("KTEB", 100000),
+        airportRollup("Teterboro Airport", 50000),
+        airportRollup("KOPF", 80000),
+        airportRollup("Miami-Opa Locka Executive Airport", 20000),
+        airportRollup("KVNY", 60000),
+        airportRollup("Van Nuys Airport", 10000)
+      ],
+      now
+    );
+
+    expect(new Set(dashboard.topAirports.map((airport) => airport.label)).size).toBe(dashboard.topAirports.length);
+    expect(dashboard.topAirports.find((airport) => airport.label.includes("Teterboro"))?.estimatedCo2Kg).toBe(150000);
+    expect(dashboard.topAirports.find((airport) => airport.label.includes("Opa"))?.estimatedCo2Kg).toBe(100000);
+    expect(dashboard.topAirports.find((airport) => airport.label.includes("Van Nuys"))?.estimatedCo2Kg).toBe(70000);
+  });
+
   it("finds today's precomputed rollup when it was written with a local-midnight timezone offset", () => {
     const dashboard = buildAwarenessDashboardDataFromRollups(
       [
