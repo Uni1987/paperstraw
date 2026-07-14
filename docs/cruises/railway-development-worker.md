@@ -1,8 +1,8 @@
-# Cruise Global-Local-Filter Railway Development Worker
+# Cruise Global-Local-Filter Railway Worker
 
-This document describes how to run the PaperStraw cruise AIS worker as a development-only Railway background worker.
+This document describes how to run the PaperStraw cruise AIS worker as a long-running Railway background worker.
 
-This is not a production deployment. It is intended only for the `feature/cruises` branch, the Railway service named `cruise-global-local-filter-worker`, and the `cruises-dev` database target.
+The deployed application now lives on `main`. The worker still uses the deliberately restrictive `railway-development` environment name and `cruises-dev` logical database target. Those values are safety boundaries, not a statement that the command is unsuitable for Railway.
 
 ## Purpose
 
@@ -25,7 +25,7 @@ It does not:
 
 ## Intended Branch And Service
 
-- Git branch: `feature/cruises`
+- Git branch: `main`
 - Railway service: `cruise-global-local-filter-worker`
 - Database target: `cruises-dev`
 - Worker command:
@@ -55,9 +55,9 @@ Recommended development values:
 - `CRUISE_WORKER_DATABASE_TARGET=cruises-dev`
 - `CRUISE_WORKER_PROFILE=railway`
 
-The worker refuses to start when `CRUISE_WORKER_ENV` is missing. In `railway-development` mode it also refuses to start unless `CRUISE_WORKER_DATABASE_TARGET` is exactly `cruises-dev`.
+The worker refuses to start when `CRUISE_WORKER_ENV` is missing. In `railway-development` mode it also refuses to start unless `CRUISE_WORKER_DATABASE_TARGET` is exactly `cruises-dev` and the command includes `--allow-long-run`.
 
-Production mode is blocked unless a separate future override variable is explicitly set. Do not enable production mode for the current preview.
+Production mode is blocked unless a separate future override variable is explicitly set. Do not enable that override for the current Railway service.
 
 ## Architecture
 
@@ -73,7 +73,7 @@ The worker stores only minimal verified position fields. It does not store raw g
 
 ## Expected Resource Profile
 
-Local soak tests showed the full-world feed can be processed with low CPU and memory on a development machine. Actual Railway resource use depends on AISStream traffic at runtime, verified vessel activity, database latency, and reconnect behavior.
+Read-only global-feed benchmarks peaked at roughly 79-81 MB RSS. The write-enabled worker also carries Prisma and bounded write/dedupe state, so an initial operational expectation is approximately 100-256 MB RSS under normal traffic. This is a monitoring range, not a resource guarantee; actual Railway use depends on AISStream traffic, verified vessel activity, database latency, and reconnect behavior.
 
 Expected operational shape:
 
@@ -81,7 +81,11 @@ Expected operational shape:
 - roughly full-world AIS inbound traffic;
 - most AIS messages discarded after local verification checks;
 - bounded position batches;
+- a 256-message in-flight processing ceiling;
+- a 50,000-key, 24-hour position dedupe cache;
+- a configured-size, 24-hour static-review dedupe cache;
 - periodic status logs;
+- detailed memory snapshots every five minutes;
 - daily estimate updates only for verified vessels touched by stored positions.
 
 Local benchmark projections should be treated as linear estimates from the observed test window, not billing predictions.
@@ -121,6 +125,26 @@ Healthy interval logs should include:
 - `queueWriteFailures=0`
 - `status=HEALTHY`
 
+Every five minutes, a separate `global-local-filter memory` line reports:
+
+- `rssMB`, `heapUsedMB`, `heapTotalMB`, and `externalMB`;
+- pending message and position counts;
+- position and static-review dedupe cache sizes;
+- touched ship/day count.
+
+The cache and concurrency limits protect the process during a slow database period. If the in-flight ceiling is reached, the worker records `messagesDroppedBackpressure` and reports `BACKPRESSURE_RISK` instead of retaining messages without limit.
+
+## Out-Of-Memory Response
+
+If Railway reports an OOM warning:
+
+1. Check whether RSS or heap grows monotonically across at least six five-minute memory snapshots.
+2. Check `pendingMessages`, `pendingPositions`, both dedupe-key counts, `messagesDroppedBackpressure`, and `backlogObserved`.
+3. Confirm only one AIS worker is using the key and that reconnect count is stable.
+4. Run the read-only health commands below and check database latency/failures.
+5. Restart the service only after capturing the final memory and health lines.
+6. Increase Railway memory only after confirming the bounded counters are stable; a steadily growing bounded counter indicates a separate leak that should be investigated first.
+
 The logs must not include API keys, database URLs, MMSIs, IMOs, or vessel names.
 
 ## Confirm The Database Target
@@ -156,7 +180,8 @@ Shutdown is bounded so the process does not wait forever.
 Inspect worker status locally:
 
 ```bash
-pnpm cruises:global-local-filter:status
+pnpm cruises:ops-summary
+pnpm cruises:global-local-filter:status -- --since-hours 1
 ```
 
 Inspect registry status locally:
@@ -194,7 +219,7 @@ Never paste the old or new key into logs, screenshots, or commits.
 
 Before starting Railway:
 
-- Branch is `feature/cruises`.
+- Branch is `main`.
 - Service is `cruise-global-local-filter-worker`.
 - `CRUISE_WORKER_ENV=railway-development`.
 - `CRUISE_WORKER_DATABASE_TARGET=cruises-dev`.

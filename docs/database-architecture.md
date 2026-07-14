@@ -78,7 +78,7 @@ The production Private Jets cron dispatches the previous completed UTC day to Gi
 
 ## Railway cruise worker variables
 
-The development worker service should set:
+The Railway cruise worker service should set:
 
 - `CRUISES_DATABASE_URL`
 - `AISSTREAM_API_KEY`

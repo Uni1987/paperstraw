@@ -18,7 +18,14 @@ export const GLOBAL_LOCAL_FILTER_FLUSH_INTERVAL_MS = 5000;
 export const GLOBAL_LOCAL_FILTER_FLUSH_BATCH_SIZE = 100;
 export const GLOBAL_LOCAL_FILTER_MESSAGE_TYPES = ["PositionReport", "ShipStaticData"] as const;
 export const GLOBAL_LOCAL_FILTER_RAILWAY_REPORT_INTERVAL_MS = 60000;
+export const GLOBAL_LOCAL_FILTER_MEMORY_LOG_INTERVAL_MS = 5 * 60 * 1000;
 export const GLOBAL_LOCAL_FILTER_SHUTDOWN_TIMEOUT_MS = 20000;
+export const GLOBAL_LOCAL_FILTER_MAX_IN_FLIGHT_MESSAGES = 256;
+export const GLOBAL_LOCAL_FILTER_POSITION_DEDUPE_MAX_SIZE = 50000;
+export const GLOBAL_LOCAL_FILTER_POSITION_DEDUPE_TTL_MS = 24 * 60 * 60 * 1000;
+export const GLOBAL_LOCAL_FILTER_STATIC_DEDUPE_TTL_MS = 24 * 60 * 60 * 1000;
+export const GLOBAL_LOCAL_FILTER_DRY_RUN_SHIP_DAY_MAX_SIZE = 10000;
+export const GLOBAL_LOCAL_FILTER_DRY_RUN_SHIP_DAY_TTL_MS = 32 * 24 * 60 * 60 * 1000;
 export const CRUISE_WORKER_ENVS = ["development", "railway-development", "production"] as const;
 export const CRUISE_WORKER_DATABASE_TARGET_CRUISES_DEV = "cruises-dev";
 export const CRUISE_WORKER_PRODUCTION_OVERRIDE = "CRUISE_WORKER_ALLOW_PRODUCTION";
@@ -45,6 +52,21 @@ export type GlobalLocalFilterOptions = {
   reviewQueueLimit: number;
   dryRun: boolean;
   noEmissions: boolean;
+  allowLongRun: boolean;
+};
+
+export type GlobalLocalFilterRuntimeSizes = {
+  pendingPositions: number;
+  positionDedupeKeys: number;
+  staticQueueKeys: number;
+  touchedShipDays: number;
+};
+
+export type RuntimeMemorySnapshotMb = {
+  rss: number;
+  heapUsed: number;
+  heapTotal: number;
+  external: number;
 };
 
 export type VerifiedCruiseLookup = {
@@ -122,6 +144,7 @@ export type GlobalLocalFilterState = {
   databaseWriteFailures: number;
   backlogObserved: boolean;
   peakPendingMessages: number;
+  messagesDroppedBackpressure: number;
   memoryStartMb: number;
   memoryPeakMb: number;
   memoryEndMb: number;
@@ -186,6 +209,24 @@ export function formatGlobalLocalFilterStartupSafetyLog(safety: GlobalLocalFilte
   ].join(" | ");
 }
 
+export function validateGlobalLocalFilterDeploymentMode(
+  safety: GlobalLocalFilterWorkerSafety,
+  options: Pick<GlobalLocalFilterOptions, "allowLongRun">
+) {
+  if (safety.workerEnv === "railway-development" && !options.allowLongRun) {
+    throw new Error("CRUISE_WORKER_ENV=railway-development requires --allow-long-run for the Railway worker.");
+  }
+  return {
+    railwayWorker: safety.workerEnv === "railway-development",
+    longRunning: options.allowLongRun
+  };
+}
+
+export function formatGlobalLocalFilterRuntimeNotice(safety: GlobalLocalFilterWorkerSafety) {
+  const runtime = safety.workerEnv === "railway-development" ? "Railway long-running worker" : "development worker";
+  return `global-local-filter ${runtime} enabled | singleGlobalSocket=true | stopOtherAisWorkers=true`;
+}
+
 export async function flushGlobalLocalFilterShutdown(options: {
   writer: Pick<GlobalLocalFilterWriter, "flush">;
   timeoutMs?: number;
@@ -204,6 +245,51 @@ export async function waitForGlobalLocalFilterPendingMessages(getPendingCount: (
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
   return getPendingCount();
+}
+
+export class BoundedTtlSet {
+  private readonly entries = new Map<string, number>();
+
+  constructor(
+    private readonly maxSize: number,
+    private readonly ttlMs: number
+  ) {
+    if (!Number.isInteger(maxSize) || maxSize <= 0) throw new Error("BoundedTtlSet maxSize must be a positive integer.");
+    if (!Number.isFinite(ttlMs) || ttlMs <= 0) throw new Error("BoundedTtlSet ttlMs must be positive.");
+  }
+
+  has(key: string, nowMs = Date.now()) {
+    this.pruneExpired(nowMs);
+    const seenAt = this.entries.get(key);
+    if (seenAt === undefined) return false;
+    if (nowMs - seenAt >= this.ttlMs) {
+      this.entries.delete(key);
+      return false;
+    }
+    return true;
+  }
+
+  add(key: string, nowMs = Date.now()) {
+    this.pruneExpired(nowMs);
+    this.entries.delete(key);
+    this.entries.set(key, nowMs);
+    while (this.entries.size > this.maxSize) {
+      const oldest = this.entries.keys().next().value as string | undefined;
+      if (oldest === undefined) break;
+      this.entries.delete(oldest);
+    }
+  }
+
+  get size() {
+    return this.entries.size;
+  }
+
+  private pruneExpired(nowMs: number) {
+    for (const [key, seenAt] of this.entries) {
+      if (nowMs - seenAt < this.ttlMs) break;
+      this.entries.delete(key);
+    }
+  }
 }
 
 export function validateGlobalLocalFilterOptions(options: { maxRuntimeMs: number | null; reportIntervalMs: number; positionRetentionDays: number; reviewQueueLimit: number; allowLongRun?: boolean }) {
@@ -290,6 +376,7 @@ export function createGlobalLocalFilterState(): GlobalLocalFilterState {
     databaseWriteFailures: 0,
     backlogObserved: false,
     peakPendingMessages: 0,
+    messagesDroppedBackpressure: 0,
     memoryStartMb: memory,
     memoryPeakMb: memory,
     memoryEndMb: memory,
@@ -307,6 +394,7 @@ export function createGlobalLocalFilterState(): GlobalLocalFilterState {
 
 export async function runGlobalLocalFilterIngest(options: GlobalLocalFilterOptions) {
   const safety = validateGlobalLocalFilterWorkerEnvironment();
+  validateGlobalLocalFilterDeploymentMode(safety, options);
   const apiKey = getAisStreamApiKey();
   if (!apiKey) throw new Error("Missing AISSTREAM_API_KEY.");
   if (!options.dryRun) await assertGlobalLocalFilterWriteTablesExist();
@@ -320,9 +408,11 @@ export async function runGlobalLocalFilterIngest(options: GlobalLocalFilterOptio
   let pendingMessages = 0;
   let stopped = false;
   let socket: WebSocket | null = null;
+  let socketCleanup: (() => void) | null = null;
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
-  console.warn(formatGlobalLocalFilterStartupSafetyLog(safety));
-  console.warn("global-local-filter is local-development only. Stop benchmark/discovery/hybrid/verified-global workers before running this mode.");
+  console.log(formatGlobalLocalFilterStartupSafetyLog(safety));
+  console.log(formatGlobalLocalFilterRuntimeNotice(safety));
 
   await new Promise<void>((resolve) => {
     const stopTimer = stopAtMs
@@ -341,9 +431,13 @@ export async function runGlobalLocalFilterIngest(options: GlobalLocalFilterOptio
     const flushTimer = setInterval(() => {
       void writer.flush();
     }, GLOBAL_LOCAL_FILTER_FLUSH_INTERVAL_MS);
+    const memoryTimer = setInterval(() => {
+      printGlobalLocalFilterMemoryStatus(writer, pendingMessages);
+    }, GLOBAL_LOCAL_FILTER_MEMORY_LOG_INTERVAL_MS);
     stopTimer?.unref?.();
     reportTimer.unref?.();
     flushTimer.unref?.();
+    memoryTimer.unref?.();
 
     let finishing: Promise<void> | null = null;
     let shutdownFallbackTimer: ReturnType<typeof setTimeout> | null = null;
@@ -353,8 +447,12 @@ export async function runGlobalLocalFilterIngest(options: GlobalLocalFilterOptio
       stopped = true;
       clearInterval(reportTimer);
       clearInterval(flushTimer);
+      clearInterval(memoryTimer);
       if (stopTimer) clearTimeout(stopTimer);
       if (shutdownFallbackTimer) clearTimeout(shutdownFallbackTimer);
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      socketCleanup?.();
+      socketCleanup = null;
       process.off("SIGINT", handleSignal);
       process.off("SIGTERM", handleSignal);
       await waitForGlobalLocalFilterPendingMessages(() => pendingMessages, GLOBAL_LOCAL_FILTER_SHUTDOWN_TIMEOUT_MS);
@@ -378,6 +476,10 @@ export async function runGlobalLocalFilterIngest(options: GlobalLocalFilterOptio
       stopped = true;
       state.closeReason = `signal ${signal}`;
       console.warn(`global-local-filter received ${signal}; closing WebSocket and flushing pending writes.`);
+      if (!socket) {
+        void finish(`signal ${signal}`);
+        return;
+      }
       try {
         socket?.close(1000, `signal ${signal}`);
       } catch (error) {
@@ -394,21 +496,28 @@ export async function runGlobalLocalFilterIngest(options: GlobalLocalFilterOptio
     const connect = () => {
       if (stopped) return;
       const openedAttemptAt = Date.now();
-      socket = new WebSocket(AISSTREAM_ENDPOINT);
-      socket.addEventListener("open", () => {
+      const currentSocket = new WebSocket(AISSTREAM_ENDPOINT);
+      socket = currentSocket;
+      const handleOpen = () => {
+        if (stopped || socket !== currentSocket) return;
         state.connected = true;
         const openedAtMs = Date.now();
         const payload = buildGlobalLocalFilterSubscriptionPayload(apiKey);
-        socket?.send(JSON.stringify(payload));
+        currentSocket.send(JSON.stringify(payload));
         state.subscriptionSent = true;
         state.consecutiveFastFailures = 0;
         console.log(`AISStream global-local-filter connected | subscription=${JSON.stringify(getGlobalLocalFilterSubscriptionSummary(payload, Date.now() - openedAtMs))}`);
-      });
-      socket.addEventListener("message", (event) => {
+      };
+      const handleMessage = (event: MessageEvent) => {
         if (stopped) return;
+        if (!canAcceptGlobalLocalFilterMessage(pendingMessages)) {
+          state.messagesDroppedBackpressure += 1;
+          state.backlogObserved = true;
+          return;
+        }
         pendingMessages += 1;
         state.peakPendingMessages = Math.max(state.peakPendingMessages, pendingMessages);
-        if (pendingMessages > 1000 || writer.pendingCount() > GLOBAL_LOCAL_FILTER_FLUSH_BATCH_SIZE * 10) state.backlogObserved = true;
+        if (writer.pendingCount() > GLOBAL_LOCAL_FILTER_FLUSH_BATCH_SIZE * 10) state.backlogObserved = true;
         void handleGlobalLocalFilterMessage(event, lookup, writer, state)
           .catch((error) => {
             state.lastError = sanitizeLogValue(error);
@@ -416,8 +525,13 @@ export async function runGlobalLocalFilterIngest(options: GlobalLocalFilterOptio
           .finally(() => {
             pendingMessages -= 1;
           });
-      });
-      socket.addEventListener("close", (event) => {
+      };
+      const handleClose = (event: CloseEvent) => {
+        detachListeners();
+        if (socket === currentSocket) {
+          socket = null;
+          socketCleanup = null;
+        }
         state.connected = false;
         state.closeCode = typeof event.code === "number" ? event.code : null;
         state.closeReason = sanitizeLogValue(event.reason) || null;
@@ -430,17 +544,36 @@ export async function runGlobalLocalFilterIngest(options: GlobalLocalFilterOptio
         state.consecutiveFastFailures = rapid ? state.consecutiveFastFailures + 1 : 0;
         const delay = getReconnectDelayMs(state.consecutiveFastFailures || state.reconnectCount);
         if (state.consecutiveFastFailures >= 3) state.lastError = "likely concurrent connection limit or rapid AISStream disconnect";
-        setTimeout(connect, delay).unref?.();
-      });
-      socket.addEventListener("error", (event) => {
+        reconnectTimer = setTimeout(() => {
+          reconnectTimer = null;
+          connect();
+        }, delay);
+        reconnectTimer.unref?.();
+      };
+      const handleError = (event: Event) => {
         state.lastError = sanitizeLogValue(event);
-      });
+      };
+      const detachListeners = () => {
+        currentSocket.removeEventListener("open", handleOpen);
+        currentSocket.removeEventListener("message", handleMessage);
+        currentSocket.removeEventListener("close", handleClose);
+        currentSocket.removeEventListener("error", handleError);
+      };
+      socketCleanup = detachListeners;
+      currentSocket.addEventListener("open", handleOpen);
+      currentSocket.addEventListener("message", handleMessage);
+      currentSocket.addEventListener("close", handleClose);
+      currentSocket.addEventListener("error", handleError);
     };
 
     connect();
   });
 
   return toGlobalLocalFilterReport(state);
+}
+
+export function canAcceptGlobalLocalFilterMessage(pendingMessages: number) {
+  return pendingMessages < GLOBAL_LOCAL_FILTER_MAX_IN_FLIGHT_MESSAGES;
 }
 
 export async function handleGlobalLocalFilterMessage(event: unknown, lookup: VerifiedCruiseLookup, writer: GlobalLocalFilterWriter, state: GlobalLocalFilterState) {
@@ -513,13 +646,15 @@ export type GlobalLocalFilterWriter = {
   enqueueStaticQueueItem: (item: StaticQueueItem) => Promise<void>;
   flush: () => Promise<void>;
   pendingCount: () => number;
+  runtimeSizes: () => GlobalLocalFilterRuntimeSizes;
 };
 
 export function createGlobalLocalFilterWriter(options: Pick<GlobalLocalFilterOptions, "dryRun" | "noEmissions" | "reviewQueueLimit">, state: GlobalLocalFilterState): GlobalLocalFilterWriter {
   const positions: GlobalLocalFilterPosition[] = [];
-  const seenPositionKeys = new Set<string>();
+  const seenPositionKeys = new BoundedTtlSet(GLOBAL_LOCAL_FILTER_POSITION_DEDUPE_MAX_SIZE, GLOBAL_LOCAL_FILTER_POSITION_DEDUPE_TTL_MS);
   const touchedShipDays = new Set<string>();
-  const queueKeys = new Set<string>();
+  const dryRunTouchedShipDays = new BoundedTtlSet(GLOBAL_LOCAL_FILTER_DRY_RUN_SHIP_DAY_MAX_SIZE, GLOBAL_LOCAL_FILTER_DRY_RUN_SHIP_DAY_TTL_MS);
+  const queueKeys = new BoundedTtlSet(options.reviewQueueLimit, GLOBAL_LOCAL_FILTER_STATIC_DEDUPE_TTL_MS);
   let flushing: Promise<void> | null = null;
 
   const writer: GlobalLocalFilterWriter = {
@@ -532,8 +667,8 @@ export function createGlobalLocalFilterWriter(options: Pick<GlobalLocalFilterOpt
       if (options.dryRun) {
         state.wouldStorePositions += 1;
         if (!options.noEmissions) {
-          touchedShipDays.add(shipDayKey(position.shipId, position.timestamp));
-          state.wouldAffectEmissionDays = touchedShipDays.size;
+          dryRunTouchedShipDays.add(shipDayKey(position.shipId, position.timestamp));
+          state.wouldAffectEmissionDays = dryRunTouchedShipDays.size;
         }
         return;
       }
@@ -544,11 +679,11 @@ export function createGlobalLocalFilterWriter(options: Pick<GlobalLocalFilterOpt
     async enqueueStaticQueueItem(item) {
       const key = `${item.registryEntryId}:${item.observedMmsi}:${item.classification}`;
       if (queueKeys.has(key)) return;
-      queueKeys.add(key);
-      if (queueKeys.size > options.reviewQueueLimit) {
+      if (queueKeys.size >= options.reviewQueueLimit) {
         state.reviewQueueLimitReached = true;
         return;
       }
+      queueKeys.add(key);
       if (item.classification === "NEW_MMSI_CANDIDATE_FOR_EXISTING_REGISTRY_ENTRY") {
         if (options.dryRun) state.wouldQueueNewMmsiCandidates += 1;
         else state.newMmsiCandidatesQueued += 1;
@@ -570,7 +705,7 @@ export function createGlobalLocalFilterWriter(options: Pick<GlobalLocalFilterOpt
     },
     async flush() {
       if (flushing) return flushing;
-      flushing = flushPositions();
+      flushing = flushAllPositions();
       try {
         await flushing;
       } finally {
@@ -579,10 +714,24 @@ export function createGlobalLocalFilterWriter(options: Pick<GlobalLocalFilterOpt
     },
     pendingCount() {
       return positions.length;
+    },
+    runtimeSizes() {
+      return {
+        pendingPositions: positions.length,
+        positionDedupeKeys: seenPositionKeys.size,
+        staticQueueKeys: queueKeys.size,
+        touchedShipDays: options.dryRun ? dryRunTouchedShipDays.size : touchedShipDays.size
+      };
     }
   };
 
-  async function flushPositions() {
+  async function flushAllPositions() {
+    while (positions.length > 0) {
+      await flushPositionBatch();
+    }
+  }
+
+  async function flushPositionBatch() {
     if (!positions.length) return;
     const batch = positions.splice(0, GLOBAL_LOCAL_FILTER_FLUSH_BATCH_SIZE);
     state.pendingWriteBuffer = positions.length;
@@ -674,6 +823,7 @@ export function toGlobalLocalFilterReport(state: GlobalLocalFilterState) {
     emissionWriteFailures: state.emissionWriteFailures,
     batchFlushes: state.batchFlushes,
     pendingWriteBuffer: state.pendingWriteBuffer,
+    messagesDroppedBackpressure: state.messagesDroppedBackpressure,
     reconnectCount: state.reconnectCount,
     lastError: finalLastError ?? "none",
     inboundBytes: state.totalBytesReceived,
@@ -704,6 +854,7 @@ export function formatGlobalLocalFilterReport(report: ReturnType<typeof toGlobal
     `Verified position matches: ${report.verifiedPositionMatches}`,
     `Positions stored/would store: ${report.positionsStored}/${report.wouldStorePositions}`,
     `Duplicate positions skipped: ${report.duplicatePositionsSkipped}`,
+    `Messages dropped under backpressure: ${report.messagesDroppedBackpressure}`,
     `Discarded non-verified positions: ${report.discardedNonVerifiedPositions}`,
     `Static exact registry matches: ${report.staticExactRegistryMatches}`,
     `New MMSI candidates queued/would queue: ${report.newMmsiCandidatesQueued}/${report.wouldQueueNewMmsiCandidates}`,
@@ -969,6 +1120,7 @@ function printGlobalLocalFilterStatus(state: GlobalLocalFilterState) {
       `emissionWriteFailures=${state.emissionWriteFailures}`,
       `batchFlushes=${state.batchFlushes}`,
       `pendingWriteBuffer=${state.pendingWriteBuffer}`,
+      `messagesDroppedBackpressure=${state.messagesDroppedBackpressure}`,
       `reconnectCount=${state.reconnectCount}`,
       `lastError=${state.lastError ?? "none"}`,
       `rssMB=${state.memoryPeakMb}`,
@@ -985,6 +1137,38 @@ function printGlobalLocalFilterStatus(state: GlobalLocalFilterState) {
   );
 }
 
+export function getRuntimeMemorySnapshotMb(memory = process.memoryUsage()): RuntimeMemorySnapshotMb {
+  return {
+    rss: bytesToMb(memory.rss),
+    heapUsed: bytesToMb(memory.heapUsed),
+    heapTotal: bytesToMb(memory.heapTotal),
+    external: bytesToMb(memory.external)
+  };
+}
+
+export function formatGlobalLocalFilterMemoryStatus(
+  memory: RuntimeMemorySnapshotMb,
+  sizes: GlobalLocalFilterRuntimeSizes,
+  pendingMessages: number
+) {
+  return [
+    "global-local-filter memory",
+    `rssMB=${memory.rss}`,
+    `heapUsedMB=${memory.heapUsed}`,
+    `heapTotalMB=${memory.heapTotal}`,
+    `externalMB=${memory.external}`,
+    `pendingMessages=${pendingMessages}`,
+    `pendingPositions=${sizes.pendingPositions}`,
+    `positionDedupeKeys=${sizes.positionDedupeKeys}`,
+    `staticQueueKeys=${sizes.staticQueueKeys}`,
+    `touchedShipDays=${sizes.touchedShipDays}`
+  ].join(" | ");
+}
+
+function printGlobalLocalFilterMemoryStatus(writer: GlobalLocalFilterWriter, pendingMessages: number) {
+  console.log(formatGlobalLocalFilterMemoryStatus(getRuntimeMemorySnapshotMb(), writer.runtimeSizes(), pendingMessages));
+}
+
 function getReconnectDelayMs(failures: number) {
   return Math.min(10 * 60 * 1000, Math.max(1000, 1000 * 2 ** Math.min(8, failures)));
 }
@@ -996,7 +1180,11 @@ function sanitizeLogValue(value: unknown) {
 }
 
 function getRssMb() {
-  return round(process.memoryUsage().rss / 1024 / 1024);
+  return getRuntimeMemorySnapshotMb().rss;
+}
+
+function bytesToMb(value: number) {
+  return round(value / 1024 / 1024);
 }
 
 function nsToMs(value: number) {

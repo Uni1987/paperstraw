@@ -109,11 +109,16 @@ import {
   type CoverageRegistryState
 } from "@/lib/cruises/globalFeedCoverageAudit";
 import {
+  BoundedTtlSet,
+  GLOBAL_LOCAL_FILTER_MAX_IN_FLIGHT_MESSAGES,
   buildGlobalLocalFilterSubscriptionPayload,
+  canAcceptGlobalLocalFilterMessage,
   classifyGlobalLocalFilterStaticData,
   createGlobalLocalFilterState,
   createGlobalLocalFilterWriter,
   flushGlobalLocalFilterShutdown,
+  formatGlobalLocalFilterMemoryStatus,
+  formatGlobalLocalFilterRuntimeNotice,
   formatGlobalLocalFilterStartupSafetyLog,
   formatGlobalLocalFilterReport,
   getGlobalLocalFilterHealthStatus,
@@ -122,6 +127,7 @@ import {
   handleGlobalLocalFilterMessage,
   toGlobalLocalFilterReport,
   validateGlobalLocalFilterWorkerEnvironment,
+  validateGlobalLocalFilterDeploymentMode,
   validateGlobalLocalFilterOptions,
   waitForGlobalLocalFilterPendingMessages,
   type GlobalLocalFilterPosition,
@@ -2147,6 +2153,25 @@ describe("global-local-filter cruise ingest", () => {
     });
   });
 
+  it("requires the explicit long-running flag for Railway while preserving explicit local development", () => {
+    const railwaySafety = validateGlobalLocalFilterWorkerEnvironment(
+      globalLocalFilterWorkerEnv({ CRUISE_WORKER_ENV: "railway-development", CRUISE_WORKER_PROFILE: "railway" })
+    );
+    const localSafety = validateGlobalLocalFilterWorkerEnvironment(globalLocalFilterWorkerEnv());
+
+    expect(() => validateGlobalLocalFilterDeploymentMode(railwaySafety, { allowLongRun: false })).toThrow(/--allow-long-run/);
+    expect(validateGlobalLocalFilterDeploymentMode(railwaySafety, { allowLongRun: true })).toEqual({
+      railwayWorker: true,
+      longRunning: true
+    });
+    expect(validateGlobalLocalFilterDeploymentMode(localSafety, { allowLongRun: false })).toEqual({
+      railwayWorker: false,
+      longRunning: false
+    });
+    expect(formatGlobalLocalFilterRuntimeNotice(railwaySafety)).toContain("Railway long-running worker enabled");
+    expect(formatGlobalLocalFilterRuntimeNotice(railwaySafety)).not.toContain("local-development only");
+  });
+
   it("blocks production worker mode unless the explicit future override is present", () => {
     expect(() => validateGlobalLocalFilterWorkerEnvironment(globalLocalFilterWorkerEnv({ CRUISE_WORKER_ENV: "production" }))).toThrow(/CRUISE_WORKER_ALLOW_PRODUCTION/);
     expect(
@@ -2206,10 +2231,59 @@ describe("global-local-filter cruise ingest", () => {
     clearTimeout(timer);
   });
 
+  it("bounds expiring runtime caches and rejects new message work at the concurrency ceiling", () => {
+    const cache = new BoundedTtlSet(2, 100);
+    cache.add("first", 0);
+    cache.add("second", 10);
+    cache.add("third", 20);
+
+    expect(cache.size).toBe(2);
+    expect(cache.has("first", 20)).toBe(false);
+    expect(cache.has("second", 50)).toBe(true);
+    expect(cache.has("second", 111)).toBe(false);
+    expect(canAcceptGlobalLocalFilterMessage(GLOBAL_LOCAL_FILTER_MAX_IN_FLIGHT_MESSAGES - 1)).toBe(true);
+    expect(canAcceptGlobalLocalFilterMessage(GLOBAL_LOCAL_FILTER_MAX_IN_FLIGHT_MESSAGES)).toBe(false);
+  });
+
+  it("keeps static queue dedupe state within its configured limit", async () => {
+    const state = createGlobalLocalFilterState();
+    const writer = createGlobalLocalFilterWriter({ dryRun: true, noEmissions: true, reviewQueueLimit: 2 }, state);
+    const queueItem = (registryEntryId: string): StaticQueueItem => ({
+      registryEntryId,
+      observedMmsi: "244123456",
+      observedAt: new Date("2026-07-14T00:00:00.000Z"),
+      classification: "NEW_MMSI_CANDIDATE_FOR_EXISTING_REGISTRY_ENTRY"
+    });
+
+    await writer.enqueueStaticQueueItem(queueItem("registry-1"));
+    await writer.enqueueStaticQueueItem(queueItem("registry-2"));
+    await writer.enqueueStaticQueueItem(queueItem("registry-3"));
+
+    expect(writer.runtimeSizes().staticQueueKeys).toBe(2);
+    expect(state.reviewQueueLimitReached).toBe(true);
+    expect(state.wouldQueueNewMmsiCandidates).toBe(2);
+  });
+
+  it("formats concise memory diagnostics with bounded buffer and cache sizes", () => {
+    const output = formatGlobalLocalFilterMemoryStatus(
+      { rss: 120, heapUsed: 60, heapTotal: 80, external: 5 },
+      { pendingPositions: 3, positionDedupeKeys: 40, staticQueueKeys: 2, touchedShipDays: 1 },
+      4
+    );
+
+    expect(output).toContain("rssMB=120");
+    expect(output).toContain("heapUsedMB=60");
+    expect(output).toContain("pendingMessages=4");
+    expect(output).toContain("positionDedupeKeys=40");
+    expect(output).not.toContain("DATABASE_URL");
+  });
+
   it("does not introduce reconcile apply behavior into the global-local-filter worker", () => {
     const source = readFileSync("lib/cruises/globalLocalFilterIngest.ts", "utf8");
 
     expect(source).not.toMatch(/reconcileCruiseCandidate|registry:reconcile|--apply/);
+    expect(source).toContain('removeEventListener("message"');
+    expect(source).toContain("clearTimeout(reconnectTimer)");
   });
 
   it("stores only known verified MMSI PositionReports and discards unknown MMSIs", async () => {
@@ -3467,6 +3541,14 @@ function fakeGlobalLocalFilterWriter(): GlobalLocalFilterWriter & { positions: G
     async flush() {},
     pendingCount() {
       return positions.length;
+    },
+    runtimeSizes() {
+      return {
+        pendingPositions: positions.length,
+        positionDedupeKeys: 0,
+        staticQueueKeys: queueItems.length,
+        touchedShipDays: 0
+      };
     }
   };
 }
