@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   aggregateAirportEmissionPointsToGrid,
@@ -96,6 +97,30 @@ describe("dashboard airport map payload", () => {
     expect(points[0].longitude).toBeLessThan(-70);
   });
 
+  it("keeps YTD airport map data non-empty when attributed endpoint emissions exist", () => {
+    const ytdRange = getAirportMapPeriodRange("ytd", new Date("2026-07-14T12:00:00.000Z"));
+    const points = buildAirportEmissionPointsFromEndpointRows([
+      { key: "KTEB", estimated_co2_kg: "1250000" }
+    ]);
+
+    expect(ytdRange.start.getFullYear()).toBe(2026);
+    expect(ytdRange.start.getMonth()).toBe(0);
+    expect(points).toHaveLength(1);
+    expect(points[0].airportIdent).toBe("KTEB");
+  });
+
+  it("caches compact endpoint aggregates before expanding airport tooltip metadata", () => {
+    const reportSource = readFileSync("lib/dashboard/report.ts", "utf8");
+
+    expect(reportSource).toContain("dashboard-airport-endpoint-emission-rows-v3");
+    expect(reportSource).toContain("getCachedAirportEndpointEmissionRows");
+    expect(reportSource).toContain("buildAirportEmissionPointsFromEndpointRows(rows)");
+    expect(reportSource).toContain("points: await getAirportEmissionPointsForPeriod(period.id, latestAvailableAt)");
+    expect(reportSource).not.toContain("dashboard-airport-emission-periods-v2");
+    expect(reportSource).toContain('from "@/lib/prisma"');
+    expect(reportSource).not.toContain("cruisePrisma");
+  });
+
   it("aggregates nearby airports into fewer geographic cells", () => {
     const points = aggregateAirportEmissionPointsToGrid(
       [
@@ -120,6 +145,15 @@ describe("dashboard airport map payload", () => {
     const points = aggregateAirportEmissionPointsToGrid(fixture, 0.35);
 
     expect(estimateAirportMapPayloadBytes(points)).toBeLessThan(2_000_000);
+  });
+
+  it("keeps representative cached endpoint aggregates below the Next.js data cache limit", () => {
+    const rows = Array.from({ length: 25_000 }, (_, index) => ({
+      key: `AIRPORT-${index}`,
+      estimated_co2_kg: String(1_000_000 + index)
+    }));
+
+    expect(estimateAirportMapPayloadBytes(rows)).toBeLessThan(2_000_000);
   });
 
   it("preserves major hotspot intensity after aggregation", () => {

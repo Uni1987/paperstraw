@@ -1,20 +1,24 @@
 import Link from "next/link";
 import { Suspense } from "react";
-import { CruiseDashboardCharts } from "@/components/cruises/CruiseDashboardCharts";
+import {
+  CruiseDataStatusSkeleton,
+  CruiseInsightsSkeleton,
+  CruiseKpiSkeleton
+} from "@/components/cruises/CruiseDashboardSkeletons";
+import { LazyCruiseDashboardCharts } from "@/components/cruises/LazyCruiseDashboardCharts";
 import { LazyCruiseVesselMap } from "@/components/cruises/LazyCruiseVesselMap";
 import { DashboardCard } from "@/components/dashboard/DashboardCard";
 import { DashboardMapSkeleton } from "@/components/dashboard/DashboardSkeletons";
 import { StatCard } from "@/components/dashboard/StatCard";
 import { PublicShell } from "@/components/PublicShell";
 import { buildComparisonCards } from "@/lib/comparisons";
-import { getCruiseDashboardData, type CruiseDataStatus } from "@/lib/cruises/queries";
+import { isCruisesEnabled } from "@/lib/cruises/config";
+import { getCruiseDashboardData, getCruiseDashboardMapData, type CruiseDataStatus } from "@/lib/cruises/queries";
 
 export const dynamic = "force-dynamic";
 
-export default async function CruisesPage() {
-  const data = await getCruiseDashboardData();
-
-  if (!data.enabled) {
+export default function CruisesPage() {
+  if (!isCruisesEnabled()) {
     return (
       <PublicShell>
         <section className="mx-auto max-w-7xl pb-20 pt-10 sm:pt-16">
@@ -37,13 +41,64 @@ export default async function CruisesPage() {
     );
   }
 
+  return (
+    <PublicShell
+      sidebarFooter={
+        <Suspense fallback={<CruiseDataStatusSkeleton />}>
+          <CruiseDataStatus />
+        </Suspense>
+      }
+    >
+      <CruiseHero />
+
+      <Suspense fallback={<CruiseKpiSkeleton />}>
+        <CruiseKpis />
+      </Suspense>
+
+      <section className="mt-4 md:mt-6">
+        <Suspense
+          fallback={
+            <DashboardMapSkeleton
+              title="World cruise activity"
+              subtitle="Latest observed verified cruise positions."
+              legendTitle="Live cruise vessel activity"
+            />
+          }
+        >
+          <CruiseMapSection />
+        </Suspense>
+      </section>
+
+      <Suspense fallback={<CruiseInsightsSkeleton />}>
+        <CruiseInsights />
+      </Suspense>
+    </PublicShell>
+  );
+}
+
+function CruiseHero() {
+  return (
+    <header>
+      <h1 className="max-w-4xl text-3xl font-semibold leading-tight tracking-normal text-white md:text-6xl">
+        Cruise ships. Global impact.
+      </h1>
+      <p className="mt-2 text-base text-white/64 md:mt-4 md:text-xl">
+        Live AIS movement data, translated into estimated emissions.
+      </p>
+    </header>
+  );
+}
+
+async function CruiseKpis() {
+  const data = await getCruiseDashboardData();
+  if (!data.enabled) return null;
+
   const hasFreshVerifiedObservations = data.sourceStatus.currentlyTracked > 0;
   const monitoringStartLabel = data.monitoringStart ? formatDate(data.monitoringStart) : null;
   const hasVerifiedVessels =
     data.sourceStatus.verifiedShipsWithStoredObservations > 0 ||
     data.kpis.hasTodayEstimates ||
-    data.kpis.hasSinceMonitoringBeganEstimates ||
-    data.mapPoints.length > 0;
+    data.kpis.hasSinceMonitoringBeganEstimates;
   const statCards = [
     {
       label: "Estimated CO₂ since monitoring began",
@@ -88,31 +143,18 @@ export default async function CruisesPage() {
     }
   ];
 
-  const operatorRows = data.operators.filter((row) => row.operator !== "Unknown operator");
-  const cruiseComparisons = buildComparisonCards(data.kpis.co2SinceMonitoringBeganTonnes).filter((comparison) =>
-    ["driving-distance", "household-electricity", "lifetime-trees"].includes(comparison.id)
-  );
-
   return (
-    <PublicShell sidebarFooter={<CruiseDataStatusWidget status={data.sourceStatus} />}>
-      <header>
-        <h1 className="max-w-4xl text-3xl font-semibold leading-tight tracking-normal text-white md:text-6xl">
-          Cruise ships. Global impact.
-        </h1>
-        <p className="mt-2 text-base text-white/64 md:mt-4 md:text-xl">
-          Live AIS movement data, translated into estimated emissions.
-        </p>
-        {!hasVerifiedVessels ? (
-          <section className="mt-6 max-w-4xl rounded-2xl border border-paper/20 bg-paper/10 p-5">
-            <h2 className="text-xl font-semibold text-white">Verified cruise coverage is being prepared</h2>
-            <p className="mt-3 text-sm leading-6 text-white/64">
-              PaperStraw is validating vessel identities before publishing cruise emissions statistics. Live AIS candidate
-              data is collected separately and is not shown publicly until a vessel is verified as an ocean-going leisure
-              cruise ship.
-            </p>
-          </section>
-        ) : null}
-      </header>
+    <>
+      {!hasVerifiedVessels ? (
+        <section className="mt-6 max-w-4xl rounded-2xl border border-paper/20 bg-paper/10 p-5">
+          <h2 className="text-xl font-semibold text-white">Verified cruise coverage is being prepared</h2>
+          <p className="mt-3 text-sm leading-6 text-white/64">
+            PaperStraw is validating vessel identities before publishing cruise emissions statistics. Live AIS candidate
+            data is collected separately and is not shown publicly until a vessel is verified as an ocean-going leisure
+            cruise ship.
+          </p>
+        </section>
+      ) : null}
 
       <section className="-mx-4 mt-4 flex snap-x gap-3 overflow-x-auto px-4 pb-2 md:hidden">
         {statCards.map((card) => (
@@ -127,20 +169,38 @@ export default async function CruisesPage() {
           <StatCard key={card.label} {...card} />
         ))}
       </section>
+    </>
+  );
+}
 
-      <section className="mt-4 md:mt-6">
-        <Suspense fallback={<DashboardMapSkeleton />}>
-          <LazyCruiseVesselMap
-            points={data.mapPoints}
-            periods={data.mapPeriods}
-            mapMode={data.mapMode}
-            emptyStateTitle="Verified cruise coverage is being prepared"
-            emptyStateDescription="Live AIS candidate data is collected separately and is not shown publicly until a vessel is verified as an ocean-going leisure cruise ship."
-          />
-        </Suspense>
-      </section>
+async function CruiseMapSection() {
+  const data = await getCruiseDashboardMapData();
+  if (!data.enabled) return null;
 
-      <CruiseDashboardCharts
+  return (
+    <LazyCruiseVesselMap
+      points={data.mapPoints}
+      periods={data.mapPeriods}
+      mapMode={data.mapMode}
+      emptyStateTitle="Verified cruise coverage is being prepared"
+      emptyStateDescription="Live AIS candidate data is collected separately and is not shown publicly until a vessel is verified as an ocean-going leisure cruise ship."
+    />
+  );
+}
+
+async function CruiseInsights() {
+  const data = await getCruiseDashboardData();
+  if (!data.enabled) return null;
+
+  const monitoringStartLabel = data.monitoringStart ? formatDate(data.monitoringStart) : null;
+  const operatorRows = data.operators.filter((row) => row.operator !== "Unknown operator");
+  const cruiseComparisons = buildComparisonCards(data.kpis.co2SinceMonitoringBeganTonnes).filter((comparison) =>
+    ["driving-distance", "household-electricity", "lifetime-trees"].includes(comparison.id)
+  );
+
+  return (
+    <>
+      <LazyCruiseDashboardCharts
         dailyEmissions={data.dailyEmissionsSeries}
         topShips={data.topShipsByEstimatedCo2}
         operatorBreakdown={data.operatorBreakdown}
@@ -177,8 +237,13 @@ export default async function CruisesPage() {
           </div>
         </DashboardCard>
       </section>
-    </PublicShell>
+    </>
   );
+}
+
+async function CruiseDataStatus() {
+  const data = await getCruiseDashboardData();
+  return data.enabled ? <CruiseDataStatusWidget status={data.sourceStatus} /> : null;
 }
 
 function CruiseDataStatusWidget({ status }: { status: CruiseDataStatus }) {

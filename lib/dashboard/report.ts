@@ -22,13 +22,36 @@ export const getVisualDashboardReport = unstable_cache(getVisualDashboardReportU
   revalidate: 300
 });
 
-export const getDashboardAirportEmissionPoints = unstable_cache(getAirportEmissionPoints, ["dashboard-airport-emission-points-v2"], {
-  revalidate: 300
-});
+const getCachedAirportEndpointEmissionRows = unstable_cache(
+  async (period: AirportMapPeriodId, latestAvailableAtIso: string) => {
+    const range = getAirportMapPeriodRange(period, new Date(latestAvailableAtIso));
+    const rows = await queryAirportEndpointEmissionRows(range);
+    logAirportMapCachePayloadSize(rows, period);
+    return rows;
+  },
+  ["dashboard-airport-endpoint-emission-rows-v3"],
+  { revalidate: 300 }
+);
 
-export const getDashboardAirportEmissionPeriods = unstable_cache(getAirportEmissionPeriods, ["dashboard-airport-emission-periods-v2"], {
-  revalidate: 300
-});
+export async function getDashboardAirportEmissionPeriods(): Promise<AirportMapPeriodPayload[]> {
+  const latestAvailableAt = await getLatestPrivateJetAirportMapDate();
+  return Promise.all(
+    AIRPORT_MAP_PERIODS.map(async (period) => {
+      try {
+        const rows = await getCachedAirportEndpointEmissionRows(period.id, latestAvailableAt.toISOString());
+        const points = buildAirportEmissionPointsFromEndpointRows(rows);
+        logAirportMapPayloadSize(points, points.length, period.id);
+        return { ...period, points };
+      } catch (error) {
+        logAirportMapQueryError(period.id, error);
+        return {
+          ...period,
+          points: await getAirportEmissionPointsForPeriod(period.id, latestAvailableAt)
+        };
+      }
+    })
+  );
+}
 
 async function getVisualDashboardReportUncached() {
   const period = getDashboardYearToDatePeriod(new Date());
@@ -126,40 +149,13 @@ export async function getLatestPrivateJetAirportMapDate(): Promise<Date> {
 async function getAirportEmissionPointsForPeriod(period: AirportMapPeriodId, latestAvailableAt?: Date): Promise<AirportEmissionPoint[]> {
   try {
     const range = getAirportMapPeriodRange(period, latestAvailableAt ?? (await getLatestPrivateJetAirportMapDate()));
-    const rows = await prisma.$queryRaw<AirportEndpointEmissionRow[]>`
-      WITH endpoint_emissions AS (
-        SELECT
-          UPPER(TRIM(COALESCE(NULLIF("originAirportIdent", ''), NULLIF("originAirport", '')))) AS key,
-          "estimatedCo2Kg" / 2 AS estimated_co2_kg
-        FROM "Flight"
-        WHERE "departureAt" >= ${range.start}
-          AND "departureAt" <= ${range.end}
-          AND "estimatedCo2Kg" > 0
-
-        UNION ALL
-
-        SELECT
-          UPPER(TRIM(COALESCE(NULLIF("destinationAirportIdent", ''), NULLIF("destinationAirport", '')))) AS key,
-          "estimatedCo2Kg" / 2 AS estimated_co2_kg
-        FROM "Flight"
-        WHERE "departureAt" >= ${range.start}
-          AND "departureAt" <= ${range.end}
-          AND "estimatedCo2Kg" > 0
-      )
-      SELECT key, SUM(estimated_co2_kg) AS estimated_co2_kg
-      FROM endpoint_emissions
-      WHERE key IS NOT NULL
-        AND key <> ''
-        AND key <> 'UNKNOWN'
-      GROUP BY key
-      HAVING SUM(estimated_co2_kg) > 0
-      ORDER BY SUM(estimated_co2_kg) DESC
-    `;
+    const rows = await queryAirportEndpointEmissionRows(range);
 
     const airportPoints = buildAirportEmissionPointsFromEndpointRows(rows);
     logAirportMapPayloadSize(airportPoints, airportPoints.length, period);
     return airportPoints;
-  } catch {
+  } catch (error) {
+    logAirportMapQueryError(period, error);
     return [];
   }
 }
@@ -168,6 +164,38 @@ type AirportEndpointEmissionRow = {
   key: string | null;
   estimated_co2_kg: number | bigint | string;
 };
+
+async function queryAirportEndpointEmissionRows(range: { start: Date; end: Date }): Promise<AirportEndpointEmissionRow[]> {
+  return prisma.$queryRaw<AirportEndpointEmissionRow[]>`
+    WITH endpoint_emissions AS (
+      SELECT
+        UPPER(TRIM(COALESCE(NULLIF("originAirportIdent", ''), NULLIF("originAirport", '')))) AS key,
+        "estimatedCo2Kg" / 2 AS estimated_co2_kg
+      FROM "Flight"
+      WHERE "departureAt" >= ${range.start}
+        AND "departureAt" <= ${range.end}
+        AND "estimatedCo2Kg" > 0
+
+      UNION ALL
+
+      SELECT
+        UPPER(TRIM(COALESCE(NULLIF("destinationAirportIdent", ''), NULLIF("destinationAirport", '')))) AS key,
+        "estimatedCo2Kg" / 2 AS estimated_co2_kg
+      FROM "Flight"
+      WHERE "departureAt" >= ${range.start}
+        AND "departureAt" <= ${range.end}
+        AND "estimatedCo2Kg" > 0
+    )
+    SELECT key, SUM(estimated_co2_kg) AS estimated_co2_kg
+    FROM endpoint_emissions
+    WHERE key IS NOT NULL
+      AND key <> ''
+      AND key <> 'UNKNOWN'
+    GROUP BY key
+    HAVING SUM(estimated_co2_kg) > 0
+    ORDER BY SUM(estimated_co2_kg) DESC
+  `;
+}
 
 export function buildAirportEmissionPointsFromEndpointRows(rows: AirportEndpointEmissionRow[]): AirportEmissionPoint[] {
   const pointsByIdent = new Map<string, AirportEmissionPoint>();
@@ -231,8 +259,8 @@ export function aggregateAirportEmissionPointsToGrid(points: AirportEmissionPoin
     .sort((a, b) => b.totalCo2Kg - a.totalCo2Kg);
 }
 
-export function estimateAirportMapPayloadBytes(points: AirportEmissionPoint[]) {
-  return new TextEncoder().encode(JSON.stringify(points)).length;
+export function estimateAirportMapPayloadBytes(value: unknown) {
+  return new TextEncoder().encode(JSON.stringify(value)).length;
 }
 
 function roundCoordinate(value: number) {
@@ -244,5 +272,18 @@ function logAirportMapPayloadSize(points: AirportEmissionPoint[], rawPointCount:
   const bytes = estimateAirportMapPayloadBytes(points);
   const mb = (bytes / 1024 / 1024).toFixed(2);
   const level = bytes > AIRPORT_MAP_PAYLOAD_WARNING_BYTES ? "warn" : "info";
-  console[level](`Dashboard airport map ${period} cache payload: ${bytes} bytes (${mb} MB), ${points.length}/${rawPointCount} grid cells.`);
+  console[level](`Dashboard airport map ${period} render payload: ${bytes} bytes (${mb} MB), ${points.length}/${rawPointCount} airport points.`);
+}
+
+function logAirportMapCachePayloadSize(rows: AirportEndpointEmissionRow[], period: AirportMapPeriodId) {
+  if (process.env.NODE_ENV === "production") return;
+  const bytes = estimateAirportMapPayloadBytes(rows);
+  const mb = (bytes / 1024 / 1024).toFixed(2);
+  const level = bytes > AIRPORT_MAP_PAYLOAD_WARNING_BYTES ? "warn" : "info";
+  console[level](`Dashboard airport map ${period} cached endpoint rows: ${bytes} bytes (${mb} MB), ${rows.length} airports.`);
+}
+
+function logAirportMapQueryError(period: AirportMapPeriodId, error: unknown) {
+  const message = error instanceof Error ? error.message : "Unknown airport map query error";
+  console.error(`Dashboard airport map ${period} query failed: ${message}`);
 }

@@ -145,9 +145,10 @@ export type CruiseActivityCellSqlRow = {
   latestTimestamp: Date;
 };
 
-export const getCruiseDashboardData = reactCache(async () => {
+const getCruiseDashboardBaseData = reactCache(async () => {
   if (!isCruisesEnabled()) return { enabled: false as const };
 
+  const loadStartedAt = Date.now();
   const now = new Date();
   const todayStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
   const tomorrow = new Date(todayStart);
@@ -155,39 +156,85 @@ export const getCruiseDashboardData = reactCache(async () => {
   const monitoringWindowStart = new Date(0);
   const recentSince = new Date(now.getTime() - CRUISE_POSITION_FRESHNESS_WINDOW_MS);
   const observedLast24hSince = new Date(now.getTime() - 24 * 60 * 60 * 1000);
-  const verifiedShipIds = await getPublicVerifiedOceanCruiseShipIds();
-  const monitoringStart = await getCruiseMonitoringStart(verifiedShipIds);
+  const verifiedShipIds = await timeCruiseDataLoad("verified vessel lookup", getPublicVerifiedOceanCruiseShipIds);
+  const monitoringStartPromise = timeCruiseDataLoad("monitoring start", () => getCruiseMonitoringStart(verifiedShipIds));
 
+  const [
+    monitoringStart,
+    dashboardRows
+  ] = await Promise.all([
+    monitoringStartPromise,
+    timeCruiseDataLoad("dashboard base queries", () =>
+      Promise.all([
+        getCruiseEstimateRows(todayStart, tomorrow, verifiedShipIds),
+        getCruiseEstimateRows(monitoringWindowStart, tomorrow, verifiedShipIds),
+        getLatestCruisePositions(recentSince, now, verifiedShipIds),
+        getLatestKnownCruisePosition(verifiedShipIds),
+        getCruiseAnnualRecordCount(verifiedShipIds),
+        getDistinctVerifiedShipsWithPositions(verifiedShipIds, observedLast24hSince, now),
+        getDistinctVerifiedShipsWithPositions(verifiedShipIds)
+      ])
+    )
+  ]);
   const [
     todayEstimateRows,
     sinceMonitoringEstimateRows,
     positions,
     latestPosition,
-    firstEstimate,
     annualCount,
     verifiedShipsObservedLast24h,
     verifiedShipsWithStoredObservations
-  ] = await Promise.all([
-    getCruiseEstimateRows(todayStart, tomorrow, verifiedShipIds),
-    getCruiseEstimateRows(monitoringWindowStart, tomorrow, verifiedShipIds),
-    getLatestCruisePositions(recentSince, now, verifiedShipIds),
-    getLatestKnownCruisePosition(verifiedShipIds),
-    getFirstCruiseEstimateDate(verifiedShipIds),
-    getCruiseAnnualRecordCount(verifiedShipIds),
-    getDistinctVerifiedShipsWithPositions(verifiedShipIds, observedLast24hSince, now),
-    getDistinctVerifiedShipsWithPositions(verifiedShipIds)
-  ]);
+  ] = dashboardRows;
+
+  logCruiseDataTiming("shared dashboard data", loadStartedAt);
+  return {
+    enabled: true as const,
+    now,
+    verifiedShipIds,
+    monitoringStart,
+    todayEstimateRows,
+    sinceMonitoringEstimateRows,
+    positions,
+    latestPosition,
+    annualCount,
+    verifiedShipsObservedLast24h,
+    verifiedShipsWithStoredObservations
+  };
+});
+
+export const getCruiseDashboardData = reactCache(async () => {
+  const loadStartedAt = Date.now();
+  const base = await getCruiseDashboardBaseData();
+  if (!base.enabled) return base;
+
+  const {
+    now,
+    verifiedShipIds,
+    monitoringStart,
+    todayEstimateRows,
+    sinceMonitoringEstimateRows,
+    positions,
+    latestPosition,
+    annualCount,
+    verifiedShipsObservedLast24h,
+    verifiedShipsWithStoredObservations
+  } = base;
 
   const todayTotals = summarizeCruiseEstimateRows(todayEstimateRows);
   const sinceMonitoringTotals = summarizeCruiseEstimateRows(sinceMonitoringEstimateRows);
-  const activityMapPoints = buildCruiseActivityMapPoints(positions, todayEstimateRows);
-  const mapMode: CruiseMapMode = "activity";
-  const topShipsByEstimatedCo2 = await hydrateCruiseRankRows(buildTopCruiseShipChartRows(sinceMonitoringEstimateRows, 6));
-  const registryMetadataByShipId = await getPublicVerifiedOceanCruiseRegistryMetadata(verifiedShipIds);
-  const operatorSourceRows = await hydrateCruiseRankRows([...summarizeCruiseEstimateRowsByShip(sinceMonitoringEstimateRows).values()]);
+  const [topShipsByEstimatedCo2, registryMetadataByShipId, operatorSourceRows] = await timeCruiseDataLoad(
+    "dashboard enrichment",
+    () =>
+      Promise.all([
+        hydrateCruiseRankRows(buildTopCruiseShipChartRows(sinceMonitoringEstimateRows, 6)),
+        getPublicVerifiedOceanCruiseRegistryMetadata(verifiedShipIds),
+        hydrateCruiseRankRows([...summarizeCruiseEstimateRowsByShip(sinceMonitoringEstimateRows).values()])
+      ])
+  );
   const operators = buildOperatorRows(operatorSourceRows, 12);
   const latestPositionAt = latestPosition?.timestamp ?? null;
 
+  logCruiseDataTiming("dashboard summary", loadStartedAt);
   return {
     enabled: true as const,
     kpis: {
@@ -200,15 +247,12 @@ export const getCruiseDashboardData = reactCache(async () => {
       hasTodayEstimates: todayTotals.rows > 0,
       hasSinceMonitoringBeganEstimates: sinceMonitoringTotals.rows > 0
     },
-    mapPoints: activityMapPoints,
-    mapPeriods: await getCruiseMapPeriodPayloads(verifiedShipIds, monitoringStart, now),
-    mapMode,
     dailyEmissionsSeries: buildDailyCruiseEmissionSeries(sinceMonitoringEstimateRows),
     topShipsByEstimatedCo2,
     operatorBreakdown: buildCruiseOperatorBreakdown(sinceMonitoringEstimateRows, registryMetadataByShipId),
     segmentBreakdown: buildCruiseSegmentBreakdown(sinceMonitoringEstimateRows, registryMetadataByShipId),
     operators,
-    monitoringStart: firstEstimate._min.date ?? monitoringStart,
+    monitoringStart,
     sourceStatus: {
       source: "AISStream / EMSA THETIS-MRV",
       latestPositionAt,
@@ -222,6 +266,28 @@ export const getCruiseDashboardData = reactCache(async () => {
       freshnessWindowHours: CRUISE_POSITION_FRESHNESS_WINDOW_HOURS,
       publicCoverage: verifiedShipIds.length ? `${verifiedShipIds.length.toLocaleString("en-US")} verified vessel(s)` : "No verified vessels yet"
     } satisfies CruiseDataStatus
+  };
+});
+
+export const getCruiseDashboardMapData = reactCache(async () => {
+  const loadStartedAt = Date.now();
+  const base = await getCruiseDashboardBaseData();
+  if (!base.enabled) return { enabled: false as const };
+
+  const mapPeriods = await timeCruiseDataLoad("map period queries", () =>
+    getCruiseMapPeriodPayloads(
+      base.verifiedShipIds,
+      base.monitoringStart,
+      base.now,
+      base.sinceMonitoringEstimateRows
+    )
+  );
+  logCruiseDataTiming("dashboard map data", loadStartedAt);
+  return {
+    enabled: true as const,
+    mapPoints: buildCruiseActivityMapPoints(base.positions, base.todayEstimateRows),
+    mapPeriods,
+    mapMode: "activity" as CruiseMapMode
   };
 });
 
@@ -351,6 +417,20 @@ async function getCruiseEstimateRows(start: Date, end: Date, verifiedShipIds: st
   return rows;
 }
 
+async function timeCruiseDataLoad<T>(label: string, operation: () => Promise<T>): Promise<T> {
+  const startedAt = Date.now();
+  try {
+    return await operation();
+  } finally {
+    logCruiseDataTiming(label, startedAt);
+  }
+}
+
+function logCruiseDataTiming(label: string, startedAt: number) {
+  if (process.env.NODE_ENV !== "development" && process.env.CRUISE_QUERY_TIMING !== "true") return;
+  console.log(`[cruises:data] ${label}=${Date.now() - startedAt}ms`);
+}
+
 async function getFirstCruiseEstimateDate(verifiedShipIds: string[]) {
   if (!verifiedShipIds.length) return { _min: { date: null } };
   return prisma.cruiseEmissionsDailyEstimate.aggregate({
@@ -402,19 +482,45 @@ export function getCruiseMapPeriodRange(period: CruiseMapPeriodId, now = new Dat
   return { start: monitoringStart ?? end, end };
 }
 
-async function getCruiseMapPeriodPayloads(verifiedShipIds: string[], monitoringStart: Date | null, now: Date): Promise<CruiseMapPeriodPayload[]> {
+async function getCruiseMapPeriodPayloads(
+  verifiedShipIds: string[],
+  monitoringStart: Date | null,
+  now: Date,
+  estimateRows: CruiseEstimateInputRow[]
+): Promise<CruiseMapPeriodPayload[]> {
   return Promise.all(
     CRUISE_MAP_PERIODS.map(async (period) => {
       const range = getCruiseMapPeriodRange(period.id, now, monitoringStart);
-      const points = await getCruiseVesselMapPointsForPeriod(range.start, range.end, verifiedShipIds, period.label);
+      const periodEstimateRows = filterCruiseEstimateRowsForPeriod(estimateRows, range.start, range.end);
+      const points = await getCruiseVesselMapPointsForPeriod(
+        range.start,
+        range.end,
+        verifiedShipIds,
+        period.label,
+        periodEstimateRows
+      );
       return { ...period, points };
     })
   );
 }
 
-async function getCruiseVesselMapPointsForPeriod(start: Date, end: Date, verifiedShipIds: string[], periodLabel: string): Promise<CruiseMapPoint[]> {
+export function filterCruiseEstimateRowsForPeriod(
+  rows: CruiseEstimateInputRow[],
+  start: Date,
+  end: Date
+) {
+  return rows.filter((row) => row.date.getTime() >= start.getTime() && row.date.getTime() < end.getTime());
+}
+
+async function getCruiseVesselMapPointsForPeriod(
+  start: Date,
+  end: Date,
+  verifiedShipIds: string[],
+  periodLabel: string,
+  estimateRows: CruiseEstimateInputRow[]
+): Promise<CruiseMapPoint[]> {
   if (!verifiedShipIds.length || start.getTime() > end.getTime()) return [];
-  const [positionRows, estimateRows] = await Promise.all([getLatestCruisePositionRowsForPeriod(start, end, verifiedShipIds), getCruiseEstimateRows(start, end, verifiedShipIds)]);
+  const positionRows = await getLatestCruisePositionRowsForPeriod(start, end, verifiedShipIds);
   return buildCruiseActivityMapPoints(buildCruisePeriodVesselMapPoints(positionRows, periodLabel), estimateRows);
 }
 
@@ -608,7 +714,7 @@ export type CruiseRegistryMetadata = {
 };
 
 async function getPublicVerifiedOceanCruiseRegistryMetadata(verifiedShipIds: string[]) {
-  if (!verifiedShipIds.length || !(await cruiseVerificationTablesAvailable())) return new Map<string, CruiseRegistryMetadata>();
+  if (!verifiedShipIds.length) return new Map<string, CruiseRegistryMetadata>();
   const rows = await prisma.$queryRaw<Array<{ shipId: string; operator: string | null; vesselSegment: string | null }>>`
     SELECT
       s.id AS "shipId",

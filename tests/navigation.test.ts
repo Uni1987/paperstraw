@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   getActivePublicModuleSegment,
@@ -58,5 +59,17 @@ describe("public navigation hierarchy", () => {
     expect(resolveModuleAwarePublicHref("/cruises/ship-1", "/methodology")).toBe("/methodology/cruises");
     expect(resolveModuleAwarePublicHref("/comparisons/private-jets", "/methodology")).toBe("/methodology/private-jets");
     expect(resolveModuleAwarePublicHref("/support", "/data")).toBe("/data");
+  });
+
+  it("prefetches Cruises and exposes immediate pending navigation feedback", () => {
+    const sidebarSource = readFileSync("components/PublicSidebarNav.tsx", "utf8");
+    const loadingSource = readFileSync("app/cruises/loading.tsx", "utf8");
+
+    expect(sidebarSource).toContain('prefetch={href === "/cruises" ? true : undefined}');
+    expect(sidebarSource).toContain("aria-busy={pending || undefined}");
+    expect(sidebarSource).toContain("animate-pulse");
+    expect(loadingSource).toContain("Cruise ships. Global impact.");
+    expect(loadingSource).toContain("CruiseKpiSkeleton");
+    expect(loadingSource).toContain("DashboardMapSkeleton");
   });
 });

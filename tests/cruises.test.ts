@@ -66,6 +66,7 @@ import {
   buildTopCruiseShipChartRows,
   dedupeCruiseEstimateRows,
   estimateCruiseMapPayloadBytes,
+  filterCruiseEstimateRowsForPeriod,
   getCruiseDataStatus,
   getCruiseMapCopy,
   getCruiseMapPeriodRange,
@@ -1335,6 +1336,18 @@ describe("cruise dashboard query helpers", () => {
     expect(`${copy.legendTitle} ${copy.subtitle}`).not.toMatch(/emissions intensity|mixed|CO2 weighting/i);
   });
 
+  it("streams cruise sections and keeps heavy chart rendering out of the initial page component", () => {
+    const pageSource = readFileSync("app/cruises/page.tsx", "utf8");
+    const lazyChartsSource = readFileSync("components/cruises/LazyCruiseDashboardCharts.tsx", "utf8");
+
+    expect(pageSource).toContain("<CruiseKpis />");
+    expect(pageSource).toContain("<CruiseMapSection />");
+    expect(pageSource).toContain("<CruiseInsights />");
+    expect(pageSource).not.toContain('import { CruiseDashboardCharts }');
+    expect(lazyChartsSource).toContain('dynamic(');
+    expect(lazyChartsSource).toContain("ssr: false");
+  });
+
   it("defines cruise-only map period labels and defaults to since monitoring began", () => {
     expect(DEFAULT_CRUISE_MAP_PERIOD).toBe("since-monitoring");
     expect(CRUISE_MAP_PERIODS.map((period) => period.label)).toEqual(["This week", "This month", "Since monitoring began"]);
@@ -1357,6 +1370,30 @@ describe("cruise dashboard query helpers", () => {
     expect(getCruiseMapPeriodRange("week", wednesday, monitoringStart).end).toBe(wednesday);
     expect(getCruiseMapPeriodRange("month", wednesday, monitoringStart).start.toISOString()).toBe("2026-07-01T00:00:00.000Z");
     expect(getCruiseMapPeriodRange("since-monitoring", wednesday, monitoringStart).start).toBe(monitoringStart);
+  });
+
+  it("reuses loaded estimate rows while preserving exact map period boundaries", () => {
+    const estimateRow = (date: string, estimatedCo2Tonnes: number) => ({
+      shipId: "ship-1",
+      date: new Date(date),
+      methodVersion: "ais-mrv-v1",
+      estimatedCo2Tonnes,
+      estimatedFuelTonnes: 0,
+      distanceNm: 0
+    });
+    const rows = [
+      estimateRow("2026-07-01T00:00:00.000Z", 10),
+      estimateRow("2026-07-07T00:00:00.000Z", 20),
+      estimateRow("2026-07-14T00:00:00.000Z", 30)
+    ];
+
+    expect(
+      filterCruiseEstimateRowsForPeriod(
+        rows,
+        new Date("2026-07-07T00:00:00.000Z"),
+        new Date("2026-07-14T00:00:00.000Z")
+      ).map((row) => Number(row.estimatedCo2Tonnes))
+    ).toEqual([20]);
   });
 
   it("allows overlapping cruise map periods without fabricating visual differences", () => {

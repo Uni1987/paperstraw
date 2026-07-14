@@ -8,7 +8,13 @@ const DynamicCruiseVesselMap = dynamic(
   () => import("@/components/cruises/CruiseVesselMap").then((mod) => mod.CruiseVesselMap),
   {
     ssr: false,
-    loading: () => <DashboardMapSkeleton />
+    loading: () => (
+      <DashboardMapSkeleton
+        title="World cruise activity"
+        subtitle="Latest observed verified cruise positions."
+        legendTitle="Live cruise vessel activity"
+      />
+    )
   }
 );
 
