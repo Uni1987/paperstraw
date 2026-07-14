@@ -13,8 +13,11 @@ import {
   calculateLifetimeTrees,
   calculateSmartphones,
   calculateTrainJourneys,
-  calculateTshirts
+  calculateTshirts,
+  buildComparisonCards,
+  getDashboardComparisonCopy
 } from "@/lib/comparisons";
+import { TREE_ABSORPTION_LIFETIME_YEARS } from "@/lib/emissionsFactors";
 
 describe("comparison calculations", () => {
   it("calculates transport comparisons from tonnes of CO2", () => {
@@ -37,6 +40,27 @@ describe("comparison calculations", () => {
     expect(area.hectares).toBe(100);
     expect(area.squareKilometers).toBe(1);
     expect(calculateLifetimeTrees(1000)).toBe(1000);
+    expect(TREE_ABSORPTION_LIFETIME_YEARS).toBe(45);
+  });
+
+  it("describes dashboard comparisons without overstating equivalence", () => {
+    const cards = buildComparisonCards(1000);
+    const tree = cards.find((card) => card.id === "lifetime-trees")!;
+    const driving = cards.find((card) => card.id === "driving-distance")!;
+    const household = cards.find((card) => card.id === "household-electricity")!;
+
+    expect(getDashboardComparisonCopy(tree)).toEqual({
+      title: "Trees over lifetime",
+      description: "Estimated newly planted trees required to absorb this CO₂ over an assumed 45-year lifetime."
+    });
+    expect(getDashboardComparisonCopy(driving).description).toBe(
+      "Equivalent kilometres driven by an average gasoline-powered car."
+    );
+    expect(getDashboardComparisonCopy(household).description).toBe(
+      "Equivalent annual electricity consumption of average households."
+    );
+    expect(tree.value).toBe("1K");
+    expect(tree.factorLabel).toContain("over 45 years");
   });
 
   it("calculates everyday product comparisons from tonnes of CO2", () => {

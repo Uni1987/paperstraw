@@ -1,4 +1,4 @@
-import { EMISSIONS_FACTORS } from "./emissionsFactors";
+import { EMISSIONS_FACTORS, TREE_ABSORPTION_LIFETIME_YEARS } from "./emissionsFactors";
 import { formatCompactNumber } from "./format";
 
 export type ComparisonCategory = "Everyday Life" | "Households" | "Nature" | "Everyday Products";
@@ -25,6 +25,26 @@ export type ForestAreaResult = {
   hectares: number;
   squareKilometers: number;
   footballFields: number;
+};
+
+export type DashboardComparisonCopy = {
+  title: string;
+  description: string;
+};
+
+const DASHBOARD_COMPARISON_COPY: Record<string, DashboardComparisonCopy> = {
+  "driving-distance": {
+    title: "Driving distance",
+    description: "Equivalent kilometres driven by an average gasoline-powered car."
+  },
+  "household-electricity": {
+    title: "Annual electricity use",
+    description: "Equivalent annual electricity consumption of average households."
+  },
+  "lifetime-trees": {
+    title: "Trees over lifetime",
+    description: `Estimated newly planted trees required to absorb this CO₂ over an assumed ${TREE_ABSORPTION_LIFETIME_YEARS}-year lifetime.`
+  }
 };
 
 export const COMPARISON_CATEGORIES: ComparisonCategory[] = ["Everyday Life", "Households", "Nature", "Everyday Products"];
@@ -74,6 +94,15 @@ export function calculateLifetimeTrees(co2Tons: number) {
   return co2Tons / EMISSIONS_FACTORS.nature.lifetimeTreeAbsorptionTonnesCo2;
 }
 
+export function getDashboardComparisonCopy(
+  comparison: Pick<ComparisonCardData, "id" | "title" | "description">
+): DashboardComparisonCopy {
+  return DASHBOARD_COMPARISON_COPY[comparison.id] ?? {
+    title: comparison.title,
+    description: comparison.description
+  };
+}
+
 export function calculateHamburgers(co2Tons: number) {
   return kg(co2Tons) / EMISSIONS_FACTORS.products.hamburgerKgCo2;
 }
@@ -101,7 +130,7 @@ export function buildComparisonCards(co2Tons: number): ComparisonCardData[] {
       title: "Driving distance",
       value: calculateDrivingDistance(co2Tons),
       unit: "km",
-      description: "Equivalent to driving X million kilometers in an average gasoline-powered car.",
+      description: "Equivalent kilometres driven by an average gasoline-powered car.",
       sourceAssumption: "Average gasoline-powered passenger car emissions.",
       factorLabel: "0.192 kg CO2 per km",
       formulaLabel: "(CO2 tonnes * 1000) / 0.192"
@@ -149,7 +178,7 @@ export function buildComparisonCards(co2Tons: number): ComparisonCardData[] {
       title: "Household electricity use",
       value: calculateHouseholdElectricity(co2Tons),
       unit: "households",
-      description: "Equivalent to the annual electricity consumption of X households.",
+      description: "Equivalent annual electricity consumption of average households.",
       sourceAssumption: "Average annual household electricity emissions.",
       factorLabel: "1.5 t CO2 per household per year",
       formulaLabel: "CO2 tonnes / 1.5"
@@ -195,12 +224,12 @@ export function buildComparisonCards(co2Tons: number): ComparisonCardData[] {
       id: "lifetime-trees",
       category: "Nature",
       icon: "🌲",
-      title: "Trees over their lifetime",
+      title: "Trees over lifetime",
       value: calculateLifetimeTrees(co2Tons),
       unit: "trees",
-      description: "Equivalent to the total lifetime carbon absorption of X mature trees.",
-      sourceAssumption: "Simplified lifetime absorption per mature tree.",
-      factorLabel: "1 t CO2 per tree lifetime",
+      description: `Estimated newly planted trees required to absorb this CO₂ over an assumed ${TREE_ABSORPTION_LIFETIME_YEARS}-year lifetime.`,
+      sourceAssumption: `Illustrative absorption estimate for a newly planted tree over an assumed ${TREE_ABSORPTION_LIFETIME_YEARS}-year lifetime.`,
+      factorLabel: `Approximately 1 t CO₂ per newly planted tree over ${TREE_ABSORPTION_LIFETIME_YEARS} years`,
       formulaLabel: "CO2 tonnes / 1"
     }),
     card({

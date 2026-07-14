@@ -1,6 +1,7 @@
 import { PublicShell } from "@/components/PublicShell";
 import { ModuleInfoNav } from "@/components/ModuleInfoNav";
 import { PAPER_STRAW_CO2_KG } from "@/lib/awareness/equivalents";
+import { TREE_ABSORPTION_LIFETIME_YEARS } from "@/lib/emissionsFactors";
 import type { ReactNode } from "react";
 
 export default function PrivateJetsMethodologyPage() {
@@ -31,7 +32,10 @@ export default function PrivateJetsMethodologyPage() {
           <MethodSection title="Equivalent calculations">
             Cars, households, trees, and paper straws are plain-language comparisons derived from configurable constants in
             code. The paper-straw comparison assumes {PAPER_STRAW_CO2_KG} kg CO2 per straw for a simple production-emissions
-            estimate. These equivalents are awareness aids, not precise lifecycle analyses.
+            estimate. Tree comparisons are illustrative. They estimate how many newly planted trees would be required to
+            absorb the same amount of CO₂ over an assumed {TREE_ABSORPTION_LIFETIME_YEARS}-year lifetime, not how many trees
+            would offset the emissions immediately or annually. Actual absorption varies by species, climate, survival rate,
+            soil conditions, and forest management. These equivalents are awareness aids, not precise lifecycle analyses.
           </MethodSection>
 
           <MethodSection title="Scheduled batch updates">

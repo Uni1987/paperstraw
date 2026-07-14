@@ -1,5 +1,6 @@
 import { PublicShell } from "@/components/PublicShell";
 import { ModuleInfoNav } from "@/components/ModuleInfoNav";
+import { TREE_ABSORPTION_LIFETIME_YEARS } from "@/lib/emissionsFactors";
 import type { ReactNode } from "react";
 
 export default function CruiseMethodologyPage() {
@@ -49,6 +50,13 @@ export default function CruiseMethodologyPage() {
             Cruise CO2 estimates are derived from observed vessel positions and available movement data. Where annual
             references such as EMSA THETIS-MRV disclosures are available, they can inform baseline context; daily public
             values remain estimates from observed activity, not official real-time emissions measurements.
+          </MethodSection>
+
+          <MethodSection title="CO2 comparisons">
+            Tree comparisons are illustrative. They estimate how many newly planted trees would be required to absorb the
+            same amount of CO₂ over an assumed {TREE_ABSORPTION_LIFETIME_YEARS}-year lifetime, not how many trees would offset
+            the emissions immediately or annually. Actual absorption varies by species, climate, survival rate, soil
+            conditions, and forest management.
           </MethodSection>
 
           <MethodSection title="Coverage limitations">

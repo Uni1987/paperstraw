@@ -16,7 +16,7 @@ import {
 } from "recharts";
 import { Car, House, TreePine } from "lucide-react";
 import { DashboardCard } from "@/components/dashboard/DashboardCard";
-import type { ComparisonCardData } from "@/lib/comparisons";
+import { getDashboardComparisonCopy, type ComparisonCardData } from "@/lib/comparisons";
 import { formatCompactNumber } from "@/lib/format";
 import type { CruiseBreakdownPoint, CruiseDailyEmissionPoint, CruiseRankRow } from "@/lib/cruises/queries";
 
@@ -238,21 +238,25 @@ function CruiseComparisonCards({ comparisons }: { comparisons: ComparisonCardDat
   return (
     <DashboardCard title="CO₂ comparisons">
       <div className="grid gap-4 p-5 md:grid-cols-3">
-        {comparisons.map((comparison) => (
-          <article
-            key={comparison.id}
-            className="min-h-56 rounded-2xl border border-white/10 bg-gradient-to-br from-white/[0.07] to-black/20 p-6 shadow-xl shadow-black/20"
-          >
-            <div className="flex h-14 w-14 items-center justify-center rounded-2xl border border-white/10 bg-white/[0.06] text-paper">
-              {comparisonIcon(comparison.id)}
-            </div>
-            <p className="mt-8 text-4xl font-semibold tracking-normal text-white">{comparison.value}</p>
-            <p className="mt-1 text-base font-semibold text-paper">{comparison.unit}</p>
-            <h3 className="mt-5 text-xl font-semibold text-white">{comparisonTitle(comparison.id, comparison.title)}</h3>
-            <p className="mt-3 text-sm leading-6 text-white/52">{comparisonSubtitle(comparison.id)}</p>
-            <p className="mt-5 text-xs leading-5 text-white/34">Based on estimated verified cruise CO₂ observed since monitoring began.</p>
-          </article>
-        ))}
+        {comparisons.map((comparison) => {
+          const copy = getDashboardComparisonCopy(comparison);
+
+          return (
+            <article
+              key={comparison.id}
+              className="min-h-56 rounded-2xl border border-white/10 bg-gradient-to-br from-white/[0.07] to-black/20 p-6 shadow-xl shadow-black/20"
+            >
+              <div className="flex h-14 w-14 items-center justify-center rounded-2xl border border-white/10 bg-white/[0.06] text-paper">
+                {comparisonIcon(comparison.id)}
+              </div>
+              <p className="mt-8 text-4xl font-semibold tracking-normal text-white">{comparison.value}</p>
+              <p className="mt-1 text-base font-semibold text-paper">{comparison.unit}</p>
+              <h3 className="mt-5 text-xl font-semibold text-white">{copy.title}</h3>
+              <p className="mt-3 text-sm leading-6 text-white/52">{copy.description}</p>
+              <p className="mt-5 text-xs leading-5 text-white/34">Based on estimated verified cruise CO₂ observed since monitoring began.</p>
+            </article>
+          );
+        })}
       </div>
     </DashboardCard>
   );
@@ -279,20 +283,6 @@ function comparisonIcon(id: string) {
   if (id === "household-electricity") return <House className={className} strokeWidth={1.8} />;
   if (id === "lifetime-trees") return <TreePine className={className} strokeWidth={1.8} />;
   return <Car className={className} strokeWidth={1.8} />;
-}
-
-function comparisonTitle(id: string, fallback: string) {
-  if (id === "driving-distance") return "Driving distance";
-  if (id === "household-electricity") return "Annual electricity use";
-  if (id === "lifetime-trees") return "Trees required";
-  return fallback;
-}
-
-function comparisonSubtitle(id: string) {
-  if (id === "driving-distance") return "Equivalent to driving an average gasoline car.";
-  if (id === "household-electricity") return "Equivalent household electricity consumption.";
-  if (id === "lifetime-trees") return "Estimated trees needed to offset these emissions.";
-  return "A simplified emissions comparison for public understanding.";
 }
 
 function CruiseChartTooltip({

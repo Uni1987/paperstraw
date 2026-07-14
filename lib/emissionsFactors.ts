@@ -1,3 +1,5 @@
+export const TREE_ABSORPTION_LIFETIME_YEARS = 45;
+
 export const EMISSIONS_FACTORS = {
   transport: {
     averagePassengerCarKgCo2PerKm: 0.192,
@@ -13,6 +15,7 @@ export const EMISSIONS_FACTORS = {
   },
   nature: {
     treeAbsorptionKgCo2PerYear: 22,
+    treeAbsorptionLifetimeYears: TREE_ABSORPTION_LIFETIME_YEARS,
     lifetimeTreeAbsorptionTonnesCo2: 1,
     footballFieldM2: 7140,
     forestAbsorptionTonnesCo2PerHectareYear: 10,
