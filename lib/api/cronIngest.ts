@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { dispatchHistoricalImportWorkflow } from "@/lib/ingestion/githubHistoricalWorkflow";
 import { isAuthorizedCronRequest } from "@/lib/ingestion/cronAuth";
 import { buildScheduledHistoricalRequest, formatUtcDateKey, type HistoricalImportRequest } from "@/lib/ingestion/historicalRequest";
+import { getSecurityRequestId, logSecurityAuditEvent } from "@/lib/security/audit";
 
 type CronDispatchResult = {
   jobId: string;
@@ -17,7 +18,15 @@ type CronIngestDependencies = {
 };
 
 export async function handleCronIngest(request: Request, dependencies: CronIngestDependencies = {}) {
-  if (!isMiddlewareAuthenticated(request) && !isAuthorizedCronRequest(request)) {
+  const requestId = getSecurityRequestId(request.headers);
+  if (!(await isAuthorizedCronRequest(request))) {
+    logSecurityAuditEvent({
+      action: "private-jets.cron-ingest.dispatch",
+      result: "rejected",
+      source: "/api/cron/ingest",
+      requestId,
+      reason: "authentication"
+    });
     return NextResponse.json({ error: "Unauthorized cron request" }, { status: 401 });
   }
 
@@ -26,6 +35,13 @@ export async function handleCronIngest(request: Request, dependencies: CronInges
 
   try {
     const result = await (dependencies.dispatch ?? dispatchHistoricalImportWorkflow)(historicalRequest);
+    logSecurityAuditEvent({
+      action: "private-jets.cron-ingest.dispatch",
+      result: "success",
+      source: "/api/cron/ingest",
+      requestId,
+      target: dateKey
+    });
     return NextResponse.json(
       {
         jobId: result.jobId,
@@ -45,6 +61,14 @@ export async function handleCronIngest(request: Request, dependencies: CronInges
   } catch (error) {
     const message = error instanceof Error ? error.message : "Scheduled historical import dispatch failed";
     const conflict = message.includes("already queued or running");
+    logSecurityAuditEvent({
+      action: "private-jets.cron-ingest.dispatch",
+      result: conflict ? "rejected" : "failed",
+      source: "/api/cron/ingest",
+      requestId,
+      target: dateKey,
+      reason: conflict ? "already-running" : "dispatch-failed"
+    });
     return NextResponse.json(
       {
         status: conflict ? "skipped" : "failed",
@@ -58,8 +82,4 @@ export async function handleCronIngest(request: Request, dependencies: CronInges
       { status: conflict ? 200 : 500 }
     );
   }
-}
-
-function isMiddlewareAuthenticated(request: Request) {
-  return request.headers.get("x-paperstraw-admin-authenticated") === "1";
 }

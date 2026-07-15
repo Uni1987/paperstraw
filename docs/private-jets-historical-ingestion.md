@@ -110,6 +110,12 @@ try {
 
 Expected: `401`.
 
+Cron authentication is accepted only through `Authorization: Bearer <CRON_SECRET>`. Query-string credentials and
+`x-cron-secret` are rejected so the secret cannot leak through URLs or access logs.
+
+Direct `/api/ingest` mutations are POST-only. The dedicated `/api/cron/ingest` endpoint retains authenticated GET because
+Vercel Cron invokes scheduled paths with GET; it requires the Bearer token again inside the route before dispatching work.
+
 Authorized scheduled dispatch:
 
 ```powershell

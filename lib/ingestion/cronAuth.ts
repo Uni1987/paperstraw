@@ -1,16 +1,16 @@
+import { timingSafeEqual } from "@/lib/auth/timingSafe";
+
 export function getCronSecret() {
   return process.env.CRON_SECRET || "";
 }
 
-export function isAuthorizedCronRequest(request: Request, secret = getCronSecret()) {
+export async function isAuthorizedCronRequest(request: Request, secret = getCronSecret()) {
   const expected = secret.trim();
   if (!expected) return false;
 
-  const url = new URL(request.url);
   const authorization = request.headers.get("authorization") ?? "";
-  const bearerToken = authorization.toLowerCase().startsWith("bearer ") ? authorization.slice(7).trim() : "";
-  const headerToken = request.headers.get("x-cron-secret")?.trim() ?? "";
-  const queryToken = url.searchParams.get("secret")?.trim() ?? "";
+  const match = authorization.match(/^Bearer\s+(.+)$/i);
+  const bearerToken = match?.[1].trim() ?? "";
 
-  return [bearerToken, headerToken, queryToken].some((token) => token === expected);
+  return bearerToken ? timingSafeEqual(bearerToken, expected) : false;
 }

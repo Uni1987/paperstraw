@@ -1,17 +1,14 @@
 import Link from "next/link";
 import { ModuleInfoNav } from "@/components/ModuleInfoNav";
 import { PublicShell } from "@/components/PublicShell";
-import { buildGlobalLocalFilterStatusReport } from "@/lib/cruises/globalLocalFilterStatus";
+import { getCruisePublicDataSummary } from "@/lib/cruises/queries";
 import type { ReactNode } from "react";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
 export default async function CruiseDataPage() {
-  const [status24h, status30d] = await Promise.all([
-    buildGlobalLocalFilterStatusReport({ sinceHours: 24, format: "json", force: false, includeReviewDetails: false, includeVesselDetails: false }),
-    buildGlobalLocalFilterStatusReport({ sinceHours: 24 * 30, format: "json", force: false, includeReviewDetails: false, includeVesselDetails: false })
-  ]);
+  const summary = await getCruisePublicDataSummary();
 
   return (
     <PublicShell>
@@ -37,10 +34,10 @@ export default async function CruiseDataPage() {
 
       <section className="mx-auto max-w-7xl pb-20">
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          <MetricCard label="Accepted registry entries" value={formatNumber(status24h.registry.acceptedRegistryEntries)} />
-          <MetricCard label="MMSI-linked public vessels" value={formatNumber(status24h.registry.verifiedPublicEligibleVessels)} />
-          <MetricCard label="Observed last 24h" value={formatNumber(status24h.registry.verifiedVesselsObservedLast24h)} />
-          <MetricCard label="Observed last 30d" value={formatNumber(status30d.registry.verifiedVesselsWithStoredPositionsInWindow)} />
+          <MetricCard label="Accepted registry entries" value={formatNumber(summary.acceptedRegistryEntries)} />
+          <MetricCard label="MMSI-linked public vessels" value={formatNumber(summary.verifiedPublicEligibleVessels)} />
+          <MetricCard label="Observed last 24h" value={formatNumber(summary.verifiedVesselsObservedLast24h)} />
+          <MetricCard label="Observed last 30d" value={formatNumber(summary.verifiedVesselsObservedLast30d)} />
         </div>
       </section>
 

@@ -1,4 +1,5 @@
 import { PrismaClient } from "@prisma/client";
+import { applyCruiseWebDatabaseSafety } from "@/lib/database/connectionSafety";
 import { getCruisesDatabaseUrl } from "@/lib/database/config";
 import { loadProjectEnv } from "@/lib/env/loadProjectEnv";
 
@@ -8,11 +9,15 @@ const globalForCruisesPrisma = globalThis as unknown as {
   cruisesPrisma?: PrismaClient;
 };
 
+let cruisesPrismaClient: PrismaClient | undefined;
+
 function createCruisesPrismaClient() {
   return new PrismaClient({
     datasources: {
       db: {
-        url: getCruisesDatabaseUrl(process.env, { allowLegacyDatabaseUrlWithCruiseTarget: true })
+        url: applyCruiseWebDatabaseSafety(
+          getCruisesDatabaseUrl(process.env, { allowLegacyDatabaseUrlWithCruiseTarget: true })
+        )
       }
     },
     log: process.env.NODE_ENV === "development" ? ["error", "warn"] : ["error"]
@@ -20,13 +25,18 @@ function createCruisesPrismaClient() {
 }
 
 export function getCruisesPrisma() {
-  const existing = globalForCruisesPrisma.cruisesPrisma;
-  if (existing) return existing;
-  const client = createCruisesPrismaClient();
-  if (process.env.NODE_ENV !== "production") {
-    globalForCruisesPrisma.cruisesPrisma = client;
+  if (cruisesPrismaClient) return cruisesPrismaClient;
+
+  if (process.env.NODE_ENV !== "production" && globalForCruisesPrisma.cruisesPrisma) {
+    cruisesPrismaClient = globalForCruisesPrisma.cruisesPrisma;
+    return cruisesPrismaClient;
   }
-  return client;
+
+  cruisesPrismaClient = createCruisesPrismaClient();
+  if (process.env.NODE_ENV !== "production") {
+    globalForCruisesPrisma.cruisesPrisma = cruisesPrismaClient;
+  }
+  return cruisesPrismaClient;
 }
 
 export const cruisePrisma = new Proxy({} as PrismaClient, {

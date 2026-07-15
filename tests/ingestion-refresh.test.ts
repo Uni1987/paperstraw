@@ -1,4 +1,7 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { GET as getIngest } from "@/app/api/ingest/route";
+import { buildContentSecurityPolicy } from "@/lib/security/contentSecurityPolicy.mjs";
 import { formatCronScheduleLabel, getCronOperationalStatus, getCronScheduleIntervalMinutes } from "@/lib/config/cron";
 import { formatRefreshInterval, parseDataRefreshIntervalMinutes } from "@/lib/config/refresh";
 import { buildImportFreshness } from "@/lib/ingestion/freshness";
@@ -128,13 +131,64 @@ describe("freshness display logic", () => {
 });
 
 describe("cron authorization", () => {
-  it("rejects missing cron secrets and accepts bearer tokens", () => {
+  it("rejects missing and URL cron secrets and accepts bearer tokens", async () => {
     const missing = new Request("https://paperstraw.test/api/cron/ingest");
+    const querySecret = new Request("https://paperstraw.test/api/cron/ingest?secret=test-secret");
     const authorized = new Request("https://paperstraw.test/api/cron/ingest", {
       headers: { authorization: "Bearer test-secret" }
     });
 
-    expect(isAuthorizedCronRequest(missing, "test-secret")).toBe(false);
-    expect(isAuthorizedCronRequest(authorized, "test-secret")).toBe(true);
+    expect(await isAuthorizedCronRequest(missing, "test-secret")).toBe(false);
+    expect(await isAuthorizedCronRequest(querySecret, "test-secret")).toBe(false);
+    expect(await isAuthorizedCronRequest(authorized, "test-secret")).toBe(true);
+  });
+});
+
+describe("HTTP security baseline", () => {
+  it("rejects state-changing GET ingestion requests", async () => {
+    const response = getIngest();
+
+    expect(response.status).toBe(405);
+    expect(response.headers.get("allow")).toBe("POST");
+    await expect(response.json()).resolves.toEqual({ error: "Method not allowed. Use POST for ingestion." });
+  });
+
+  it("configures baseline response security headers", () => {
+    const configSource = readFileSync("next.config.mjs", "utf8");
+    const productionPolicy = buildContentSecurityPolicy("production");
+
+    expect(configSource).toContain("poweredByHeader: false");
+    expect(configSource).toContain("Content-Security-Policy");
+    expect(productionPolicy).toContain("frame-ancestors 'none'");
+    expect(configSource).toContain("X-Content-Type-Options");
+    expect(configSource).toContain("Referrer-Policy");
+    expect(configSource).toContain("Permissions-Policy");
+  });
+
+  it("allows only the Next.js development runtime additions in development CSP", () => {
+    const developmentPolicy = buildContentSecurityPolicy("development");
+
+    expect(developmentPolicy).toContain(
+      "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://va.vercel-scripts.com"
+    );
+    expect(developmentPolicy).toContain(
+      "connect-src 'self' blob: ws: https://*.basemaps.cartocdn.com https://basemaps.cartocdn.com"
+    );
+  });
+
+  it("keeps the complete production CSP unchanged and excludes unsafe-eval", () => {
+    const productionPolicy = buildContentSecurityPolicy("production");
+
+    expect(productionPolicy).toBe(
+      "default-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; object-src 'none'; " +
+        "script-src 'self' 'unsafe-inline' https://va.vercel-scripts.com; style-src 'self' 'unsafe-inline'; " +
+        "img-src 'self' data: blob: https://*.basemaps.cartocdn.com https://basemaps.cartocdn.com; " +
+        "font-src 'self' data:; " +
+        "connect-src 'self' blob: https://*.basemaps.cartocdn.com https://basemaps.cartocdn.com " +
+        "https://vitals.vercel-insights.com https://*.vercel-insights.com; worker-src 'self' blob:; " +
+        "media-src 'none'; manifest-src 'self'"
+    );
+    expect(productionPolicy).not.toContain("'unsafe-eval'");
+    expect(productionPolicy).not.toContain("ws:");
   });
 });

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import { HEAD as headCronIngest } from "@/app/api/cron/ingest/route";
 import { handleCronIngest } from "@/lib/api/cronIngest";
 import type { HistoricalImportRequest } from "@/lib/ingestion/historicalRequest";
 
@@ -16,6 +17,12 @@ function queuedResult(request: HistoricalImportRequest) {
 describe("cron historical ingest dispatcher", () => {
   beforeEach(() => {
     process.env.CRON_SECRET = "cron-secret";
+  });
+
+  it("rejects HEAD without dispatching cron work", () => {
+    const response = headCronIngest();
+    expect(response.status).toBe(405);
+    expect(response.headers.get("allow")).toBe("GET, POST");
   });
 
   it("returns 401 for unauthenticated cron requests", async () => {
@@ -46,6 +53,29 @@ describe("cron historical ingest dispatcher", () => {
     );
 
     expect(response.status).toBe(401);
+    expect(called).toBe(false);
+  });
+
+  it("rejects query-string and legacy header cron credentials", async () => {
+    let called = false;
+    const dispatch = async (request: HistoricalImportRequest) => {
+      called = true;
+      return queuedResult(request);
+    };
+
+    const queryResponse = await handleCronIngest(
+      new Request("https://paperstraw.test/api/cron/ingest?secret=cron-secret"),
+      { dispatch }
+    );
+    const headerResponse = await handleCronIngest(
+      new Request("https://paperstraw.test/api/cron/ingest", {
+        headers: { "x-cron-secret": "cron-secret" }
+      }),
+      { dispatch }
+    );
+
+    expect(queryResponse.status).toBe(401);
+    expect(headerResponse.status).toBe(401);
     expect(called).toBe(false);
   });
 

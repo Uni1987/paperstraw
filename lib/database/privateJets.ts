@@ -8,6 +8,8 @@ const globalForPrivateJetsPrisma = globalThis as unknown as {
   privateJetsPrisma?: PrismaClient;
 };
 
+let privateJetsPrismaClient: PrismaClient | undefined;
+
 function createPrivateJetsPrismaClient() {
   return new PrismaClient({
     datasources: {
@@ -20,13 +22,18 @@ function createPrivateJetsPrismaClient() {
 }
 
 export function getPrivateJetsPrisma() {
-  const existing = globalForPrivateJetsPrisma.privateJetsPrisma;
-  if (existing) return existing;
-  const client = createPrivateJetsPrismaClient();
-  if (process.env.NODE_ENV !== "production") {
-    globalForPrivateJetsPrisma.privateJetsPrisma = client;
+  if (privateJetsPrismaClient) return privateJetsPrismaClient;
+
+  if (process.env.NODE_ENV !== "production" && globalForPrivateJetsPrisma.privateJetsPrisma) {
+    privateJetsPrismaClient = globalForPrivateJetsPrisma.privateJetsPrisma;
+    return privateJetsPrismaClient;
   }
-  return client;
+
+  privateJetsPrismaClient = createPrivateJetsPrismaClient();
+  if (process.env.NODE_ENV !== "production") {
+    globalForPrivateJetsPrisma.privateJetsPrisma = privateJetsPrismaClient;
+  }
+  return privateJetsPrismaClient;
 }
 
 export const privateJetsPrisma = new Proxy({} as PrismaClient, {

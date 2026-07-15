@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import type { Map as MapLibreMap, MapGeoJSONFeature } from "maplibre-gl";
 import type { CruiseMapMode, CruiseMapPeriodPayload, CruiseMapPoint } from "@/lib/cruises/queries";
+import { normalizeCruiseMapPeriod, type CruiseMapPeriodId } from "@/lib/cruises/publicInputs";
 import {
   PAPERSTRAW_CARTO_VECTOR_SOURCE_ID,
   PAPERSTRAW_HEATMAP_COLORS,
@@ -66,7 +67,7 @@ export function CruiseVesselMap({
   emptyStateDescription?: string;
 }) {
   const searchParams = useSearchParams();
-  const [selectedPeriodId, setSelectedPeriodId] = useState(() => searchParams.get("period") ?? undefined);
+  const [selectedPeriodId, setSelectedPeriodId] = useState(() => normalizeCruiseMapPeriod(searchParams.get("period")));
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const [tooltip, setTooltip] = useState<TooltipState>(null);
@@ -80,6 +81,15 @@ export function CruiseVesselMap({
   const geojson = useMemo(() => buildVesselGeoJson(displayPoints), [displayPoints]);
   const initialGeojsonRef = useRef(geojson);
   const copy = selectedPeriod ? { subtitle: selectedPeriod.subtitle, legendTitle: selectedPeriod.legendTitle } : getClientCruiseMapCopy(mapMode);
+
+  useEffect(() => {
+    const rawPeriod = searchParams.get("period");
+    if (rawPeriod === null || rawPeriod === normalizeCruiseMapPeriod(rawPeriod)) return;
+    const params = new URLSearchParams(window.location.search);
+    params.delete("period");
+    const query = params.toString();
+    window.history.replaceState(null, "", query ? `${window.location.pathname}?${query}` : window.location.pathname);
+  }, [searchParams]);
 
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return;
@@ -160,7 +170,7 @@ export function CruiseVesselMap({
     setDataVisible(visible);
   }
 
-  function selectPeriod(periodId: string) {
+  function selectPeriod(periodId: CruiseMapPeriodId) {
     setSelectedPeriodId(periodId);
     if (typeof window === "undefined") return;
     const params = new URLSearchParams(window.location.search);

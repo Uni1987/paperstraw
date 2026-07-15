@@ -7,8 +7,9 @@ import { getCruiseShipDetail } from "@/lib/cruises/queries";
 
 export const dynamic = "force-dynamic";
 
-export default async function CruiseShipPage({ params }: { params: { shipId: string } }) {
-  const data = await getCruiseShipDetail(params.shipId);
+export default async function CruiseShipPage({ params }: { params: Promise<{ shipId: string }> }) {
+  const { shipId } = await params;
+  const data = await getCruiseShipDetail(shipId);
 
   if (!data.enabled) {
     return (

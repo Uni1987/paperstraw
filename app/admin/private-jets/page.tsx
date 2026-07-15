@@ -13,14 +13,15 @@ export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
 type AdminProps = {
-  searchParams?: {
+  searchParams?: Promise<{
     success?: string;
     error?: string;
     warning?: string;
-  };
+  }>;
 };
 
 export default async function PrivateJetsAdminPage({ searchParams }: AdminProps) {
+  const resolvedSearchParams = await searchParams;
   const [status, attributionQuality, historicalJobs] = await Promise.all([
     getImportStatusSummary(),
     getAttributionQualityReport(),
@@ -37,9 +38,9 @@ export default async function PrivateJetsAdminPage({ searchParams }: AdminProps)
       <p className="text-sm font-semibold uppercase tracking-normal text-clay">Imports</p>
       <h1 className="mt-3 text-4xl font-bold tracking-normal text-ink">Admin data imports</h1>
 
-      <StatusMessage type="success" message={searchParams?.success} />
-      <StatusMessage type="warning" message={searchParams?.warning} />
-      <StatusMessage type="error" message={searchParams?.error} />
+      <StatusMessage type="success" message={resolvedSearchParams?.success} />
+      <StatusMessage type="warning" message={resolvedSearchParams?.warning} />
+      <StatusMessage type="error" message={resolvedSearchParams?.error} />
       {!cronStatus.cronSecretConfigured ? (
         <StatusMessage type="warning" message="CRON_SECRET is not configured. /api/cron/ingest will reject scheduled refresh requests." />
       ) : null}

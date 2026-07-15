@@ -1,41 +1,26 @@
 import { cache } from "react";
 import { prisma } from "@/lib/database/cruises";
-import { CRUISE_ESTIMATION_METHOD_VERSION, CRUISE_REGIONS, isCruisesEnabled } from "@/lib/cruises/config";
+import { CRUISE_REGIONS, isCruisesEnabled } from "@/lib/cruises/config";
+import { createPublicCruiseCache } from "@/lib/cruises/publicCache";
+import {
+  CRUISE_MAP_PERIODS,
+  DEFAULT_CRUISE_MAP_PERIOD,
+  parsePublicCruiseShipId,
+  type CruiseMapPeriodId
+} from "@/lib/cruises/publicInputs";
+import { observePublicCruiseQuery } from "@/lib/cruises/queryObservability";
+
+export {
+  CRUISE_MAP_PERIODS,
+  DEFAULT_CRUISE_MAP_PERIOD,
+  normalizeCruiseMapPeriod,
+  type CruiseMapPeriodId
+} from "@/lib/cruises/publicInputs";
 
 const reactCache = typeof cache === "function" ? cache : <T extends (...args: never[]) => unknown>(fn: T) => fn;
 
 export const CRUISE_POSITION_FRESHNESS_WINDOW_HOURS = 6;
 export const CRUISE_POSITION_FRESHNESS_WINDOW_MS = CRUISE_POSITION_FRESHNESS_WINDOW_HOURS * 60 * 60 * 1000;
-
-export type CruiseMapPeriodId = "week" | "month" | "since-monitoring";
-
-export const CRUISE_MAP_PERIODS: Array<{
-  id: CruiseMapPeriodId;
-  label: string;
-  subtitle: string;
-  legendTitle: string;
-}> = [
-  {
-    id: "week",
-    label: "This week",
-    subtitle: "Observed verified cruise activity this week.",
-    legendTitle: "WEEKLY CRUISE ACTIVITY"
-  },
-  {
-    id: "month",
-    label: "This month",
-    subtitle: "Observed verified cruise activity this month.",
-    legendTitle: "MONTHLY CRUISE ACTIVITY"
-  },
-  {
-    id: "since-monitoring",
-    label: "Since monitoring began",
-    subtitle: "Observed verified cruise activity since monitoring began.",
-    legendTitle: "CRUISE ACTIVITY SINCE MONITORING BEGAN"
-  }
-];
-
-export const DEFAULT_CRUISE_MAP_PERIOD: CruiseMapPeriodId = "since-monitoring";
 
 export type CruiseRankRow = {
   shipId: string;
@@ -135,6 +120,40 @@ type CruisePositionSqlRow = {
   timestamp: Date;
   observationCount?: bigint | number | null;
   verificationStatus?: string | null;
+  periodEstimatedCo2Tonnes?: unknown;
+};
+
+type CruisePeriodPositionSqlRow = CruisePositionSqlRow & {
+  periodId: CruiseMapPeriodId;
+};
+
+type CruiseDailyAggregateSqlRow = {
+  date: Date;
+  estimatedCo2Tonnes: unknown;
+  estimatedFuelTonnes: unknown;
+  distanceNm: unknown;
+  rowCount: bigint | number;
+};
+
+type CruiseShipAggregateSqlRow = {
+  shipId: string;
+  shipName: string;
+  shipOperator: string | null;
+  imo: string | null;
+  mmsi: string | null;
+  registryOperator: string | null;
+  vesselSegment: string | null;
+  estimatedCo2Tonnes: unknown;
+  estimatedFuelTonnes: unknown;
+  distanceNm: unknown;
+};
+
+type CruiseDashboardCoreStatsSqlRow = {
+  positionStart: Date | null;
+  estimateStart: Date | null;
+  latestPositionAt: Date | null;
+  verifiedShipsObservedLast24h: bigint | number;
+  verifiedShipsWithStoredObservations: bigint | number;
 };
 
 export type CruiseActivityCellSqlRow = {
@@ -148,62 +167,30 @@ export type CruiseActivityCellSqlRow = {
 const getCruiseDashboardBaseData = reactCache(async () => {
   if (!isCruisesEnabled()) return { enabled: false as const };
 
-  const loadStartedAt = Date.now();
   const now = new Date();
-  const todayStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
-  const tomorrow = new Date(todayStart);
-  tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
-  const monitoringWindowStart = new Date(0);
   const recentSince = new Date(now.getTime() - CRUISE_POSITION_FRESHNESS_WINDOW_MS);
   const observedLast24hSince = new Date(now.getTime() - 24 * 60 * 60 * 1000);
   const verifiedShipIds = await timeCruiseDataLoad("verified vessel lookup", getPublicVerifiedOceanCruiseShipIds);
-  const monitoringStartPromise = timeCruiseDataLoad("monitoring start", () => getCruiseMonitoringStart(verifiedShipIds));
-
-  const [
-    monitoringStart,
-    dashboardRows
-  ] = await Promise.all([
-    monitoringStartPromise,
-    timeCruiseDataLoad("dashboard base queries", () =>
-      Promise.all([
-        getCruiseEstimateRows(todayStart, tomorrow, verifiedShipIds),
-        getCruiseEstimateRows(monitoringWindowStart, tomorrow, verifiedShipIds),
-        getLatestCruisePositions(recentSince, now, verifiedShipIds),
-        getLatestKnownCruisePosition(verifiedShipIds),
-        getCruiseAnnualRecordCount(verifiedShipIds),
-        getDistinctVerifiedShipsWithPositions(verifiedShipIds, observedLast24hSince, now),
-        getDistinctVerifiedShipsWithPositions(verifiedShipIds)
-      ])
-    )
-  ]);
-  const [
-    todayEstimateRows,
-    sinceMonitoringEstimateRows,
-    positions,
-    latestPosition,
-    annualCount,
-    verifiedShipsObservedLast24h,
-    verifiedShipsWithStoredObservations
-  ] = dashboardRows;
-
-  logCruiseDataTiming("shared dashboard data", loadStartedAt);
+  const [positions, coreStats] = await timeCruiseDataLoad("dashboard base queries", () =>
+    Promise.all([
+      getLatestCruisePositions(recentSince, now, verifiedShipIds),
+      getCruiseDashboardCoreStats(verifiedShipIds, observedLast24hSince, now)
+    ])
+  );
+  const monitoringStart = earliestDate(coreStats.positionStart, coreStats.estimateStart);
   return {
     enabled: true as const,
     now,
     verifiedShipIds,
     monitoringStart,
-    todayEstimateRows,
-    sinceMonitoringEstimateRows,
     positions,
-    latestPosition,
-    annualCount,
-    verifiedShipsObservedLast24h,
-    verifiedShipsWithStoredObservations
+    latestPosition: coreStats.latestPositionAt ? { timestamp: coreStats.latestPositionAt } : null,
+    verifiedShipsObservedLast24h: coreStats.verifiedShipsObservedLast24h,
+    verifiedShipsWithStoredObservations: coreStats.verifiedShipsWithStoredObservations
   };
 });
 
-export const getCruiseDashboardData = reactCache(async () => {
-  const loadStartedAt = Date.now();
+async function getCruiseDashboardDataUncached() {
   const base = await getCruiseDashboardBaseData();
   if (!base.enabled) return base;
 
@@ -211,30 +198,41 @@ export const getCruiseDashboardData = reactCache(async () => {
     now,
     verifiedShipIds,
     monitoringStart,
-    todayEstimateRows,
-    sinceMonitoringEstimateRows,
     positions,
     latestPosition,
-    annualCount,
     verifiedShipsObservedLast24h,
     verifiedShipsWithStoredObservations
   } = base;
 
-  const todayTotals = summarizeCruiseEstimateRows(todayEstimateRows);
-  const sinceMonitoringTotals = summarizeCruiseEstimateRows(sinceMonitoringEstimateRows);
-  const [topShipsByEstimatedCo2, registryMetadataByShipId, operatorSourceRows] = await timeCruiseDataLoad(
-    "dashboard enrichment",
-    () =>
-      Promise.all([
-        hydrateCruiseRankRows(buildTopCruiseShipChartRows(sinceMonitoringEstimateRows, 6)),
-        getPublicVerifiedOceanCruiseRegistryMetadata(verifiedShipIds),
-        hydrateCruiseRankRows([...summarizeCruiseEstimateRowsByShip(sinceMonitoringEstimateRows).values()])
-      ])
+  const todayStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  const tomorrow = new Date(todayStart);
+  tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
+  const [dailyAggregates, shipAggregates] = await timeCruiseDataLoad(
+    "dashboard aggregate queries",
+    () => Promise.all([
+      getCruiseDailyEstimateAggregates(new Date(0), tomorrow, verifiedShipIds),
+      getCruiseShipEstimateAggregates(new Date(0), tomorrow, verifiedShipIds)
+    ])
   );
+  const todayTotals = summarizeCruiseDailyAggregates(
+    dailyAggregates.filter((row) => row.date.getTime() >= todayStart.getTime() && row.date.getTime() < tomorrow.getTime())
+  );
+  const sinceMonitoringTotals = summarizeCruiseDailyAggregates(dailyAggregates);
+  const operatorSourceRows = shipAggregates.map(toCruiseRankRow);
+  const topShipsByEstimatedCo2 = operatorSourceRows
+    .filter((row) => row.co2Tonnes > 0)
+    .sort((a, b) => b.co2Tonnes - a.co2Tonnes)
+    .slice(0, 6);
+  const registryMetadataByShipId = new Map(
+    shipAggregates.map((metadata) => [
+      metadata.shipId,
+      { operator: metadata.registryOperator, vesselSegment: metadata.vesselSegment }
+    ] as const)
+  );
+  const aggregateEstimateRows = shipAggregates.map(toAggregateEstimateInputRow);
   const operators = buildOperatorRows(operatorSourceRows, 12);
   const latestPositionAt = latestPosition?.timestamp ?? null;
 
-  logCruiseDataTiming("dashboard summary", loadStartedAt);
   return {
     enabled: true as const,
     kpis: {
@@ -243,14 +241,13 @@ export const getCruiseDashboardData = reactCache(async () => {
       trackedShips: positions.length,
       fuelTodayTonnes: todayTotals.fuelTonnes,
       activeRegionCount: CRUISE_REGIONS.length,
-      annualMrvRecords: annualCount,
       hasTodayEstimates: todayTotals.rows > 0,
       hasSinceMonitoringBeganEstimates: sinceMonitoringTotals.rows > 0
     },
-    dailyEmissionsSeries: buildDailyCruiseEmissionSeries(sinceMonitoringEstimateRows),
+    dailyEmissionsSeries: buildDailyCruiseEmissionSeriesFromAggregates(dailyAggregates),
     topShipsByEstimatedCo2,
-    operatorBreakdown: buildCruiseOperatorBreakdown(sinceMonitoringEstimateRows, registryMetadataByShipId),
-    segmentBreakdown: buildCruiseSegmentBreakdown(sinceMonitoringEstimateRows, registryMetadataByShipId),
+    operatorBreakdown: buildCruiseOperatorBreakdown(aggregateEstimateRows, registryMetadataByShipId),
+    segmentBreakdown: buildCruiseSegmentBreakdown(aggregateEstimateRows, registryMetadataByShipId),
     operators,
     monitoringStart,
     sourceStatus: {
@@ -267,10 +264,9 @@ export const getCruiseDashboardData = reactCache(async () => {
       publicCoverage: verifiedShipIds.length ? `${verifiedShipIds.length.toLocaleString("en-US")} verified vessel(s)` : "No verified vessels yet"
     } satisfies CruiseDataStatus
   };
-});
+}
 
-export const getCruiseDashboardMapData = reactCache(async () => {
-  const loadStartedAt = Date.now();
+async function getCruiseDashboardMapDataUncached() {
   const base = await getCruiseDashboardBaseData();
   if (!base.enabled) return { enabled: false as const };
 
@@ -278,21 +274,168 @@ export const getCruiseDashboardMapData = reactCache(async () => {
     getCruiseMapPeriodPayloads(
       base.verifiedShipIds,
       base.monitoringStart,
-      base.now,
-      base.sinceMonitoringEstimateRows
+      base.now
     )
   );
-  logCruiseDataTiming("dashboard map data", loadStartedAt);
   return {
     enabled: true as const,
-    mapPoints: buildCruiseActivityMapPoints(base.positions, base.todayEstimateRows),
+    mapPoints: buildCruiseActivityMapPoints(base.positions, []),
     mapPeriods,
     mapMode: "activity" as CruiseMapMode
   };
+}
+
+type CruiseDashboardDataResult = Awaited<ReturnType<typeof getCruiseDashboardDataUncached>>;
+type CruiseDashboardMapDataResult = Awaited<ReturnType<typeof getCruiseDashboardMapDataUncached>>;
+
+const getCachedCruiseDashboardData = createPublicCruiseCache<CruiseDashboardDataResult>({
+  key: "dashboard",
+  loader: getCruiseDashboardDataUncached,
+  serialize: (value) => JSON.stringify(value),
+  deserialize: deserializeCruiseDashboardData
 });
+
+const getCachedCruiseDashboardMapData = createPublicCruiseCache<CruiseDashboardMapDataResult>({
+  key: "map",
+  loader: getCruiseDashboardMapDataUncached,
+  serialize: (value) => JSON.stringify(value),
+  deserialize: deserializeCruiseDashboardMapData
+});
+
+export const getCruiseDashboardData = reactCache(getCachedCruiseDashboardData);
+export const getCruiseDashboardMapData = reactCache(getCachedCruiseDashboardMapData);
+
+export type CruisePublicDataSummary = {
+  acceptedRegistryEntries: number;
+  verifiedPublicEligibleVessels: number;
+  verifiedVesselsObservedLast24h: number;
+  verifiedVesselsObservedLast30d: number;
+};
+
+type CruisePublicDataSummarySqlRow = {
+  acceptedRegistryEntries: number | bigint;
+  verifiedPublicEligibleVessels: number | bigint;
+  verifiedVesselsObservedLast24h: number | bigint;
+  verifiedVesselsObservedLast30d: number | bigint;
+};
+
+const getCachedCruisePublicDataSummary = createPublicCruiseCache<CruisePublicDataSummary>({
+  key: "data-summary",
+  loader: getCruisePublicDataSummaryUncached,
+  serialize: (value) => JSON.stringify(value),
+  deserialize: (value) => JSON.parse(value) as CruisePublicDataSummary
+});
+
+export const getCruisePublicDataSummary = reactCache(getCachedCruisePublicDataSummary);
+
+async function getCruisePublicDataSummaryUncached(): Promise<CruisePublicDataSummary> {
+  if (!(await cruiseVerificationTablesAvailable())) return emptyCruisePublicDataSummary();
+  const now = new Date();
+  const last24h = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+  const last30d = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+  const rows = await observePublicCruiseQuery("public-data-summary", () =>
+    prisma.$queryRaw<CruisePublicDataSummarySqlRow[]>`
+      WITH verified AS (
+        SELECT s.id
+        FROM cruise_ships s
+        INNER JOIN cruise_vessel_verifications v ON v.ship_id = s.id
+        INNER JOIN cruise_vessel_registry_entries r ON r.id = v.registry_entry_id
+        WHERE v.verification_status = 'VERIFIED_OCEAN_CRUISE'
+          AND v.confidence = 'HIGH'
+          AND r.registry_decision = 'ACCEPT'
+          AND r.imo = s.imo
+      )
+      SELECT
+        (SELECT COUNT(*)::int FROM cruise_vessel_registry_entries WHERE registry_decision = 'ACCEPT') AS "acceptedRegistryEntries",
+        (SELECT COUNT(*)::int FROM verified) AS "verifiedPublicEligibleVessels",
+        (
+          SELECT COUNT(DISTINCT p.ship_id)::int
+          FROM cruise_positions p
+          INNER JOIN verified v ON v.id = p.ship_id
+          WHERE p.timestamp >= ${last24h}
+            AND p.timestamp <= ${now}
+            AND p.latitude BETWEEN -90 AND 90
+            AND p.longitude BETWEEN -180 AND 180
+            AND NOT (p.latitude = 0 AND p.longitude = 0)
+        ) AS "verifiedVesselsObservedLast24h",
+        (
+          SELECT COUNT(DISTINCT p.ship_id)::int
+          FROM cruise_positions p
+          INNER JOIN verified v ON v.id = p.ship_id
+          WHERE p.timestamp >= ${last30d}
+            AND p.timestamp <= ${now}
+            AND p.latitude BETWEEN -90 AND 90
+            AND p.longitude BETWEEN -180 AND 180
+            AND NOT (p.latitude = 0 AND p.longitude = 0)
+        ) AS "verifiedVesselsObservedLast30d"
+    `
+  );
+  return mapCruisePublicDataSummaryRow(rows[0]);
+}
+
+export function mapCruisePublicDataSummaryRow(row: CruisePublicDataSummarySqlRow | null | undefined): CruisePublicDataSummary {
+  if (!row) return emptyCruisePublicDataSummary();
+  return {
+    acceptedRegistryEntries: Number(row.acceptedRegistryEntries ?? 0),
+    verifiedPublicEligibleVessels: Number(row.verifiedPublicEligibleVessels ?? 0),
+    verifiedVesselsObservedLast24h: Number(row.verifiedVesselsObservedLast24h ?? 0),
+    verifiedVesselsObservedLast30d: Number(row.verifiedVesselsObservedLast30d ?? 0)
+  };
+}
+
+function emptyCruisePublicDataSummary(): CruisePublicDataSummary {
+  return {
+    acceptedRegistryEntries: 0,
+    verifiedPublicEligibleVessels: 0,
+    verifiedVesselsObservedLast24h: 0,
+    verifiedVesselsObservedLast30d: 0
+  };
+}
+
+function deserializeCruiseDashboardData(value: string): CruiseDashboardDataResult {
+  const parsed = JSON.parse(value) as CruiseDashboardDataResult;
+  if (!parsed.enabled) return parsed;
+  return {
+    ...parsed,
+    monitoringStart: cachedDateOrNull(parsed.monitoringStart),
+    sourceStatus: {
+      ...parsed.sourceStatus,
+      latestPositionAt: cachedDateOrNull(parsed.sourceStatus.latestPositionAt)
+    }
+  };
+}
+
+function deserializeCruiseDashboardMapData(value: string): CruiseDashboardMapDataResult {
+  const parsed = JSON.parse(value) as CruiseDashboardMapDataResult;
+  if (!parsed.enabled) return parsed;
+  return {
+    ...parsed,
+    mapPoints: parsed.mapPoints.map(reviveCruiseMapPoint),
+    mapPeriods: parsed.mapPeriods.map((period) => ({
+      ...period,
+      points: period.points.map(reviveCruiseMapPoint)
+    }))
+  };
+}
+
+function reviveCruiseMapPoint(point: CruiseMapPoint) {
+  return { ...point, timestamp: cachedDate(point.timestamp) };
+}
+
+function cachedDateOrNull(value: unknown) {
+  return value === null || value === undefined ? null : cachedDate(value);
+}
+
+function cachedDate(value: unknown) {
+  const date = value instanceof Date ? value : new Date(String(value));
+  if (!Number.isFinite(date.getTime())) throw new Error("Cached Cruise data contains an invalid date.");
+  return date;
+}
 
 export const getCruiseShipDetail = reactCache(async (shipId: string) => {
   if (!isCruisesEnabled()) return { enabled: false as const };
+  const publicShipId = parsePublicCruiseShipId(shipId);
+  if (!publicShipId) return { enabled: true as const, ship: null };
 
   const now = new Date();
   const todayStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
@@ -300,26 +443,45 @@ export const getCruiseShipDetail = reactCache(async (shipId: string) => {
   tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
   const monitoringWindowStart = new Date(0);
 
-  const verified = await isPublicVerifiedOceanCruiseShipId(shipId);
+  const verified = await observePublicCruiseQuery(
+    "ship-eligibility",
+    () => isPublicVerifiedOceanCruiseShipId(publicShipId),
+    (eligible) => (eligible ? 1 : 0),
+    "uncached"
+  );
   if (!verified) return { enabled: true as const, ship: null };
 
-  const [ship, latestPosition, today, sinceMonitoringBegan, annual, firstEstimate] = await Promise.all([
-    prisma.cruiseShip.findUnique({ where: { id: shipId } }),
-    prisma.cruisePosition.findFirst({ where: { shipId }, orderBy: { timestamp: "desc" } }),
+  const [ship, latestPosition, today, sinceMonitoringBegan, annual] = await observePublicCruiseQuery(
+    "ship-detail",
+    () => Promise.all([
+    prisma.cruiseShip.findUnique({
+      where: { id: publicShipId },
+      select: { id: true, name: true, operator: true, imo: true, mmsi: true, shipType: true }
+    }),
+    prisma.cruisePosition.findFirst({
+      where: { shipId: publicShipId },
+      orderBy: { timestamp: "desc" },
+      select: { latitude: true, longitude: true, speedOverGround: true, destination: true, timestamp: true }
+    }),
     prisma.cruiseEmissionsDailyEstimate.findFirst({
-      where: { shipId, date: { gte: todayStart, lt: tomorrow } },
-      orderBy: { date: "desc" }
+      where: { shipId: publicShipId, date: { gte: todayStart, lt: tomorrow } },
+      orderBy: { date: "desc" },
+      select: { estimatedCo2Tonnes: true }
     }),
     prisma.cruiseEmissionsDailyEstimate.aggregate({
-      where: { shipId, date: { gte: monitoringWindowStart, lt: tomorrow } },
-      _sum: { estimatedCo2Tonnes: true, estimatedFuelTonnes: true, estimatedNoxKg: true, estimatedSoxKg: true, distanceNm: true }
-    }),
-    prisma.cruiseEmissionsAnnual.findFirst({ where: { shipId }, orderBy: { reportingYear: "desc" } }),
-    prisma.cruiseEmissionsDailyEstimate.aggregate({
-      where: { shipId },
+      where: { shipId: publicShipId, date: { gte: monitoringWindowStart, lt: tomorrow } },
+      _sum: { estimatedCo2Tonnes: true, estimatedFuelTonnes: true, estimatedNoxKg: true, estimatedSoxKg: true, distanceNm: true },
       _min: { date: true }
+    }),
+    prisma.cruiseEmissionsAnnual.findFirst({
+      where: { shipId: publicShipId },
+      orderBy: { reportingYear: "desc" },
+      select: { annualCo2Tonnes: true }
     })
-  ]);
+  ]),
+    (rows) => rows.filter(Boolean).length,
+    "uncached"
+  );
 
   if (!ship) return { enabled: true as const, ship: null };
 
@@ -335,7 +497,7 @@ export const getCruiseShipDetail = reactCache(async (shipId: string) => {
       soxKg: Number(sinceMonitoringBegan._sum.estimatedSoxKg ?? 0),
       distanceNm: Number(sinceMonitoringBegan._sum.distanceNm ?? 0)
     },
-    monitoringStart: firstEstimate._min.date,
+    monitoringStart: sinceMonitoringBegan._min.date,
     annual
   };
 });
@@ -388,83 +550,176 @@ async function getLatestCruisePositions(recentSince: Date, now = new Date(), ver
   );
 }
 
-async function getLatestKnownCruisePosition(verifiedShipIds: string[]) {
-  if (!verifiedShipIds.length) return null;
-  const rows = await prisma.cruisePosition.findMany({
-    where: { shipId: { in: verifiedShipIds } },
-    orderBy: { timestamp: "desc" },
-    take: 50,
-    select: { timestamp: true, latitude: true, longitude: true }
-  });
-  const row = rows.find((position) => isValidCruiseCoordinate(Number(position.latitude), Number(position.longitude)));
-  return row ? { timestamp: row.timestamp } : null;
+async function getCruiseDailyEstimateAggregates(start: Date, end: Date, verifiedShipIds: string[]) {
+  if (!verifiedShipIds.length) return [];
+  return prisma.$queryRaw<CruiseDailyAggregateSqlRow[]>`
+    SELECT
+      e.date AS "date",
+      SUM(e.estimated_co2_tonnes) AS "estimatedCo2Tonnes",
+      SUM(COALESCE(e.estimated_fuel_tonnes, 0)) AS "estimatedFuelTonnes",
+      SUM(e.distance_nm) AS "distanceNm",
+      COUNT(*)::int AS "rowCount"
+    FROM cruise_emissions_daily_estimates e
+    WHERE e.ship_id = ANY(${verifiedShipIds})
+      AND e.date >= ${start}
+      AND e.date < ${end}
+    GROUP BY e.date
+    ORDER BY e.date ASC
+  `;
 }
 
-async function getCruiseEstimateRows(start: Date, end: Date, verifiedShipIds: string[]) {
+async function getCruiseShipEstimateAggregates(start: Date, end: Date, verifiedShipIds: string[]) {
   if (!verifiedShipIds.length) return [];
-  const rows = await prisma.cruiseEmissionsDailyEstimate.findMany({
-    where: { shipId: { in: verifiedShipIds }, date: { gte: start, lt: end } },
-    select: {
-      shipId: true,
-      date: true,
-      methodVersion: true,
-      estimatedCo2Tonnes: true,
-      estimatedFuelTonnes: true,
-      distanceNm: true
-    }
-  });
+  return prisma.$queryRaw<CruiseShipAggregateSqlRow[]>`
+    SELECT
+      s.id AS "shipId",
+      s.name AS "shipName",
+      s.operator AS "shipOperator",
+      s.imo AS "imo",
+      s.mmsi AS "mmsi",
+      r.operator AS "registryOperator",
+      r.vessel_segment AS "vesselSegment",
+      SUM(e.estimated_co2_tonnes) AS "estimatedCo2Tonnes",
+      SUM(COALESCE(e.estimated_fuel_tonnes, 0)) AS "estimatedFuelTonnes",
+      SUM(e.distance_nm) AS "distanceNm"
+    FROM cruise_emissions_daily_estimates e
+    INNER JOIN cruise_ships s ON s.id = e.ship_id
+    INNER JOIN cruise_vessel_verifications v ON v.ship_id = s.id
+    INNER JOIN cruise_vessel_registry_entries r ON r.id = v.registry_entry_id
+    WHERE s.id = ANY(${verifiedShipIds})
+      AND e.date >= ${start}
+      AND e.date < ${end}
+      AND v.verification_status = 'VERIFIED_OCEAN_CRUISE'
+      AND v.confidence = 'HIGH'
+      AND r.registry_decision = 'ACCEPT'
+      AND r.imo = s.imo
+    GROUP BY s.id, s.name, s.operator, s.imo, s.mmsi, r.operator, r.vessel_segment
+    ORDER BY SUM(e.estimated_co2_tonnes) DESC, s.id ASC
+  `;
+}
 
-  return rows;
+function summarizeCruiseDailyAggregates(rows: CruiseDailyAggregateSqlRow[]) {
+  return rows.reduce(
+    (summary, row) => ({
+      rows: summary.rows + Number(row.rowCount ?? 0),
+      co2Tonnes: summary.co2Tonnes + Number(row.estimatedCo2Tonnes ?? 0),
+      fuelTonnes: summary.fuelTonnes + Number(row.estimatedFuelTonnes ?? 0),
+      distanceNm: summary.distanceNm + Number(row.distanceNm ?? 0)
+    }),
+    { rows: 0, co2Tonnes: 0, fuelTonnes: 0, distanceNm: 0 }
+  );
+}
+
+function buildDailyCruiseEmissionSeriesFromAggregates(rows: CruiseDailyAggregateSqlRow[]) {
+  return buildDailyCruiseEmissionSeries(
+    rows.map((row) => ({
+      shipId: `daily:${row.date.toISOString()}`,
+      date: row.date,
+      methodVersion: "public-daily-aggregate",
+      estimatedCo2Tonnes: row.estimatedCo2Tonnes,
+      estimatedFuelTonnes: row.estimatedFuelTonnes,
+      distanceNm: row.distanceNm
+    }))
+  );
+}
+
+function toCruiseRankRow(row: CruiseShipAggregateSqlRow): CruiseRankRow {
+  return {
+    shipId: row.shipId,
+    shipName: row.shipName,
+    operator: row.shipOperator ?? "Unknown operator",
+    imo: row.imo,
+    mmsi: row.mmsi,
+    co2Tonnes: Number(row.estimatedCo2Tonnes ?? 0),
+    fuelTonnes: Number(row.estimatedFuelTonnes ?? 0),
+    distanceNm: Number(row.distanceNm ?? 0)
+  };
+}
+
+function toAggregateEstimateInputRow(row: CruiseShipAggregateSqlRow): CruiseEstimateInputRow {
+  return {
+    shipId: row.shipId,
+    date: new Date(0),
+    methodVersion: "public-ship-aggregate",
+    estimatedCo2Tonnes: row.estimatedCo2Tonnes,
+    estimatedFuelTonnes: row.estimatedFuelTonnes,
+    distanceNm: row.distanceNm
+  };
 }
 
 async function timeCruiseDataLoad<T>(label: string, operation: () => Promise<T>): Promise<T> {
-  const startedAt = Date.now();
-  try {
-    return await operation();
-  } finally {
-    logCruiseDataTiming(label, startedAt);
+  return observePublicCruiseQuery(label, operation);
+}
+
+async function getCruiseDashboardCoreStats(
+  verifiedShipIds: string[],
+  observedLast24hSince: Date,
+  now: Date
+) {
+  if (!verifiedShipIds.length) {
+    return {
+      positionStart: null,
+      estimateStart: null,
+      latestPositionAt: null,
+      verifiedShipsObservedLast24h: 0,
+      verifiedShipsWithStoredObservations: 0
+    };
   }
+  const rows = await prisma.$queryRaw<CruiseDashboardCoreStatsSqlRow[]>`
+    WITH position_stats AS (
+      SELECT
+        MIN(p.timestamp) FILTER (
+          WHERE p.latitude BETWEEN -90 AND 90
+            AND p.longitude BETWEEN -180 AND 180
+            AND NOT (p.latitude = 0 AND p.longitude = 0)
+        ) AS position_start,
+        MAX(p.timestamp) FILTER (
+          WHERE p.latitude BETWEEN -90 AND 90
+            AND p.longitude BETWEEN -180 AND 180
+            AND NOT (p.latitude = 0 AND p.longitude = 0)
+        ) AS latest_position_at,
+        COUNT(DISTINCT p.ship_id) FILTER (
+          WHERE p.timestamp >= ${observedLast24hSince}
+            AND p.timestamp <= ${now}
+            AND p.latitude BETWEEN -90 AND 90
+            AND p.longitude BETWEEN -180 AND 180
+            AND NOT (p.latitude = 0 AND p.longitude = 0)
+        )::int AS observed_last_24h,
+        COUNT(DISTINCT p.ship_id) FILTER (
+          WHERE p.latitude BETWEEN -90 AND 90
+            AND p.longitude BETWEEN -180 AND 180
+            AND NOT (p.latitude = 0 AND p.longitude = 0)
+        )::int AS observed_all_time
+      FROM cruise_positions p
+      WHERE p.ship_id = ANY(${verifiedShipIds})
+    ),
+    estimate_stats AS (
+      SELECT MIN(e.date) AS estimate_start
+      FROM cruise_emissions_daily_estimates e
+      WHERE e.ship_id = ANY(${verifiedShipIds})
+    )
+    SELECT
+      position_stats.position_start AS "positionStart",
+      estimate_stats.estimate_start AS "estimateStart",
+      position_stats.latest_position_at AS "latestPositionAt",
+      position_stats.observed_last_24h AS "verifiedShipsObservedLast24h",
+      position_stats.observed_all_time AS "verifiedShipsWithStoredObservations"
+    FROM position_stats
+    CROSS JOIN estimate_stats
+  `;
+  const row = rows[0];
+  return {
+    positionStart: row?.positionStart ?? null,
+    estimateStart: row?.estimateStart ?? null,
+    latestPositionAt: row?.latestPositionAt ?? null,
+    verifiedShipsObservedLast24h: Number(row?.verifiedShipsObservedLast24h ?? 0),
+    verifiedShipsWithStoredObservations: Number(row?.verifiedShipsWithStoredObservations ?? 0)
+  };
 }
 
-function logCruiseDataTiming(label: string, startedAt: number) {
-  if (process.env.NODE_ENV !== "development" && process.env.CRUISE_QUERY_TIMING !== "true") return;
-  console.log(`[cruises:data] ${label}=${Date.now() - startedAt}ms`);
-}
-
-async function getFirstCruiseEstimateDate(verifiedShipIds: string[]) {
-  if (!verifiedShipIds.length) return { _min: { date: null } };
-  return prisma.cruiseEmissionsDailyEstimate.aggregate({
-    where: { shipId: { in: verifiedShipIds } },
-    _min: { date: true }
-  });
-}
-
-async function getCruiseAnnualRecordCount(verifiedShipIds: string[]) {
-  if (!verifiedShipIds.length) return 0;
-  return prisma.cruiseEmissionsAnnual.count({ where: { shipId: { in: verifiedShipIds } } });
-}
-
-async function getCruiseMonitoringStart(verifiedShipIds: string[]) {
-  if (!verifiedShipIds.length) return null;
-  const [positionStart, estimateStart] = await Promise.all([
-    prisma.cruisePosition.aggregate({
-      where: {
-        shipId: { in: verifiedShipIds },
-        latitude: { gte: -90, lte: 90 },
-        longitude: { gte: -180, lte: 180 },
-        NOT: { latitude: 0, longitude: 0 }
-      },
-      _min: { timestamp: true }
-    }),
-    getFirstCruiseEstimateDate(verifiedShipIds)
-  ]);
-
-  const starts = [positionStart._min.timestamp, estimateStart._min.date].filter((value): value is Date => Boolean(value));
-  return starts.sort((a, b) => a.getTime() - b.getTime())[0] ?? null;
-}
-
-export function normalizeCruiseMapPeriod(value: string | null | undefined): CruiseMapPeriodId {
-  return CRUISE_MAP_PERIODS.some((period) => period.id === value) ? (value as CruiseMapPeriodId) : DEFAULT_CRUISE_MAP_PERIOD;
+export function earliestDate(...values: Array<Date | null | undefined>): Date | null {
+  const dates = values.filter((value): value is Date => Boolean(value));
+  return dates.sort((a, b) => a.getTime() - b.getTime())[0] ?? null;
 }
 
 export function getCruiseMapPeriodRange(period: CruiseMapPeriodId, now = new Date(), monitoringStart: Date | null = null) {
@@ -485,60 +740,48 @@ export function getCruiseMapPeriodRange(period: CruiseMapPeriodId, now = new Dat
 async function getCruiseMapPeriodPayloads(
   verifiedShipIds: string[],
   monitoringStart: Date | null,
-  now: Date,
-  estimateRows: CruiseEstimateInputRow[]
+  now: Date
 ): Promise<CruiseMapPeriodPayload[]> {
-  return Promise.all(
-    CRUISE_MAP_PERIODS.map(async (period) => {
-      const range = getCruiseMapPeriodRange(period.id, now, monitoringStart);
-      const periodEstimateRows = filterCruiseEstimateRowsForPeriod(estimateRows, range.start, range.end);
-      const points = await getCruiseVesselMapPointsForPeriod(
-        range.start,
-        range.end,
-        verifiedShipIds,
-        period.label,
-        periodEstimateRows
-      );
-      return { ...period, points };
-    })
-  );
-}
+  if (!verifiedShipIds.length) return CRUISE_MAP_PERIODS.map((period) => ({ ...period, points: [] }));
+  const ranges = CRUISE_MAP_PERIODS.map((period) => ({ period, ...getCruiseMapPeriodRange(period.id, now, monitoringStart) }));
+  const [week, month, sinceMonitoring] = ranges;
+  if (!week || !month || !sinceMonitoring) return CRUISE_MAP_PERIODS.map((period) => ({ ...period, points: [] }));
 
-export function filterCruiseEstimateRowsForPeriod(
-  rows: CruiseEstimateInputRow[],
-  start: Date,
-  end: Date
-) {
-  return rows.filter((row) => row.date.getTime() >= start.getTime() && row.date.getTime() < end.getTime());
-}
-
-async function getCruiseVesselMapPointsForPeriod(
-  start: Date,
-  end: Date,
-  verifiedShipIds: string[],
-  periodLabel: string,
-  estimateRows: CruiseEstimateInputRow[]
-): Promise<CruiseMapPoint[]> {
-  if (!verifiedShipIds.length || start.getTime() > end.getTime()) return [];
-  const positionRows = await getLatestCruisePositionRowsForPeriod(start, end, verifiedShipIds);
-  return buildCruiseActivityMapPoints(buildCruisePeriodVesselMapPoints(positionRows, periodLabel), estimateRows);
-}
-
-async function getLatestCruisePositionRowsForPeriod(start: Date, end: Date, verifiedShipIds: string[]) {
-  return prisma.$queryRaw<CruisePositionSqlRow[]>`
-    WITH period_positions AS (
+  const rows = await prisma.$queryRaw<CruisePeriodPositionSqlRow[]>`
+    WITH period_ranges (period_id, start_at, end_at) AS (
+      VALUES
+        (${week.period.id}, ${week.start}, ${week.end}),
+        (${month.period.id}, ${month.start}, ${month.end}),
+        (${sinceMonitoring.period.id}, ${sinceMonitoring.start}, ${sinceMonitoring.end})
+    ),
+    period_positions AS (
       SELECT
+        ranges.period_id,
         p.*,
-        COUNT(*) OVER (PARTITION BY p.ship_id)::int AS observation_count
-      FROM cruise_positions p
-      WHERE p.timestamp >= ${start}
-        AND p.timestamp <= ${end}
-        AND p.ship_id = ANY(${verifiedShipIds})
+        COUNT(*) OVER (PARTITION BY ranges.period_id, p.ship_id)::int AS observation_count
+      FROM period_ranges ranges
+      INNER JOIN cruise_positions p
+        ON p.timestamp >= ranges.start_at
+       AND p.timestamp <= ranges.end_at
+      WHERE p.ship_id = ANY(${verifiedShipIds})
         AND p.latitude BETWEEN -90 AND 90
         AND p.longitude BETWEEN -180 AND 180
         AND NOT (p.latitude = 0 AND p.longitude = 0)
+    ),
+    period_estimates AS (
+      SELECT
+        ranges.period_id,
+        e.ship_id,
+        SUM(e.estimated_co2_tonnes) AS estimated_co2_tonnes
+      FROM period_ranges ranges
+      INNER JOIN cruise_emissions_daily_estimates e
+        ON e.date >= ranges.start_at
+       AND e.date < ranges.end_at
+      WHERE e.ship_id = ANY(${verifiedShipIds})
+      GROUP BY ranges.period_id, e.ship_id
     )
-    SELECT DISTINCT ON (p.ship_id)
+    SELECT DISTINCT ON (p.period_id, p.ship_id)
+      p.period_id AS "periodId",
       p.ship_id AS "shipId",
       s.name AS "name",
       s.operator AS "operator",
@@ -550,12 +793,35 @@ async function getLatestCruisePositionRowsForPeriod(start: Date, end: Date, veri
       p.destination AS "destination",
       p.timestamp AS "timestamp",
       p.observation_count AS "observationCount",
-      v.verification_status AS "verificationStatus"
+      v.verification_status AS "verificationStatus",
+      estimates.estimated_co2_tonnes AS "periodEstimatedCo2Tonnes"
     FROM period_positions p
     INNER JOIN cruise_ships s ON s.id = p.ship_id
     LEFT JOIN cruise_vessel_verifications v ON v.ship_id = s.id
-    ORDER BY p.ship_id, p.timestamp DESC, p.id DESC
+    LEFT JOIN period_estimates estimates
+      ON estimates.period_id = p.period_id
+     AND estimates.ship_id = p.ship_id
+    ORDER BY p.period_id, p.ship_id, p.timestamp DESC, p.id DESC
   `;
+  const rowsByPeriod = new Map<CruiseMapPeriodId, CruisePositionSqlRow[]>();
+  for (const row of rows) {
+    const periodRows = rowsByPeriod.get(row.periodId) ?? [];
+    periodRows.push(row);
+    rowsByPeriod.set(row.periodId, periodRows);
+  }
+
+  return ranges.map(({ period }) => ({
+    ...period,
+    points: buildCruisePeriodVesselMapPoints(rowsByPeriod.get(period.id) ?? [], period.label)
+  }));
+}
+
+export function filterCruiseEstimateRowsForPeriod(
+  rows: CruiseEstimateInputRow[],
+  start: Date,
+  end: Date
+) {
+  return rows.filter((row) => row.date.getTime() >= start.getTime() && row.date.getTime() < end.getTime());
 }
 
 export function buildCruisePeriodVesselMapPoints(rows: CruisePositionSqlRow[], periodLabel: string): CruiseMapPoint[] {
@@ -572,7 +838,8 @@ export function buildCruisePeriodVesselMapPoints(rows: CruisePositionSqlRow[], p
       destination: row.destination,
       timestamp: row.timestamp,
       activityWeight: 1,
-      estimatedCo2Tonnes: null,
+      estimatedCo2Tonnes:
+        Number(row.periodEstimatedCo2Tonnes ?? 0) > 0 ? Number(row.periodEstimatedCo2Tonnes) : null,
       isAggregate: false,
       observationCount: Number(row.observationCount ?? 1),
       vesselCount: 1,
@@ -580,29 +847,6 @@ export function buildCruisePeriodVesselMapPoints(rows: CruisePositionSqlRow[], p
       verificationStatus: row.verificationStatus ?? null
     }))
     .filter((point) => isValidCruiseCoordinate(point.latitude, point.longitude));
-}
-
-async function getCruiseActivityCells(start: Date, end: Date, verifiedShipIds: string[], periodLabel: string): Promise<CruiseMapPoint[]> {
-  if (!verifiedShipIds.length || start.getTime() > end.getTime()) return [];
-  const rows = await prisma.$queryRaw<CruiseActivityCellSqlRow[]>`
-    SELECT
-      AVG(p.latitude)::float AS "latitude",
-      AVG(p.longitude)::float AS "longitude",
-      COUNT(*) AS "observationCount",
-      COUNT(DISTINCT p.ship_id) AS "vesselCount",
-      MAX(p.timestamp) AS "latestTimestamp"
-    FROM cruise_positions p
-    WHERE p.timestamp >= ${start}
-      AND p.timestamp <= ${end}
-      AND p.ship_id = ANY(${verifiedShipIds})
-      AND p.latitude BETWEEN -90 AND 90
-      AND p.longitude BETWEEN -180 AND 180
-      AND NOT (p.latitude = 0 AND p.longitude = 0)
-    GROUP BY ROUND((p.latitude::numeric * 2)) / 2, ROUND((p.longitude::numeric * 2)) / 2
-    ORDER BY COUNT(*) DESC
-    LIMIT 1500
-  `;
-  return buildCruiseActivityCellPoints(rows, periodLabel);
 }
 
 export function buildCruiseActivityCellPoints(rows: CruiseActivityCellSqlRow[], periodLabel: string): CruiseMapPoint[] {
@@ -632,23 +876,6 @@ export function buildCruiseActivityCellPoints(rows: CruiseActivityCellSqlRow[], 
       } satisfies CruiseMapPoint;
     })
     .filter((point) => isValidCruiseCoordinate(point.latitude, point.longitude));
-}
-
-async function getDistinctVerifiedShipsWithPositions(verifiedShipIds: string[], start?: Date, end?: Date) {
-  if (!verifiedShipIds.length) return 0;
-  const timestamp = start || end ? { ...(start ? { gte: start } : {}), ...(end ? { lte: end } : {}) } : undefined;
-  const rows = await prisma.cruisePosition.groupBy({
-    by: ["shipId"],
-    where: {
-      shipId: { in: verifiedShipIds },
-      ...(timestamp ? { timestamp } : {}),
-      latitude: { gte: -90, lte: 90 },
-      longitude: { gte: -180, lte: 180 },
-      NOT: { latitude: 0, longitude: 0 }
-    },
-    _count: { shipId: true }
-  });
-  return rows.length;
 }
 
 function rankCruiseEstimateRows(rows: CruiseEstimateInputRow[], take: number): CruiseRankRow[] {
@@ -686,51 +913,10 @@ function summarizeCruiseEstimateRowsByShip(rows: CruiseEstimateInputRow[]) {
   return grouped;
 }
 
-async function hydrateCruiseRankRows(rows: CruiseRankRow[]) {
-  const ships = await prisma.cruiseShip.findMany({
-    where: { id: { in: rows.map((row) => row.shipId) } },
-    select: { id: true, name: true, operator: true, imo: true, mmsi: true }
-  });
-  const shipById = new Map(ships.map((ship) => [ship.id, ship]));
-
-  return rows.map((row) => {
-    const ship = shipById.get(row.shipId);
-    return {
-      shipId: row.shipId,
-      shipName: ship?.name ?? "Unknown ship",
-      operator: ship?.operator ?? "Unknown operator",
-      imo: ship?.imo ?? null,
-      mmsi: ship?.mmsi ?? null,
-      co2Tonnes: row.co2Tonnes,
-      fuelTonnes: row.fuelTonnes,
-      distanceNm: row.distanceNm
-    };
-  });
-}
-
 export type CruiseRegistryMetadata = {
   operator: string | null;
   vesselSegment: string | null;
 };
-
-async function getPublicVerifiedOceanCruiseRegistryMetadata(verifiedShipIds: string[]) {
-  if (!verifiedShipIds.length) return new Map<string, CruiseRegistryMetadata>();
-  const rows = await prisma.$queryRaw<Array<{ shipId: string; operator: string | null; vesselSegment: string | null }>>`
-    SELECT
-      s.id AS "shipId",
-      r.operator AS "operator",
-      r.vessel_segment AS "vesselSegment"
-    FROM cruise_ships s
-    INNER JOIN cruise_vessel_verifications v ON v.ship_id = s.id
-    INNER JOIN cruise_vessel_registry_entries r ON r.id = v.registry_entry_id
-    WHERE s.id = ANY(${verifiedShipIds})
-      AND v.verification_status = 'VERIFIED_OCEAN_CRUISE'
-      AND v.confidence = 'HIGH'
-      AND r.registry_decision = 'ACCEPT'
-      AND r.imo = s.imo
-  `;
-  return new Map(rows.map((row) => [row.shipId, { operator: row.operator, vesselSegment: row.vesselSegment }]));
-}
 
 export async function getPublicVerifiedOceanCruiseShipIds() {
   if (!(await cruiseVerificationTablesAvailable())) return [];

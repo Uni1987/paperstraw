@@ -22,25 +22,25 @@ describe("admin route protection", () => {
     expect(isProtectedAdminPath("/support")).toBe(false);
   });
 
-  it("accepts only matching HTTP Basic credentials for admin routes", () => {
+  it("accepts only matching HTTP Basic credentials for admin routes", async () => {
     const authorization = encodeBasicCredentials("admin", "secret");
 
     expect(
-      isValidAdminBasicAuth({
+      await isValidAdminBasicAuth({
         authorization,
         expectedUsername: "admin",
         expectedPassword: "secret"
       })
     ).toBe(true);
     expect(
-      isValidAdminBasicAuth({
+      await isValidAdminBasicAuth({
         authorization,
         expectedUsername: "admin",
         expectedPassword: "wrong"
       })
     ).toBe(false);
     expect(
-      isValidAdminBasicAuth({
+      await isValidAdminBasicAuth({
         authorization: null,
         expectedUsername: "admin",
         expectedPassword: "secret"
@@ -48,18 +48,35 @@ describe("admin route protection", () => {
     ).toBe(false);
   });
 
-  it("allows cron secret auth only for cron paths", () => {
+  it("allows bearer cron auth only for cron paths", async () => {
     expect(
-      isValidCronSecretAuth({
+      await isValidCronSecretAuth({
         pathname: "/api/cron/ingest",
         authorization: "Bearer cron-secret",
         expectedSecret: "cron-secret"
       })
     ).toBe(true);
     expect(
-      isValidCronSecretAuth({
+      await isValidCronSecretAuth({
         pathname: "/api/ingest",
         authorization: "Bearer cron-secret",
+        expectedSecret: "cron-secret"
+      })
+    ).toBe(false);
+  });
+
+  it("rejects missing and incorrect cron bearer tokens", async () => {
+    expect(
+      await isValidCronSecretAuth({
+        pathname: "/api/cron/ingest",
+        authorization: null,
+        expectedSecret: "cron-secret"
+      })
+    ).toBe(false);
+    expect(
+      await isValidCronSecretAuth({
+        pathname: "/api/cron/ingest",
+        authorization: "Bearer wrong",
         expectedSecret: "cron-secret"
       })
     ).toBe(false);

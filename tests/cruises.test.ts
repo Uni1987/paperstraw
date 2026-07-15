@@ -1,5 +1,8 @@
 import { readFileSync } from "node:fs";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { getCruisesPrisma } from "@/lib/database/cruises";
+import { getPrivateJetsPrisma } from "@/lib/database/privateJets";
+import { applyCruiseWebDatabaseSafety } from "@/lib/database/connectionSafety";
 import {
   AISSTREAM_FILTER_MESSAGE_TYPES,
   VERIFIED_GLOBAL_BOUNDING_BOX,
@@ -66,6 +69,7 @@ import {
   buildTopCruiseShipChartRows,
   dedupeCruiseEstimateRows,
   estimateCruiseMapPayloadBytes,
+  earliestDate,
   filterCruiseEstimateRowsForPeriod,
   getCruiseDataStatus,
   getCruiseMapCopy,
@@ -73,9 +77,19 @@ import {
   normalizeCruiseMapPeriod,
   filterPublicCruiseRowsByVerifiedShipIds,
   isPublicVerifiedOceanCruise,
+  mapCruisePublicDataSummaryRow,
   selectLatestCruisePositionPerShip,
   summarizeCruiseEstimateRows
 } from "@/lib/cruises/queries";
+import {
+  PUBLIC_CRUISE_CACHE_MAX_BYTES,
+  PUBLIC_CRUISE_CACHE_KEYS,
+  PUBLIC_CRUISE_CACHE_REVALIDATE_SECONDS,
+  createPublicCruiseCache,
+  type PublicCruiseCacheFactory
+} from "@/lib/cruises/publicCache";
+import { MAX_PUBLIC_CRUISE_SHIP_ID_LENGTH, parsePublicCruiseShipId } from "@/lib/cruises/publicInputs";
+import { buildPublicCruiseQueryEvent, observePublicCruiseQuery } from "@/lib/cruises/queryObservability";
 import { buildVesselGeoJson, featureToTooltip, getCruiseShipDetailHref } from "@/components/cruises/CruiseVesselMap";
 import { buildCruiseViabilityAudit, parseOperatorCoverageManifest } from "@/lib/cruises/viabilityAudit";
 import {
@@ -201,6 +215,35 @@ afterEach(() => {
   delete process.env.CRUISE_WORKER_DATABASE_TARGET;
   delete process.env.CRUISE_WORKER_PROFILE;
   delete process.env.CRUISE_WORKER_ALLOW_PRODUCTION;
+});
+
+describe("module database client lifecycle", () => {
+  it("reuses one client per module without crossing database boundaries", () => {
+    const originalPrivateJetsUrl = process.env.PRIVATE_JETS_DATABASE_URL;
+    const originalCruisesUrl = process.env.CRUISES_DATABASE_URL;
+    process.env.PRIVATE_JETS_DATABASE_URL = "postgresql://user:password@private.example/private-jets";
+    process.env.CRUISES_DATABASE_URL = "postgresql://user:password@cruise.example/cruises-dev";
+
+    try {
+      const privateJetsClient = getPrivateJetsPrisma();
+      const cruiseClient = getCruisesPrisma();
+
+      expect(getPrivateJetsPrisma()).toBe(privateJetsClient);
+      expect(getCruisesPrisma()).toBe(cruiseClient);
+      expect(privateJetsClient).not.toBe(cruiseClient);
+    } finally {
+      restoreEnv("PRIVATE_JETS_DATABASE_URL", originalPrivateJetsUrl);
+      restoreEnv("CRUISES_DATABASE_URL", originalCruisesUrl);
+    }
+  });
+
+  it("keeps database client source imports separate", () => {
+    const privateJetsSource = readFileSync("lib/database/privateJets.ts", "utf8");
+    const cruisesSource = readFileSync("lib/database/cruises.ts", "utf8");
+
+    expect(privateJetsSource).not.toContain("@/lib/database/cruises");
+    expect(cruisesSource).not.toContain("@/lib/database/privateJets");
+  });
 });
 
 describe("cruise emissions estimation", () => {
@@ -1632,6 +1675,7 @@ describe("cruise dashboard query helpers", () => {
       readFileSync("components/cruises/CruiseVesselMap.tsx", "utf8"),
       readFileSync("components/cruises/LazyCruiseVesselMap.tsx", "utf8"),
       readFileSync("components/cruises/CruiseDashboardCharts.tsx", "utf8"),
+      readFileSync("lib/cruises/publicInputs.ts", "utf8"),
       readFileSync("lib/cruises/queries.ts", "utf8")
     ].join("\n");
 
@@ -2980,7 +3024,7 @@ describe("cruise operations admin", () => {
   it("keeps the admin apply endpoint dry-run by default and confirm explicit", () => {
     const routeSource = readFileSync("app/api/admin/cruises/mmsi-candidates/apply-approved/route.ts", "utf8");
 
-    expect(routeSource).toContain("const confirm = body?.confirm === true");
+    expect(routeSource).toContain("const confirm = parsed.data.confirm === true");
     expect(routeSource).toContain("applyApprovedMmsiReviewCandidates({ confirm })");
     expect(routeSource).not.toContain("confirm = true");
   });
@@ -3643,3 +3687,212 @@ class FakeCruiseShipRepository implements CruiseShipIdentityRepository {
     return { id };
   }
 }
+
+function restoreEnv(name: "PRIVATE_JETS_DATABASE_URL" | "CRUISES_DATABASE_URL", value: string | undefined) {
+  if (value === undefined) {
+    delete process.env[name];
+  } else {
+    process.env[name] = value;
+  }
+}
+
+describe("public Cruise cache policy", () => {
+  it("uses one bounded key and reuses the cached aggregate result", async () => {
+    let loaderCalls = 0;
+    let observedKey: string[] = [];
+    let observedRevalidate = 0;
+    const cacheFactory: PublicCruiseCacheFactory = <T>(
+      loader: () => Promise<T>,
+      keyParts: string[],
+      options: { revalidate: number; tags: string[] }
+    ) => {
+      observedKey = keyParts;
+      observedRevalidate = options.revalidate;
+      let cached: Promise<T> | undefined;
+      return () => (cached ??= loader());
+    };
+    const load = createPublicCruiseCache({
+      key: "dashboard",
+      loader: async () => ({ total: ++loaderCalls }),
+      serialize: (value) => JSON.stringify(value),
+      deserialize: (value) => JSON.parse(value) as { total: number },
+      cacheFactory
+    });
+
+    await expect(load()).resolves.toEqual({ total: 1 });
+    await expect(load()).resolves.toEqual({ total: 1 });
+    expect(loaderCalls).toBe(1);
+    expect(observedKey).toEqual(["paperstraw-public-cruises-dashboard-v1"]);
+    expect(observedRevalidate).toBe(PUBLIC_CRUISE_CACHE_REVALIDATE_SECONDS);
+    expect(PUBLIC_CRUISE_CACHE_REVALIDATE_SECONDS).toBeGreaterThanOrEqual(60);
+    expect(PUBLIC_CRUISE_CACHE_REVALIDATE_SECONDS).toBeLessThanOrEqual(300);
+  });
+
+  it("serves a bounded last-known-good result when a refresh fails", async () => {
+    let loaderCalls = 0;
+    let now = 1_000;
+    const passThroughFactory: PublicCruiseCacheFactory = <T>(loader: () => Promise<T>) => loader;
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const load = createPublicCruiseCache({
+      key: "map",
+      loader: async () => {
+        loaderCalls += 1;
+        if (loaderCalls > 1) throw new Error("postgresql://secret-host/should-not-leak");
+        return { points: 4 };
+      },
+      serialize: (value) => JSON.stringify(value),
+      deserialize: (value) => JSON.parse(value) as { points: number },
+      cacheFactory: passThroughFactory,
+      now: () => now
+    });
+
+    await expect(load()).resolves.toEqual({ points: 4 });
+    now += 1_000;
+    await expect(load()).resolves.toEqual({ points: 4 });
+    expect(warning.mock.calls.flat().join(" ")).toContain("last-known-good");
+    expect(warning.mock.calls.flat().join(" ")).not.toContain("secret-host");
+    warning.mockRestore();
+  });
+
+  it("rejects a public cache payload before Next.js reaches its 2 MB ceiling", async () => {
+    const passThroughFactory: PublicCruiseCacheFactory = <T>(loader: () => Promise<T>) => loader;
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const load = createPublicCruiseCache({
+      key: "data-summary",
+      loader: async () => "x".repeat(PUBLIC_CRUISE_CACHE_MAX_BYTES + 1),
+      serialize: (value) => value,
+      deserialize: (value) => value,
+      cacheFactory: passThroughFactory
+    });
+
+    await expect(load()).rejects.toThrow("temporarily unavailable");
+    expect(warning.mock.calls.flat().join(" ")).toContain("oversized");
+    warning.mockRestore();
+  });
+
+  it("uses only three fixed cache keys and rejects arbitrary cardinality", () => {
+    expect(PUBLIC_CRUISE_CACHE_KEYS).toEqual(["dashboard", "map", "data-summary"]);
+    expect(() =>
+      createPublicCruiseCache({
+        key: "period=user-controlled" as "dashboard",
+        loader: async () => ({}),
+        serialize: JSON.stringify,
+        deserialize: JSON.parse
+      })
+    ).toThrow("Unsupported public Cruise cache key");
+  });
+});
+
+describe("public Cruise input and query hardening", () => {
+  it("rejects oversized and malformed public ship IDs before querying", () => {
+    expect(parsePublicCruiseShipId("cm1234567890abcdefghijkl")).toBe("cm1234567890abcdefghijkl");
+    expect(parsePublicCruiseShipId("ship/../../admin")).toBeNull();
+    expect(parsePublicCruiseShipId("x".repeat(MAX_PUBLIC_CRUISE_SHIP_ID_LENGTH + 1))).toBeNull();
+    expect(parsePublicCruiseShipId("")).toBeNull();
+  });
+
+  it("preserves characterized totals and public coverage counts", () => {
+    const rows = [
+      { shipId: "a", date: new Date("2026-07-01T00:00:00Z"), methodVersion: "v1", estimatedCo2Tonnes: 10, estimatedFuelTonnes: 2, distanceNm: 30 },
+      { shipId: "a", date: new Date("2026-07-01T00:00:00Z"), methodVersion: "v1", estimatedCo2Tonnes: 10, estimatedFuelTonnes: 2, distanceNm: 30 },
+      { shipId: "b", date: new Date("2026-07-01T00:00:00Z"), methodVersion: "v1", estimatedCo2Tonnes: 25, estimatedFuelTonnes: 5, distanceNm: 60 }
+    ];
+
+    expect(summarizeCruiseEstimateRows(rows)).toEqual({ rows: 2, co2Tonnes: 35, fuelTonnes: 7, distanceNm: 90 });
+    expect(earliestDate(new Date("2026-07-03T00:00:00Z"), new Date("2026-07-01T00:00:00Z"))?.toISOString()).toBe(
+      "2026-07-01T00:00:00.000Z"
+    );
+    expect(
+      mapCruisePublicDataSummaryRow({
+        acceptedRegistryEntries: 316n,
+        verifiedPublicEligibleVessels: 286n,
+        verifiedVesselsObservedLast24h: 139n,
+        verifiedVesselsObservedLast30d: 281n
+      })
+    ).toEqual({
+      acceptedRegistryEntries: 316,
+      verifiedPublicEligibleVessels: 286,
+      verifiedVesselsObservedLast24h: 139,
+      verifiedVesselsObservedLast30d: 281
+    });
+  });
+
+  it("uses database-side bounded aggregates and one fixed map-period query", () => {
+    const queries = readFileSync("lib/cruises/queries.ts", "utf8");
+    const dataPage = readFileSync("app/data/cruises/page.tsx", "utf8");
+
+    expect(queries).toContain("getCruiseDailyEstimateAggregates");
+    expect(queries).toContain("getCruiseShipEstimateAggregates");
+    expect(queries).toContain("GROUP BY e.date");
+    expect(queries).toContain("WITH period_ranges");
+    expect(queries).not.toContain("cruiseEmissionsDailyEstimate.findMany");
+    expect(dataPage).toContain("getCruisePublicDataSummary");
+    expect(dataPage).not.toContain("buildGlobalLocalFilterStatusReport");
+  });
+
+  it("keeps public reads on the Cruise client and admin paths outside public caching", () => {
+    const queries = readFileSync("lib/cruises/queries.ts", "utf8");
+    const adminOps = readFileSync("lib/cruises/adminOps.ts", "utf8");
+
+    expect(queries).toContain('@/lib/database/cruises');
+    expect(queries).not.toContain('@/lib/database/privateJets');
+    expect(queries).not.toContain('@/lib/prisma');
+    expect(adminOps).not.toContain("createPublicCruiseCache");
+  });
+
+  it("logs only sanitized query metadata and returns a generic failure", async () => {
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    await expect(
+      observePublicCruiseQuery(
+        "ship detail IMO 1234567",
+        async () => {
+          throw new Error("postgresql://user:password@database.example/cruises");
+        },
+        () => null,
+        "uncached"
+      )
+    ).rejects.toThrow("Cruise data query failed");
+
+    const output = warning.mock.calls.flat().join(" ");
+    expect(output).toContain("paperstraw.cruises.public-query");
+    expect(output).toContain('"cacheStatus":"uncached"');
+    expect(output).not.toMatch(/1234567|password|database\.example/);
+    warning.mockRestore();
+  });
+
+  it("builds bounded observability events", () => {
+    expect(
+      buildPublicCruiseQueryEvent({
+        operation: "dashboard aggregate queries",
+        outcome: "success",
+        durationMs: 1834.7,
+        resultCount: 286,
+        cacheStatus: "refresh"
+      })
+    ).toEqual({
+      event: "paperstraw.cruises.public-query",
+      operation: "dashboard-aggregate-queries",
+      outcome: "success",
+      durationMs: 1835,
+      resultCount: 286,
+      cacheStatus: "refresh"
+    });
+  });
+
+  it("adds bounded Vercel connection waits without changing worker URLs or explicit settings", () => {
+    const source = "postgresql://user:secret@cruises.example/cruises?sslmode=require";
+    const webUrl = new URL(applyCruiseWebDatabaseSafety(source, { VERCEL: "1" }));
+    expect(webUrl.searchParams.get("connection_limit")).toBe("3");
+    expect(webUrl.searchParams.get("connect_timeout")).toBe("5");
+    expect(webUrl.searchParams.get("pool_timeout")).toBe("5");
+    expect(webUrl.searchParams.get("socket_timeout")).toBe("10");
+    expect(webUrl.searchParams.get("application_name")).toBe("paperstraw-cruises-web");
+    expect(applyCruiseWebDatabaseSafety(source, { CRUISE_WORKER_PROFILE: "railway" })).toBe(source);
+
+    const explicit = new URL(
+      applyCruiseWebDatabaseSafety(`${source}&connection_limit=7&socket_timeout=20`, { VERCEL: "1" })
+    );
+    expect(explicit.searchParams.get("connection_limit")).toBe("7");
+    expect(explicit.searchParams.get("socket_timeout")).toBe("20");
+  });
+});

@@ -8,12 +8,17 @@ Route:
 /admin/cruises
 ```
 
-The route is protected by the existing PaperStraw admin Basic Auth middleware. Configure:
+The route is protected by PaperStraw Basic Auth in middleware, the admin server layout, every admin API handler, and every
+admin server action. Configure:
 
 ```text
 ADMIN_USERNAME
 ADMIN_PASSWORD
 ```
+
+Browser-originated mutations also require an exact same-origin `Origin` header. Optional reverse-proxy origins can be
+listed as comma-separated absolute origins in `ADMIN_ALLOWED_ORIGINS`; each origin must also be permitted by the Next.js
+Server Actions configuration generated from that variable.
 
 ## Purpose
 
