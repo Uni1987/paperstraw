@@ -1,9 +1,5 @@
 import { prisma } from "@/lib/database/cruises";
 import {
-  buildGlobalLocalFilterStatusReport,
-  type GlobalLocalFilterStatusReport
-} from "@/lib/cruises/globalLocalFilterStatus";
-import {
   evaluateMmsiCandidateForApproval,
   listMmsiReviewCandidates,
   planAppliedMmsiLinkRepair,
@@ -90,32 +86,48 @@ export type CruiseOpsStatus = {
   };
 };
 
-type CountRow = { count: number | bigint | string | null };
-type LatestPositionRow = { latest_timestamp: Date | string | null };
+type CruiseOpsSnapshotRow = {
+  accepted_registry_entries: number | bigint | string | null;
+  verified_public_eligible_vessels: number | bigint | string | null;
+  verified_mmsis_loaded: number | bigint | string | null;
+  latest_position_at: Date | string | null;
+  stored_positions_last_24h: number | bigint | string | null;
+  invalid_positions_last_24h: number | bigint | string | null;
+  observed_vessels_last_24h: number | bigint | string | null;
+  observed_vessels_last_7d: number | bigint | string | null;
+  observed_vessels_last_30d: number | bigint | string | null;
+  total_review_records: number | bigint | string | null;
+  reviewed_candidates: number | bigint | string | null;
+  dismissed_candidates: number | bigint | string | null;
+  pending_candidates: number | bigint | string | null;
+  pending_conflicts: number | bigint | string | null;
+  conflicts_total: number | bigint | string | null;
+};
 
 export async function buildCruiseOpsStatus(now = new Date()): Promise<CruiseOpsStatus> {
-  const [status24h, status7d, status30d, latestPositionAt, pendingCandidates, repairPlan] = await Promise.all([
-    buildGlobalLocalFilterStatusReport({ sinceHours: 24, format: "json", force: false, includeReviewDetails: false, includeVesselDetails: false, now }),
-    buildGlobalLocalFilterStatusReport({ sinceHours: 24 * 7, format: "json", force: false, includeReviewDetails: false, includeVesselDetails: false, now }),
-    buildGlobalLocalFilterStatusReport({ sinceHours: 24 * 30, format: "json", force: false, includeReviewDetails: false, includeVesselDetails: false, now }),
-    getLatestVerifiedPositionTimestamp(),
-    getPendingMmsiCandidates(),
-    planAppliedMmsiLinkRepair()
-  ]);
+  // Keep the admin page within the deliberately small Vercel connection pool.
+  // The previous implementation ran three full status audits concurrently.
+  const snapshot = await getCruiseOpsSnapshot(now);
+  const pendingCandidates = await getPendingMmsiCandidates();
+  const repairPlan = await planAppliedMmsiLinkRepair();
 
-  const accepted = status24h.registry.acceptedRegistryEntries;
-  const verified = status24h.registry.verifiedPublicEligibleVessels;
-  const linked = status24h.registry.verifiedVesselsWithLinkedMmsi;
+  const accepted = numberFromDb(snapshot.accepted_registry_entries);
+  const verified = numberFromDb(snapshot.verified_public_eligible_vessels);
+  const linked = numberFromDb(snapshot.verified_mmsis_loaded);
+  const latestPositionAt = dateOrNull(snapshot.latest_position_at);
+  const observed24h = numberFromDb(snapshot.observed_vessels_last_24h);
+  const observed7d = numberFromDb(snapshot.observed_vessels_last_7d);
+  const observed30d = numberFromDb(snapshot.observed_vessels_last_30d);
   const latestAgeMinutes = latestPositionAt ? Math.max(0, Math.round((now.getTime() - latestPositionAt.getTime()) / 60000)) : null;
   const publicEligibleRatio = calculateRatio(verified, accepted);
   const linkedRatio = calculateRatio(linked, accepted);
-  const observed24hRatio = calculateRatio(status24h.registry.verifiedVesselsObservedLast24h, verified);
-  const observed7dRatio = calculateRatio(status7d.registry.verifiedVesselsWithStoredPositionsInWindow, verified);
-  const observed30dRatio = calculateRatio(status30d.registry.verifiedVesselsWithStoredPositionsInWindow, verified);
+  const observed24hRatio = calculateRatio(observed24h, verified);
+  const observed7dRatio = calculateRatio(observed7d, verified);
+  const observed30dRatio = calculateRatio(observed30d, verified);
 
   const alerts = buildCruiseOpsAlerts({
-    pendingCandidates: status24h.reviewQueue.pendingMmsiReviewCandidates,
-    pendingConflicts: status24h.reviewQueue.pendingMmsiConflicts,
+    pendingCandidates: numberFromDb(snapshot.pending_candidates),
+    pendingConflicts: numberFromDb(snapshot.pending_conflicts),
     latestPositionAgeMinutes: latestAgeMinutes,
     publicEligibleRatio,
     observed24hRatio,
@@ -130,38 +142,38 @@ export async function buildCruiseOpsStatus(now = new Date()): Promise<CruiseOpsS
     worker: {
       latestVerifiedPositionTimestamp: latestPositionAt?.toISOString() ?? null,
       latestPositionAgeMinutes: latestAgeMinutes,
-      storedVerifiedPositionsLast24h: status24h.positions.totalStoredCruisePositions,
-      distinctVerifiedVesselsObservedLast24h: status24h.registry.verifiedVesselsObservedLast24h,
-      invalidOrMissingCoordinatesLast24h: status24h.positions.invalidOrMissingCoordinatePositions
+      storedVerifiedPositionsLast24h: numberFromDb(snapshot.stored_positions_last_24h),
+      distinctVerifiedVesselsObservedLast24h: observed24h,
+      invalidOrMissingCoordinatesLast24h: numberFromDb(snapshot.invalid_positions_last_24h)
     },
     registry: {
       acceptedRegistryEntries: accepted,
       verifiedPublicEligibleVessels: verified,
-      verifiedMmsisLoaded: status24h.registry.verifiedMmsisLoaded,
+      verifiedMmsisLoaded: linked,
       verifiedVesselsWithLinkedMmsi: linked,
       publicEligibleRatio,
       linkedRatio
     },
     observationCoverage: {
-      vesselsObservedLast24h: status24h.registry.verifiedVesselsObservedLast24h,
-      vesselsObservedLast7d: status7d.registry.verifiedVesselsWithStoredPositionsInWindow,
-      vesselsObservedLast30d: status30d.registry.verifiedVesselsWithStoredPositionsInWindow,
+      vesselsObservedLast24h: observed24h,
+      vesselsObservedLast7d: observed7d,
+      vesselsObservedLast30d: observed30d,
       observed24hRatio,
       observed7dRatio,
       observed30dRatio
     },
     reviewQueue: {
-      totalRecords: status24h.reviewQueue.totalRecords,
-      pendingCandidates: status24h.reviewQueue.pendingMmsiReviewCandidates,
-      reviewedCandidates: status24h.reviewQueue.reviewedRecords,
-      dismissedCandidates: status24h.reviewQueue.dismissedRecords,
-      pendingConflicts: status24h.reviewQueue.pendingMmsiConflicts,
-      conflictsTotal: status24h.reviewQueue.mmsiConflictCount,
+      totalRecords: numberFromDb(snapshot.total_review_records),
+      pendingCandidates: numberFromDb(snapshot.pending_candidates),
+      reviewedCandidates: numberFromDb(snapshot.reviewed_candidates),
+      dismissedCandidates: numberFromDb(snapshot.dismissed_candidates),
+      pendingConflicts: numberFromDb(snapshot.pending_conflicts),
+      conflictsTotal: numberFromDb(snapshot.conflicts_total),
       pendingCandidateList: pendingCandidates
     },
     safety: {
-      pendingReviewCandidateExists: status24h.reviewQueue.pendingMmsiReviewCandidates > 0,
-      conflictExists: status24h.reviewQueue.pendingMmsiConflicts > 0,
+      pendingReviewCandidateExists: numberFromDb(snapshot.pending_candidates) > 0,
+      conflictExists: numberFromDb(snapshot.pending_conflicts) > 0,
       repairNeededCount: repairPlan.wouldRepair,
       reconcileSummary: {
         acceptedRegistryEntries: accepted,
@@ -252,22 +264,130 @@ export function formatCruiseOpsSummary(status: CruiseOpsStatus) {
   ].join("\n") + "\n";
 }
 
-async function getLatestVerifiedPositionTimestamp() {
-  const rows = await prisma.$queryRaw<LatestPositionRow[]>`
-    SELECT MAX(p.timestamp) AS latest_timestamp
-    FROM cruise_positions p
-    INNER JOIN cruise_ships s ON s.id = p.ship_id
-    INNER JOIN cruise_vessel_verifications v ON v.ship_id = s.id
-    INNER JOIN cruise_vessel_registry_entries r ON r.id = v.registry_entry_id
-    WHERE v.verification_status = 'VERIFIED_OCEAN_CRUISE'
-      AND v.confidence = 'HIGH'
-      AND r.registry_decision = 'ACCEPT'
-      AND r.imo = s.imo
-      AND p.latitude BETWEEN -90 AND 90
-      AND p.longitude BETWEEN -180 AND 180
-      AND NOT (p.latitude = 0 AND p.longitude = 0)
+async function getCruiseOpsSnapshot(now: Date) {
+  const last24h = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+  const last7d = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+  const last30d = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+  const rows = await prisma.$queryRaw<CruiseOpsSnapshotRow[]>`
+    WITH eligible_ships AS (
+      SELECT DISTINCT s.id, s.mmsi
+      FROM cruise_ships s
+      INNER JOIN cruise_vessel_verifications v ON v.ship_id = s.id
+      INNER JOIN cruise_vessel_registry_entries r ON r.id = v.registry_entry_id
+      WHERE v.verification_status = 'VERIFIED_OCEAN_CRUISE'
+        AND v.confidence = 'HIGH'
+        AND r.registry_decision = 'ACCEPT'
+        AND r.imo = s.imo
+    ),
+    recent_positions AS (
+      SELECT p.ship_id, p.timestamp, p.latitude, p.longitude
+      FROM cruise_positions p
+      INNER JOIN eligible_ships s ON s.id = p.ship_id
+      WHERE p.timestamp >= ${last30d}
+        AND p.timestamp <= ${now}
+    ),
+    latest_position AS (
+      SELECT MAX(p.timestamp) AS latest_position_at
+      FROM cruise_positions p
+      INNER JOIN eligible_ships s ON s.id = p.ship_id
+      WHERE p.timestamp <= ${now}
+        AND p.latitude BETWEEN -90 AND 90
+        AND p.longitude BETWEEN -180 AND 180
+        AND NOT (p.latitude = 0 AND p.longitude = 0)
+    ),
+    position_metrics AS (
+      SELECT
+        COUNT(*) FILTER (WHERE timestamp >= ${last24h})::int AS stored_positions_last_24h,
+        COUNT(*) FILTER (
+          WHERE timestamp >= ${last24h}
+            AND (
+              latitude IS NULL OR longitude IS NULL
+              OR latitude < -90 OR latitude > 90
+              OR longitude < -180 OR longitude > 180
+              OR (latitude = 0 AND longitude = 0)
+            )
+        )::int AS invalid_positions_last_24h,
+        COUNT(DISTINCT ship_id) FILTER (
+          WHERE timestamp >= ${last24h}
+            AND latitude BETWEEN -90 AND 90
+            AND longitude BETWEEN -180 AND 180
+            AND NOT (latitude = 0 AND longitude = 0)
+        )::int AS observed_vessels_last_24h,
+        COUNT(DISTINCT ship_id) FILTER (
+          WHERE timestamp >= ${last7d}
+            AND latitude BETWEEN -90 AND 90
+            AND longitude BETWEEN -180 AND 180
+            AND NOT (latitude = 0 AND longitude = 0)
+        )::int AS observed_vessels_last_7d,
+        COUNT(DISTINCT ship_id) FILTER (
+          WHERE latitude BETWEEN -90 AND 90
+            AND longitude BETWEEN -180 AND 180
+            AND NOT (latitude = 0 AND longitude = 0)
+        )::int AS observed_vessels_last_30d
+      FROM recent_positions
+    ),
+    review_metrics AS (
+      SELECT
+        COUNT(*)::int AS total_review_records,
+        COUNT(*) FILTER (WHERE review_status = 'REVIEWED')::int AS reviewed_candidates,
+        COUNT(*) FILTER (WHERE review_status = 'DISMISSED')::int AS dismissed_candidates,
+        COUNT(*) FILTER (
+          WHERE review_status = 'PENDING'
+            AND classification = 'NEW_MMSI_CANDIDATE_FOR_EXISTING_REGISTRY_ENTRY'
+        )::int AS pending_candidates,
+        COUNT(*) FILTER (
+          WHERE review_status = 'PENDING'
+            AND classification = 'MMSI_CONFLICT_REVIEW_REQUIRED'
+        )::int AS pending_conflicts,
+        COUNT(*) FILTER (WHERE classification = 'MMSI_CONFLICT_REVIEW_REQUIRED')::int AS conflicts_total
+      FROM cruise_static_data_review_queue
+    )
+    SELECT
+      (SELECT COUNT(*)::int FROM cruise_vessel_registry_entries WHERE registry_decision = 'ACCEPT') AS accepted_registry_entries,
+      (SELECT COUNT(*)::int FROM eligible_ships) AS verified_public_eligible_vessels,
+      (SELECT COUNT(*)::int FROM eligible_ships WHERE mmsi IS NOT NULL) AS verified_mmsis_loaded,
+      l.latest_position_at,
+      p.stored_positions_last_24h,
+      p.invalid_positions_last_24h,
+      p.observed_vessels_last_24h,
+      p.observed_vessels_last_7d,
+      p.observed_vessels_last_30d,
+      r.total_review_records,
+      r.reviewed_candidates,
+      r.dismissed_candidates,
+      r.pending_candidates,
+      r.pending_conflicts,
+      r.conflicts_total
+    FROM position_metrics p
+    CROSS JOIN latest_position l
+    CROSS JOIN review_metrics r
   `;
-  return dateOrNull(rows[0]?.latest_timestamp ?? null);
+
+  return rows[0] ?? emptyCruiseOpsSnapshot();
+}
+
+function emptyCruiseOpsSnapshot(): CruiseOpsSnapshotRow {
+  return {
+    accepted_registry_entries: 0,
+    verified_public_eligible_vessels: 0,
+    verified_mmsis_loaded: 0,
+    latest_position_at: null,
+    stored_positions_last_24h: 0,
+    invalid_positions_last_24h: 0,
+    observed_vessels_last_24h: 0,
+    observed_vessels_last_7d: 0,
+    observed_vessels_last_30d: 0,
+    total_review_records: 0,
+    reviewed_candidates: 0,
+    dismissed_candidates: 0,
+    pending_candidates: 0,
+    pending_conflicts: 0,
+    conflicts_total: 0
+  };
+}
+
+function numberFromDb(value: number | bigint | string | null | undefined) {
+  return Number(value ?? 0);
 }
 
 async function getPendingMmsiCandidates(): Promise<CruiseAdminPendingCandidate[]> {

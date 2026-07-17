@@ -3840,6 +3840,18 @@ describe("public Cruise input and query hardening", () => {
     expect(adminOps).not.toContain("createPublicCruiseCache");
   });
 
+  it("keeps the cruise admin snapshot within the bounded Vercel connection pool", () => {
+    const adminOps = readFileSync("lib/cruises/adminOps.ts", "utf8");
+    const adminPage = readFileSync("app/admin/cruises/page.tsx", "utf8");
+
+    expect(adminOps).not.toContain("buildGlobalLocalFilterStatusReport");
+    expect(adminOps).toContain("WITH eligible_ships AS");
+    expect(adminOps).toContain("getPendingMmsiCandidates");
+    expect(adminOps).toContain("planAppliedMmsiLinkRepair");
+    expect(adminPage).toContain("pendingCandidateList");
+    expect(adminPage).toContain("CruiseAdminActions");
+  });
+
   it("logs only sanitized query metadata and returns a generic failure", async () => {
     const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     await expect(
