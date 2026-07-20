@@ -19,6 +19,7 @@ export const GLOBAL_LOCAL_FILTER_FLUSH_BATCH_SIZE = 100;
 export const GLOBAL_LOCAL_FILTER_MESSAGE_TYPES = ["PositionReport", "ShipStaticData"] as const;
 export const GLOBAL_LOCAL_FILTER_RAILWAY_REPORT_INTERVAL_MS = 60000;
 export const GLOBAL_LOCAL_FILTER_MEMORY_LOG_INTERVAL_MS = 5 * 60 * 1000;
+export const GLOBAL_LOCAL_FILTER_CONNECTION_TIMEOUT_MS = 15000;
 export const GLOBAL_LOCAL_FILTER_SHUTDOWN_TIMEOUT_MS = 20000;
 export const GLOBAL_LOCAL_FILTER_MAX_IN_FLIGHT_MESSAGES = 256;
 export const GLOBAL_LOCAL_FILTER_POSITION_DEDUPE_MAX_SIZE = 50000;
@@ -198,6 +199,32 @@ export function validateGlobalLocalFilterWorkerEnvironment(env: CruiseWorkerEnvi
 
 export function getGlobalLocalFilterDefaultReportIntervalMs(env: CruiseWorkerEnvironment = process.env) {
   return env.CRUISE_WORKER_PROFILE?.trim() === "railway" ? GLOBAL_LOCAL_FILTER_RAILWAY_REPORT_INTERVAL_MS : GLOBAL_LOCAL_FILTER_DEFAULT_REPORT_INTERVAL_MS;
+}
+
+type UnrefableTimer = { unref?: () => unknown };
+
+export function configureGlobalLocalFilterTimerReferences(options: {
+  stopTimer: UnrefableTimer | null;
+  reportTimer: UnrefableTimer;
+  flushTimer: UnrefableTimer;
+  memoryTimer: UnrefableTimer;
+}) {
+  options.stopTimer?.unref?.();
+  options.flushTimer.unref?.();
+  options.memoryTimer.unref?.();
+
+  // The report timer is the lifecycle anchor while the WebSocket is connecting
+  // or waiting to reconnect. Shutdown clears it explicitly.
+  return { reportTimerKeepsProcessAlive: true };
+}
+
+export function formatGlobalLocalFilterSocketError(event: unknown) {
+  if (event && typeof event === "object") {
+    const candidate = event as { message?: unknown; error?: unknown };
+    if (typeof candidate.message === "string" && candidate.message.trim()) return sanitizeLogValue(candidate.message);
+    if (candidate.error instanceof Error) return sanitizeLogValue(candidate.error.message);
+  }
+  return sanitizeLogValue(event);
 }
 
 export function formatGlobalLocalFilterStartupSafetyLog(safety: GlobalLocalFilterWorkerSafety) {
@@ -434,10 +461,7 @@ export async function runGlobalLocalFilterIngest(options: GlobalLocalFilterOptio
     const memoryTimer = setInterval(() => {
       printGlobalLocalFilterMemoryStatus(writer, pendingMessages);
     }, GLOBAL_LOCAL_FILTER_MEMORY_LOG_INTERVAL_MS);
-    stopTimer?.unref?.();
-    reportTimer.unref?.();
-    flushTimer.unref?.();
-    memoryTimer.unref?.();
+    configureGlobalLocalFilterTimerReferences({ stopTimer, reportTimer, flushTimer, memoryTimer });
 
     let finishing: Promise<void> | null = null;
     let shutdownFallbackTimer: ReturnType<typeof setTimeout> | null = null;
@@ -498,8 +522,14 @@ export async function runGlobalLocalFilterIngest(options: GlobalLocalFilterOptio
       const openedAttemptAt = Date.now();
       const currentSocket = new WebSocket(AISSTREAM_ENDPOINT);
       socket = currentSocket;
+      let disconnectHandled = false;
+      let connectionTimeout: ReturnType<typeof setTimeout> | null = null;
       const handleOpen = () => {
         if (stopped || socket !== currentSocket) return;
+        if (connectionTimeout) {
+          clearTimeout(connectionTimeout);
+          connectionTimeout = null;
+        }
         state.connected = true;
         const openedAtMs = Date.now();
         const payload = buildGlobalLocalFilterSubscriptionPayload(apiKey);
@@ -526,15 +556,17 @@ export async function runGlobalLocalFilterIngest(options: GlobalLocalFilterOptio
             pendingMessages -= 1;
           });
       };
-      const handleClose = (event: CloseEvent) => {
+      const handleDisconnect = (code: number | null, reason: string | null) => {
+        if (disconnectHandled) return;
+        disconnectHandled = true;
         detachListeners();
         if (socket === currentSocket) {
           socket = null;
           socketCleanup = null;
         }
         state.connected = false;
-        state.closeCode = typeof event.code === "number" ? event.code : null;
-        state.closeReason = sanitizeLogValue(event.reason) || null;
+        state.closeCode = code;
+        state.closeReason = reason;
         if (stopped || (stopAtMs && Date.now() >= stopAtMs)) {
           void finish(state.closeReason ?? "complete");
           return;
@@ -550,10 +582,23 @@ export async function runGlobalLocalFilterIngest(options: GlobalLocalFilterOptio
         }, delay);
         reconnectTimer.unref?.();
       };
+      const handleClose = (event: CloseEvent) => {
+        handleDisconnect(typeof event.code === "number" ? event.code : null, sanitizeLogValue(event.reason) || null);
+      };
       const handleError = (event: Event) => {
-        state.lastError = sanitizeLogValue(event);
+        state.lastError = formatGlobalLocalFilterSocketError(event);
+        handleDisconnect(null, "AISStream WebSocket error");
+        try {
+          currentSocket.close();
+        } catch {
+          // The failed socket has already been detached and scheduled for reconnect.
+        }
       };
       const detachListeners = () => {
+        if (connectionTimeout) {
+          clearTimeout(connectionTimeout);
+          connectionTimeout = null;
+        }
         currentSocket.removeEventListener("open", handleOpen);
         currentSocket.removeEventListener("message", handleMessage);
         currentSocket.removeEventListener("close", handleClose);
@@ -564,6 +609,17 @@ export async function runGlobalLocalFilterIngest(options: GlobalLocalFilterOptio
       currentSocket.addEventListener("message", handleMessage);
       currentSocket.addEventListener("close", handleClose);
       currentSocket.addEventListener("error", handleError);
+      connectionTimeout = setTimeout(() => {
+        if (state.connected || socket !== currentSocket) return;
+        state.lastError = "AISStream connection timeout";
+        handleDisconnect(null, "AISStream connection timeout");
+        try {
+          currentSocket.close();
+        } catch {
+          // The timed-out socket has already been detached and scheduled for reconnect.
+        }
+      }, GLOBAL_LOCAL_FILTER_CONNECTION_TIMEOUT_MS);
+      connectionTimeout.unref?.();
     };
 
     connect();

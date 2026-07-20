@@ -134,6 +134,8 @@ import {
   flushGlobalLocalFilterShutdown,
   formatGlobalLocalFilterMemoryStatus,
   formatGlobalLocalFilterRuntimeNotice,
+  configureGlobalLocalFilterTimerReferences,
+  formatGlobalLocalFilterSocketError,
   formatGlobalLocalFilterStartupSafetyLog,
   formatGlobalLocalFilterReport,
   getGlobalLocalFilterHealthStatus,
@@ -2272,6 +2274,26 @@ describe("global-local-filter cruise ingest", () => {
     });
     expect(getGlobalLocalFilterDefaultReportIntervalMs(globalLocalFilterWorkerEnv())).toBe(30000);
     expect(getGlobalLocalFilterDefaultReportIntervalMs(globalLocalFilterWorkerEnv({ CRUISE_WORKER_PROFILE: "railway" }))).toBe(60000);
+  });
+
+  it("keeps the report timer referenced as the long-running worker lifecycle anchor", () => {
+    const stopTimer = { unref: vi.fn() };
+    const reportTimer = { unref: vi.fn() };
+    const flushTimer = { unref: vi.fn() };
+    const memoryTimer = { unref: vi.fn() };
+
+    expect(configureGlobalLocalFilterTimerReferences({ stopTimer, reportTimer, flushTimer, memoryTimer })).toEqual({
+      reportTimerKeepsProcessAlive: true
+    });
+    expect(stopTimer.unref).toHaveBeenCalledOnce();
+    expect(flushTimer.unref).toHaveBeenCalledOnce();
+    expect(memoryTimer.unref).toHaveBeenCalledOnce();
+    expect(reportTimer.unref).not.toHaveBeenCalled();
+  });
+
+  it("extracts a concise WebSocket error without retaining the opaque ErrorEvent label", () => {
+    expect(formatGlobalLocalFilterSocketError({ message: "connect ETIMEDOUT" })).toBe("connect ETIMEDOUT");
+    expect(formatGlobalLocalFilterSocketError({ error: new Error("socket unavailable") })).toBe("socket unavailable");
   });
 
   it("formats startup safety logs without leaking database URLs or API keys", () => {
